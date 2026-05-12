@@ -21,6 +21,7 @@ export const ROUTES = {
   admin: "/admin",
   adminUsers: "/admin/users",
   adminOrders: "/admin/orders",
+  checkout: "/dashboard/checkout",
 } as const;
 
 export const LEGAL_LINKS = [
