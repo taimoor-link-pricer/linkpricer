@@ -15,6 +15,11 @@ export const metadata: Metadata = {
     template: "%s | Linkpricer",
   },
   description: "The analytical architect platform for advanced SEO strategists.",
+  icons: {
+    icon: "/logo-icon.png",
+    shortcut: "/logo-icon.png",
+    apple: "/logo-icon.png",
+  },
 };
 
 export default function RootLayout({
