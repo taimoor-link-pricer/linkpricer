@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LinkPricer Onboarding</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --primary: #0052cc;
+      --primary-dark: #003a99;
+      --success: #0a8a4a;
+      --success-light: #e6f6ed;
+      --danger: #b91c1c;
+      --neutral-50: #f9fafb;
+      --neutral-100: #f3f4f6;
+      --neutral-200: #e5e7eb;
+      --neutral-300: #d1d5db;
+      --neutral-400: #9ca3af;
+      --neutral-600: #4b5563;
+      --neutral-700: #374151;
+      --neutral-800: #1f2937;
+      --neutral-900: #111827;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: "Inter", -apple-system, system-ui, sans-serif;
+      color: var(--neutral-900);
+      background: #ffffff;
+    }
+
+    /* Modal Backdrop */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 1;
+      transition: opacity 0.3s ease-out;
+    }
+
+    .modal-backdrop.hidden {
+      display: none;
+    }
+
+    /* Modal Container */
+    .modal {
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+      width: 90%;
+      max-width: 560px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: slideUp 0.3s ease-out;
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Progress Bar */
+    .progress-section {
+      padding: 24px;
+      border-bottom: 1px solid var(--neutral-200);
+      background: var(--neutral-50);
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: var(--neutral-200);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--primary);
+      border-radius: 2px;
+      transition: width 0.3s ease-out;
+    }
+
+    .progress-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--neutral-600);
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
+    /* Step Content */
+    .step-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 40px;
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+
+    .step-title {
+      font-size: 28px;
+      font-weight: 800;
+      margin: 0 0 8px;
+      color: var(--neutral-900);
+      letter-spacing: -0.5px;
+    }
+
+    .step-subtitle {
+      font-size: 14px;
+      color: var(--neutral-600);
+      margin: 0 0 32px;
+      font-weight: 500;
+    }
+
+    .step-question {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--neutral-900);
+      margin: 0 0 16px;
+    }
+
+    /* Form Fields */
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .field-group + .field-group {
+      margin-top: 24px;
+    }
+
+    /* Single Select — Pill Buttons */
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .radio-button {
+      position: relative;
+    }
+
+    .radio-button input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .radio-label {
+      display: block;
+      padding: 12px 16px;
+      border: 2px solid var(--neutral-200);
+      border-radius: 10px;
+      background: #ffffff;
+      color: var(--neutral-700);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+      user-select: none;
+    }
+
+    .radio-button input:checked + .radio-label {
+      background: var(--primary);
+      color: #ffffff;
+      border-color: var(--primary);
+    }
+
+    .radio-button input:not(:checked) + .radio-label:hover {
+      border-color: var(--primary);
+      background: #f0f7ff;
+    }
+
+    /* Multi-Select — Checkbox Chips */
+    .checkbox-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .checkbox-item {
+      position: relative;
+    }
+
+    .checkbox-item input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border: 2px solid var(--neutral-200);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--neutral-700);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .checkbox-label::before {
+      content: "";
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--neutral-300);
+      border-radius: 4px;
+      background: #ffffff;
+      transition: all 0.2s;
+    }
+
+    .checkbox-item input:checked + .checkbox-label {
+      background: #e6f2ff;
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .checkbox-item input:checked + .checkbox-label::before {
+      background: var(--primary);
+      border-color: var(--primary);
+      content: "✓";
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .checkbox-label:hover {
+      border-color: var(--neutral-300);
+    }
+
+    /* Text Input */
+    .text-input {
+      padding: 11px 14px;
+      border: 1px solid var(--neutral-200);
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: "Inter", sans-serif;
+      color: var(--neutral-900);
+      background: #ffffff;
+      transition: border 0.2s;
+    }
+
+    .text-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(0, 82, 204, 0.1);
+    }
+
+    .text-input::placeholder {
+      color: var(--neutral-400);
+    }
+
+    /* Text Area */
+    .text-area {
+      padding: 12px 14px;
+      border: 1px solid var(--neutral-200);
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: "Inter", sans-serif;
+      color: var(--neutral-900);
+      background: #ffffff;
+      resize: none;
+      transition: border 0.2s;
+      min-height: 120px;
+    }
+
+    .text-area:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(0, 82, 204, 0.1);
+    }
+
+    .text-area::placeholder {
+      color: var(--neutral-400);
+    }
+
+    /* Conditional Field */
+    .conditional-field {
+      max-height: 500px;
+      overflow: hidden;
+      transition: all 0.3s ease-out;
+      opacity: 1;
+      margin-top: 16px;
+    }
+
+    .conditional-field.hidden {
+      max-height: 0;
+      opacity: 0;
+      margin-top: 0;
+    }
+
+    /* Button Section */
+    .button-section {
+      padding: 24px;
+      border-top: 1px solid var(--neutral-200);
+      background: var(--neutral-50);
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+    }
+
+    .btn {
+      padding: 11px 20px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: "Inter", sans-serif;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #ffffff;
+      flex: 1;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-dark);
+    }
+
+    .btn-primary:disabled {
+      background: var(--neutral-300);
+      color: var(--neutral-500);
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--primary);
+      border: 1px solid var(--primary);
+      min-width: 80px;
+    }
+
+    .btn-secondary:hover {
+      background: #f0f7ff;
+    }
+
+    .btn-secondary:disabled {
+      border-color: var(--neutral-300);
+      color: var(--neutral-400);
+      cursor: not-allowed;
+    }
+
+    /* Scrollbar styling */
+    .step-content::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .step-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .step-content::-webkit-scrollbar-thumb {
+      background: var(--neutral-300);
+      border-radius: 3px;
+    }
+
+    .step-content::-webkit-scrollbar-thumb:hover {
+      background: var(--neutral-400);
+    }
+
+    /* Benefit Card */
+    .benefit-card {
+      background: linear-gradient(135deg, #f0f7ff 0%, #e6f2ff 100%);
+      border: 1px solid var(--primary);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 24px;
+      animation: slideIn 0.4s ease-out;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .benefit-badge {
+      display: inline-block;
+      background: var(--primary);
+      color: #ffffff;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .benefit-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--primary);
+      margin: 0 0 8px;
+    }
+
+    .benefit-text {
+      font-size: 13px;
+      color: var(--neutral-700);
+      line-height: 1.6;
+      margin: 0;
+    }
+
+    /* Insight Section */
+    .insight-section {
+      background: var(--neutral-50);
+      border-left: 3px solid var(--primary);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-top: 16px;
+      font-size: 13px;
+      color: var(--neutral-700);
+      line-height: 1.5;
+    }
+
+    .insight-container {
+      margin-top: 20px;
+    }
+
+    .insight-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-bottom: 6px;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .modal {
+        width: 95%;
+        max-height: 95vh;
+        border-radius: 12px;
+      }
+
+      .step-content {
+        padding: 28px;
+      }
+
+      .step-title {
+        font-size: 22px;
+      }
+
+      .button-section {
+        flex-wrap: wrap;
+      }
+
+      .btn-secondary {
+        order: 2;
+        min-width: unset;
+      }
+
+      .btn-primary {
+        order: 1;
+      }
+
+      .checkbox-group {
+        gap: 8px;
+      }
+
+      .checkbox-label {
+        flex: 1 1 calc(50% - 4px);
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="modal-backdrop">
+    <div class="modal">
+      <!-- Progress Section -->
+      <div class="progress-section">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-text" id="progressText">Step 1 of 5</div>
+      </div>
+
+      <!-- Step Content -->
+      <div class="step-content" id="stepContent">
+        <!-- Steps will be injected here -->
+      </div>
+
+      <!-- Button Section -->
+      <div class="button-section">
+        <button class="btn btn-secondary" id="backBtn" onclick="previousStep()">Back</button>
+        <button class="btn btn-primary" id="nextBtn" onclick="nextStep()">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Form data
+    let formData = {
+      user_type: '',
+      user_type_other: '',
+      monthly_spend: '',
+      biggest_challenge: '',
+      priority_factors: [],
+      current_method: []
+    };
+
+    const currentStep = { value: 1 };
+    const totalSteps = 5;
+
+    // Benefit content by user type and field
+    const benefits = {
+      user_type: {
+        'SEO agency': [
+          {
+            badge: 'Option A',
+            title: 'Savings focus',
+            text: 'Built for agencies like yours. Agencies save up to 46% on link costs by comparing prices across 20+ websites in one place. Use our relevance filter to quickly find high-quality sites that match each client\'s industry.'
+          },
+          {
+            badge: 'Option B',
+            title: 'Scale focus',
+            text: 'Run more client campaigns in less time. Source backlinks for all your clients from one dashboard. Includes shared team access, bulk price comparison, and exportable reports for client reviews.'
+          },
+          {
+            badge: 'Option C',
+            title: 'Margin focus',
+            text: 'Protect your margins. Stop overpaying when buying through middlemen. See the real price of every link so you can charge clients fairly and keep more profit per project.'
+          }
+        ],
+        'Freelancer': [
+          {
+            badge: 'Option A',
+            title: 'Budget focus',
+            text: 'Compete with bigger players. Freelancers using LinkPricer manage 6× larger budgets while saving up to 68% compared to buying direct. Win bigger clients without the agency overhead.'
+          },
+          {
+            badge: 'Option B',
+            title: 'Time focus',
+            text: 'Get hours back every week. No more switching between 15 different websites and price lists. Search once, compare everything, order in one place.'
+          },
+          {
+            badge: 'Option C',
+            title: 'Client-trust focus',
+            text: 'Look professional to your clients. Export clean comparison reports that show exactly why you chose each website. Clients see the value you bring, not just the invoice.'
+          }
+        ],
+        'In-house marketer': [
+          {
+            badge: 'Option A',
+            title: 'Budget-justification focus',
+            text: 'Justify every euro to your finance team. In-house teams report 42% lower costs per backlink and get clean reports for budget reviews. Defend your spending with real data.'
+          },
+          {
+            badge: 'Option B',
+            title: 'Efficiency focus',
+            text: 'One tool instead of five. Replace multiple vendor logins with a single dashboard. Track every link, every supplier, every invoice in one place.'
+          },
+          {
+            badge: 'Option C',
+            title: 'Quality focus',
+            text: 'Stop guessing about link quality. Filter by real traffic, industry relevance, and verified data not just surface-level scores that can mislead.'
+          }
+        ],
+        'Brand owner': [
+          {
+            badge: 'Option A',
+            title: 'Simplicity focus',
+            text: 'Built for people who aren\'t SEO specialists. Brand owners save 52% on average by seeing every backlink option in one place. All the prices, all the website data laid out clearly so you can decide what\'s worth buying for your brand.'
+          },
+          {
+            badge: 'Option B',
+            title: 'Visibility focus',
+            text: 'See everything in one place. Instead of checking dozens of websites, get all the prices and metrics on a single screen. You stay in control of what to buy we just make sure you have the full picture before you spend.'
+          },
+          {
+            badge: 'Option C',
+            title: 'Confidence focus',
+            text: 'Buy with full information, not guesswork. Every backlink option shown with its real price and key data points. No pressure, no recommendations just everything you need to make your own call.'
+          }
+        ],
+        'Other': [
+          {
+            badge: 'For Everyone',
+            title: 'Adaptable solutions',
+            text: 'Whatever your role, LinkPricer adapts. Whether you\'re a consultant, a platform, or running something different our users typically save 40 to 65% on link spend and cut sourcing time significantly. Tell us your use case and we\'ll show you exactly how we can help.'
+          }
+        ]
+      },
+      monthly_spend: {
+        'Under €1,000': {
+          text: 'Every euro matters at this stage. Users in this range save an average of €340 per month by avoiding overpriced sources. That\'s roughly 3 to 4 extra links per month for the same budget.'
+        },
+        '€1,000–€5,000': {
+          text: 'The sweet spot for growth. Mid-budget users save €1,200 to €2,400 per month on average. That\'s a full extra campaign\'s worth of backlinks at no additional cost.'
+        },
+        '€5,000–€20,000': {
+          text: 'Serious budgets deserve serious tools. Power users at this level save €8,000+ per month by comparing prices across all major sources. Bulk discounts and priority support included.'
+        },
+        '€20,000+': {
+          text: 'Enterprise-level savings. Top-tier users save €15,000 to €40,000 per month with custom data access, a dedicated account manager, and priority support. Let\'s talk about an enterprise plan tailored to your volume.'
+        }
+      },
+      biggest_challenge: {
+        text: 'You\'re not alone. 78% of our users described a similar challenge in their first week. Whatever your pain point unclear pricing, hard-to-verify quality, or managing too many suppliers LinkPricer was built to solve exactly this.'
+      },
+      priority_factors: {
+        'Price': {
+          text: 'Pricing is our specialty. Compare the same website across 60+ sources in seconds. The average price difference for the same backlink is 38% so you\'ll always know you\'re not overpaying.'
+        },
+        'Website quality': {
+          text: 'Quality, verified. Every website is checked for real visitor traffic, industry fit, and overall trustworthiness. No more surprises where a site looks strong on paper but delivers nothing.'
+        },
+        'Niche relevance': {
+          text: 'Relevance done right. We match every website to your exact industry by analysing the actual content not just category labels. Find the one perfect site, not a hundred maybes.'
+        },
+        'Speed': {
+          text: 'From hours to seconds. Find, compare, and order in one flow. Users report sourcing backlinks 10 times faster than reaching out manually.'
+        },
+        'Transparency': {
+          text: 'No hidden costs. See the real price, any added fees, and the original publisher cost upfront all in one view. The first fully transparent pricing layer for the link-buying industry.'
+        }
+      },
+      current_method: {
+        'Manually contacting sites': {
+          text: 'Skip the inbox grind. Reaching out manually takes 40+ hours a month on average. LinkPricer users do the same volume in under 4 hours and pay 30% less.'
+        },
+        'Using marketplaces': {
+          text: 'Compare them all at once. Why log into 8 different websites when you can see them side by side on one screen? Same sites, real prices, instant comparison.'
+        },
+        'Through agencies': {
+          text: 'Cut the middleman markup. Agencies typically mark up backlinks 2 to 3 times the original price. LinkPricer gives you direct pricing while keeping the quality control you\'d expect from an agency.'
+        },
+        'Mixed methods': {
+          text: 'Bring it all together. Stop juggling spreadsheets, emails, and supplier portals. LinkPricer becomes your single source of truth for every backlink, no matter where it came from.'
+        }
+      }
+    };
+
+    // Step definitions
+    const steps = [
+      {
+        id: 1,
+        title: 'Welcome to LinkPricer! 👋',
+        subtitle: 'Let\'s personalise your experience',
+        question: 'What best describes you?',
+        type: 'radio',
+        fields: [
+          { id: 'user_type', label: 'SEO agency' },
+          { id: 'user_type', label: 'Freelancer' },
+          { id: 'user_type', label: 'In-house marketer' },
+          { id: 'user_type', label: 'Brand owner' },
+          { id: 'user_type', label: 'Other' }
+        ],
+        conditionalField: {
+          trigger: 'Other',
+          fieldId: 'user_type_other',
+          label: 'Please specify',
+          placeholder: 'Tell us about yourself...'
+        },
+        validate: () => {
+          if (!formData.user_type) return false;
+          if (formData.user_type === 'Other' && !formData.user_type_other.trim()) return false;
+          return true;
+        }
+      },
+      {
+        id: 2,
+        title: 'Budget Information',
+        subtitle: 'Help us understand your budget',
+        question: 'How much do you usually spend on link building each month?',
+        type: 'radio',
+        fields: [
+          { id: 'monthly_spend', label: 'Under €1,000' },
+          { id: 'monthly_spend', label: '€1,000–€5,000' },
+          { id: 'monthly_spend', label: '€5,000–€20,000' },
+          { id: 'monthly_spend', label: '€20,000+' }
+        ],
+        validate: () => formData.monthly_spend !== ''
+      },
+      {
+        id: 3,
+        title: 'Your Challenges',
+        subtitle: 'Share your biggest pain point',
+        question: 'What\'s your biggest challenge when buying backlinks?',
+        type: 'textarea',
+        fields: [
+          { id: 'biggest_challenge', placeholder: 'Tell us about your main challenge...' }
+        ],
+        validate: () => formData.biggest_challenge.trim() !== ''
+      },
+      {
+        id: 4,
+        title: 'What Matters Most',
+        subtitle: 'What do you prioritise?',
+        question: 'What matters most to you when choosing backlinks?',
+        type: 'checkbox',
+        fields: [
+          { id: 'priority_factors', label: 'Price' },
+          { id: 'priority_factors', label: 'Website quality' },
+          { id: 'priority_factors', label: 'Niche relevance' },
+          { id: 'priority_factors', label: 'Speed' },
+          { id: 'priority_factors', label: 'Transparency' }
+        ],
+        validate: () => formData.priority_factors.length > 0
+      },
+      {
+        id: 5,
+        title: 'Current Workflow',
+        subtitle: 'How do you currently work?',
+        question: 'How do you currently find and order backlinks?',
+        type: 'checkbox',
+        fields: [
+          { id: 'current_method', label: 'Manually contacting sites' },
+          { id: 'current_method', label: 'Using marketplaces' },
+          { id: 'current_method', label: 'Through agencies' },
+          { id: 'current_method', label: 'Mixed methods' }
+        ],
+        validate: () => formData.current_method.length > 0
+      }
+    ];
+
+    function getRandomBenefit(options) {
+      return options[Math.floor(Math.random() * options.length)];
+    }
+
+    function renderStep(stepNum) {
+      const step = steps[stepNum - 1];
+      const contentDiv = document.getElementById('stepContent');
+      
+      let html = `
+        <h1 class="step-title">${step.title}</h1>
+        <p class="step-subtitle">${step.subtitle}</p>
+        <p class="step-question">${step.question}</p>
+        <div class="field-group">
+      `;
+
+      if (step.type === 'radio') {
+        html += '<div class="radio-group">';
+        step.fields.forEach(field => {
+          const isChecked = formData[field.id] === field.label ? 'checked' : '';
+          html += `
+            <label class="radio-button">
+              <input 
+                type="radio" 
+                name="${field.id}" 
+                value="${field.label}"
+                ${isChecked}
+                onchange="handleRadioChange('${field.id}', '${field.label}')"
+              />
+              <span class="radio-label">${field.label}</span>
+            </label>
+          `;
+        });
+        html += '</div>';
+
+        // Conditional field for "Other"
+        if (step.conditionalField) {
+          const showConditional = formData.user_type === step.conditionalField.trigger;
+          const hiddenClass = !showConditional ? 'hidden' : '';
+          html += `
+            <div class="conditional-field ${hiddenClass}" id="conditionalField">
+              <label style="font-size: 14px; font-weight: 500; color: var(--neutral-700); display: block; margin-bottom: 8px;">
+                ${step.conditionalField.label}
+              </label>
+              <input 
+                type="text"
+                class="text-input"
+                placeholder="${step.conditionalField.placeholder}"
+                value="${formData.user_type_other}"
+                oninput="handleTextInput('user_type_other', this.value)"
+                style="width: 100%;"
+              />
+            </div>
+          `;
+        }
+
+        // Show benefit card for radio selections
+        let benefit;
+        if (step.id === 1 && formData.user_type && benefits.user_type[formData.user_type]) {
+          benefit = getRandomBenefit(benefits.user_type[formData.user_type]);
+        } else if (step.id === 2 && formData.monthly_spend && benefits.monthly_spend[formData.monthly_spend]) {
+          benefit = benefits.monthly_spend[formData.monthly_spend];
+        }
+
+        if (benefit) {
+          html += `
+            <div class="benefit-card">
+              ${benefit.title ? `<p class="benefit-title">${benefit.title}</p>` : ''}
+              <p class="benefit-text">${benefit.text}</p>
+            </div>
+          `;
+        }
+
+      } else if (step.type === 'textarea') {
+        html += `
+          <textarea 
+            class="text-area"
+            placeholder="${step.fields[0].placeholder}"
+            value="${formData.biggest_challenge}"
+            oninput="handleTextInput('biggest_challenge', this.value)"
+          ></textarea>
+        `;
+
+        // Show insight for challenge step
+        if (benefits.biggest_challenge) {
+          html += `
+            <div class="insight-section">
+              <div class="insight-label">💡 You're in good company</div>
+              <p style="margin: 0;">${benefits.biggest_challenge.text}</p>
+            </div>
+          `;
+        }
+
+      } else if (step.type === 'checkbox') {
+        html += '<div class="checkbox-group">';
+        step.fields.forEach(field => {
+          const isChecked = formData[field.id].includes(field.label) ? 'checked' : '';
+          html += `
+            <label class="checkbox-item">
+              <input 
+                type="checkbox" 
+                name="${field.id}" 
+                value="${field.label}"
+                ${isChecked}
+                onchange="handleCheckboxChange('${field.id}', '${field.label}')"
+              />
+              <span class="checkbox-label">${field.label}</span>
+            </label>
+          `;
+        });
+        html += '</div>';
+
+        // Show insights for selected checkboxes
+        const benefitKey = step.fields[0].id;
+        let insightsHtml = '';
+        
+        if (benefitKey === 'priority_factors') {
+          formData.priority_factors.forEach(label => {
+            if (benefits.priority_factors[label]) {
+              insightsHtml += `
+                <div class="insight-section">
+                  <div class="insight-label">✓ ${label}</div>
+                  <p style="margin: 0;">${benefits.priority_factors[label].text}</p>
+                </div>
+              `;
+            }
+          });
+        } else if (benefitKey === 'current_method') {
+          formData.current_method.forEach(label => {
+            if (benefits.current_method[label]) {
+              insightsHtml += `
+                <div class="insight-section">
+                  <div class="insight-label">✓ ${label}</div>
+                  <p style="margin: 0;">${benefits.current_method[label].text}</p>
+                </div>
+              `;
+            }
+          });
+        }
+
+        if (insightsHtml) {
+          html += `<div class="insight-container">${insightsHtml}</div>`;
+        }
+      }
+
+      html += '</div>';
+      contentDiv.innerHTML = html;
+    }
+
+    function handleRadioChange(fieldId, value) {
+      formData[fieldId] = value;
+      
+      // Handle conditional field visibility
+      if (fieldId === 'user_type') {
+        const conditionalField = document.getElementById('conditionalField');
+        if (conditionalField) {
+          if (value === 'Other') {
+            conditionalField.classList.remove('hidden');
+          } else {
+            conditionalField.classList.add('hidden');
+            formData.user_type_other = '';
+          }
+        }
+      }
+      
+      renderStep(currentStep.value);
+      updateButtonState();
+    }
+
+    function handleCheckboxChange(fieldId, value) {
+      if (!Array.isArray(formData[fieldId])) {
+        formData[fieldId] = [];
+      }
+      
+      if (formData[fieldId].includes(value)) {
+        formData[fieldId] = formData[fieldId].filter(v => v !== value);
+      } else {
+        formData[fieldId].push(value);
+      }
+      
+      renderStep(currentStep.value);
+      updateButtonState();
+    }
+
+    function handleTextInput(fieldId, value) {
+      formData[fieldId] = value;
+      updateButtonState();
+    }
+
+    function updateProgressBar() {
+      const percentage = (currentStep.value / totalSteps) * 100;
+      document.getElementById('progressFill').style.width = percentage + '%';
+      document.getElementById('progressText').textContent = `Step ${currentStep.value} of ${totalSteps}`;
+    }
+
+    function updateButtonState() {
+      const step = steps[currentStep.value - 1];
+      const isValid = step.validate();
+      const nextBtn = document.getElementById('nextBtn');
+      const backBtn = document.getElementById('backBtn');
+      
+      nextBtn.disabled = !isValid;
+      backBtn.disabled = currentStep.value === 1;
+
+      if (currentStep.value === totalSteps) {
+        nextBtn.textContent = 'Complete';
+      } else {
+        nextBtn.textContent = 'Next';
+      }
+    }
+
+    function nextStep() {
+      if (currentStep.value < totalSteps) {
+        currentStep.value++;
+        renderStep(currentStep.value);
+        updateProgressBar();
+        updateButtonState();
+        document.getElementById('stepContent').scrollTop = 0;
+      } else if (currentStep.value === totalSteps) {
+        submitForm();
+      }
+    }
+
+    function previousStep() {
+      if (currentStep.value > 1) {
+        currentStep.value--;
+        renderStep(currentStep.value);
+        updateProgressBar();
+        updateButtonState();
+        document.getElementById('stepContent').scrollTop = 0;
+      }
+    }
+
+    function submitForm() {
+      console.log('Form submitted:', formData);
+      alert('Form submitted! Data logged to console.');
+      // In real app, send to backend here
+      // window.location.href = '/app';
+    }
+
+    // Initialize
+    renderStep(currentStep.value);
+    updateProgressBar();
+    updateButtonState();
+  </script>
+
+</body>
+</html>

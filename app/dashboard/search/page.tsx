@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
+import { PurchaseModal } from "@/components/purchase/PurchaseModal";
 
 const DEMO_ROWS = [
   { domain: "forbes.com", marketplace: "Marketplace A", price: "$1,450", dr: 83, traffic: "803.9K" },
@@ -48,6 +49,7 @@ function SearchPageInner() {
   const [showResults, setShowResults] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [btnHover, setBtnHover] = useState(false);
+  const [purchaseDomain, setPurchaseDomain] = useState<{ domain: string; marketplace: string } | null>(null);
 
   useEffect(() => {
     if (initialQ) {
@@ -93,6 +95,14 @@ function SearchPageInner() {
         .search-footer button { width: 100%; justify-content: center; }
       }
     `}</style>
+    {purchaseDomain && (
+      <PurchaseModal
+        domain={purchaseDomain.domain}
+        marketplace={purchaseDomain.marketplace}
+        onClose={() => setPurchaseDomain(null)}
+        onConfirm={() => setPurchaseDomain(null)}
+      />
+    )}
     <div className="search-page">
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
@@ -274,7 +284,7 @@ function SearchPageInner() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f9fafb" }}>
-                  {["Domain", "Marketplace", "Best Price", "DR", "Traffic", "Action"].map((h) => (
+                  {["Domain", "Marketplace", "Best Price", "DR", "Traffic", ""].map((h) => (
                     <th
                       key={h}
                       style={{
@@ -302,6 +312,7 @@ function SearchPageInner() {
                     isLast={idx === DEMO_ROWS.length - 1}
                     isFavorite={favorites.has(row.domain)}
                     onToggleFavorite={() => toggleFavorite(row.domain)}
+                    onOrder={() => setPurchaseDomain({ domain: row.domain, marketplace: row.marketplace })}
                   />
                 ))}
               </tbody>
@@ -321,14 +332,17 @@ function ResultRow({
   isLast,
   isFavorite,
   onToggleFavorite,
+  onOrder,
 }: {
   row: { domain: string; marketplace: string; price: string; dr: number; traffic: string };
   isLast: boolean;
   isFavorite: boolean;
   onToggleFavorite: () => void;
+  onOrder: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const [favHover, setFavHover] = useState(false);
+  const [orderHover, setOrderHover] = useState(false);
 
   return (
     <tr
@@ -397,24 +411,44 @@ function ResultRow({
           borderBottom: isLast ? "none" : "1px solid #f0f2f5",
         }}
       >
-        <button
-          onClick={onToggleFavorite}
-          onMouseEnter={() => setFavHover(true)}
-          onMouseLeave={() => setFavHover(false)}
-          title={isFavorite ? "Remove from favorites" : "Save to favorites"}
-          style={{
-            background: isFavorite ? "#fee2e2" : favHover ? "#f5f6f8" : "transparent",
-            border: "1px solid",
-            borderColor: isFavorite ? "#fca5a5" : "#e8eaed",
-            borderRadius: 6,
-            padding: "6px 12px",
-            cursor: "pointer",
-            fontSize: 14,
-            transition: "all 0.15s",
-          }}
-        >
-          {isFavorite ? "❤️ Saved" : "🤍 Save"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={onToggleFavorite}
+            onMouseEnter={() => setFavHover(true)}
+            onMouseLeave={() => setFavHover(false)}
+            title={isFavorite ? "Remove from favorites" : "Save to favorites"}
+            style={{
+              background: isFavorite ? "#fee2e2" : favHover ? "#f5f6f8" : "transparent",
+              border: "1px solid",
+              borderColor: isFavorite ? "#fca5a5" : "#e8eaed",
+              borderRadius: 6,
+              padding: "6px 10px",
+              cursor: "pointer",
+              fontSize: 13,
+              transition: "all 0.15s",
+            }}
+          >
+            {isFavorite ? "❤️" : "🤍"}
+          </button>
+          <button
+            onClick={onOrder}
+            onMouseEnter={() => setOrderHover(true)}
+            onMouseLeave={() => setOrderHover(false)}
+            style={{
+              padding: "6px 14px",
+              background: orderHover ? "#003a99" : "#0052cc",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+              transition: "background 0.15s",
+            }}
+          >
+            Order
+          </button>
+        </div>
       </td>
     </tr>
   );

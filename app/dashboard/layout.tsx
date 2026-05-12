@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AuthProvider, useAuthContext } from "@/lib/contexts/auth-context";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
+import { TipsBanner } from "@/components/dashboard/TipsBanner";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -51,7 +52,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
       <div style={{ display: "flex", minHeight: "100vh", background: "#f5f6f8" }}>
         <DashboardSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <div style={{ flex: 1, overflow: "auto", minWidth: 0 }}>
+        <div style={{ flex: 1, overflow: "auto", minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <TipsBanner />
           {children}
         </div>
       </div>
