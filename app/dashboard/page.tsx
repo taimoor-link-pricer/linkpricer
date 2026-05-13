@@ -80,9 +80,6 @@ export default function DashboardPage() {
                 Admin Panel →
               </Link>
             )}
-            <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 99, background: isAdmin ? "#fee2e2" : "#eff6ff", color: isAdmin ? "#dc2626" : "#2563eb", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              {profile?.role ?? "client"}
-            </span>
           </div>
         </div>
 

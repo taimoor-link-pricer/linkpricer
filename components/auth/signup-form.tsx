@@ -76,12 +76,25 @@ export function SignupForm() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
+  async function getPostLoginRoute(isNewUser: boolean): Promise<string> {
+    if (isNewUser) return ROUTES.onboarding;
+    try {
+      const res = await fetch("/api/user/me");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.role === "vendor") return ROUTES.admin;
+        if (!data.hasCompletedOnboarding) return ROUTES.onboarding;
+      }
+    } catch {}
+    return ROUTES.dashboard;
+  }
+
   useEffect(() => {
     finishGoogleSignIn()
-      .then((result) => {
+      .then(async (result) => {
         if (result) {
           setIsLoading(true);
-          router.push(result.isNewUser ? ROUTES.onboarding : ROUTES.dashboard);
+          router.push(await getPostLoginRoute(result.isNewUser));
         }
       })
       .catch(() => {});
@@ -115,7 +128,7 @@ export function SignupForm() {
     setIsLoading(true);
     try {
       const { isNewUser } = await startGoogleSignIn();
-      router.push(isNewUser ? ROUTES.onboarding : ROUTES.dashboard);
+      router.push(await getPostLoginRoute(isNewUser));
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
     } finally {

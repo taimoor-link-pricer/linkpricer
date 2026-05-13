@@ -72,6 +72,11 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
             return;
           }
 
+          if (!requireAdmin && resolved.role === "vendor") {
+            router.replace(ROUTES.admin);
+            return;
+          }
+
           if (!requireAdmin && resolved.role !== "vendor" && !resolved.hasCompletedOnboarding) {
             router.replace(ROUTES.onboarding);
             return;

@@ -35,7 +35,7 @@ interface SidebarProps {
 }
 
 export function DashboardSidebar({ isOpen, onClose }: SidebarProps) {
-  const { profile, handleSignOut } = useAuthContext();
+  const { profile, loading, handleSignOut } = useAuthContext();
   const pathname = usePathname();
   const isAdmin = profile?.role === "vendor";
 
@@ -80,14 +80,6 @@ export function DashboardSidebar({ isOpen, onClose }: SidebarProps) {
       <div style={{ padding: "20px 20px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 18, fontWeight: 900, color: "#0052cc" }}>Linkpricer</span>
-          <span style={{
-            fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99,
-            background: isAdmin ? "#fee2e2" : "#eff6ff",
-            color: isAdmin ? "#dc2626" : "#2563eb",
-            textTransform: "uppercase", letterSpacing: "0.5px",
-          }}>
-            {isAdmin ? "admin" : "client"}
-          </span>
         </div>
         {/* Mobile close button */}
         <button
@@ -103,40 +95,51 @@ export function DashboardSidebar({ isOpen, onClose }: SidebarProps) {
         </button>
       </div>
 
-      {/* Workspace nav */}
-      <div style={{ padding: "0 12px 8px" }}>
-        <div style={sectionLabel}>Workspace</div>
-        {NAV_ITEMS.map((item) => (
-          <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
-            <span style={{ fontSize: 15 }}>{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
-        ))}
-      </div>
-
-      {/* Admin section */}
-      {isAdmin && (
-        <div style={{ padding: "0 12px 8px" }}>
-          <div style={sectionLabel}>Admin</div>
-          {ADMIN_NAV_ITEMS.map((item) => (
-            <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
-              <span style={{ fontSize: 15 }}>{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
+      {loading ? (
+        /* Skeleton nav while role is being resolved */
+        <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {[80, 64, 72, 68, 76].map((w, i) => (
+            <div key={i} style={{ height: 36, borderRadius: 8, background: "#f3f4f6", width: `${w}%` }} />
           ))}
         </div>
-      )}
+      ) : (
+        <>
+          {/* Workspace nav */}
+          <div style={{ padding: "0 12px 8px" }}>
+            <div style={sectionLabel}>Workspace</div>
+            {NAV_ITEMS.map((item) => (
+              <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
+                <span style={{ fontSize: 15 }}>{item.icon}</span>
+                <span>{item.label}</span>
+              </Link>
+            ))}
+          </div>
 
-      {/* Account section */}
-      <div style={{ padding: "0 12px 8px" }}>
-        <div style={sectionLabel}>Account</div>
-        {ACCOUNT_ITEMS.map((item) => (
-          <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
-            <span style={{ fontSize: 15 }}>{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
-        ))}
-      </div>
+          {/* Admin section */}
+          {isAdmin && (
+            <div style={{ padding: "0 12px 8px" }}>
+              <div style={sectionLabel}>Admin</div>
+              {ADMIN_NAV_ITEMS.map((item) => (
+                <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
+                  <span style={{ fontSize: 15 }}>{item.icon}</span>
+                  <span>{item.label}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {/* Account section */}
+          <div style={{ padding: "0 12px 8px" }}>
+            <div style={sectionLabel}>Account</div>
+            {ACCOUNT_ITEMS.map((item) => (
+              <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
+                <span style={{ fontSize: 15 }}>{item.icon}</span>
+                <span>{item.label}</span>
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
 
       <div style={{ flex: 1 }} />
 

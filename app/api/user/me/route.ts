@@ -16,36 +16,41 @@ export async function GET() {
     let result = await db.select().from(users).where(eq(users.id, decoded.uid)).limit(1);
 
     if (!result[0]) {
-      // User authenticated but missing from PG — create them now.
-      // This handles the case where the session-route insert was silently skipped
-      // due to an email uniqueness conflict from old app data.
+      // User authenticated but missing from PG — check if an old-app record exists
+      // with the same email (different id). If so, inherit their role/onboarding,
+      // clear the email on the old record, and create the new one with the real email.
       const nameParts = decoded.name ? (decoded.name as string).split(" ") : [];
       const firstName = nameParts[0] ?? null;
       const lastName = nameParts.slice(1).join(" ") || null;
+
+      let role: string = "client";
+      let hasCompletedOnboarding = false;
+      let inheritedFirstName = firstName;
+      let inheritedLastName = lastName;
+
+      if (decoded.email) {
+        const emailMatch = await db.select().from(users).where(eq(users.email, decoded.email)).limit(1);
+        if (emailMatch[0]) {
+          role = emailMatch[0].role;
+          hasCompletedOnboarding = emailMatch[0].hasCompletedOnboarding ?? false;
+          inheritedFirstName = emailMatch[0].firstName ?? firstName;
+          inheritedLastName = emailMatch[0].lastName ?? lastName;
+          // Free up the email on the old record so the new Firebase UID record can own it
+          await db.update(users).set({ email: null }).where(eq(users.id, emailMatch[0].id));
+        }
+      }
 
       try {
         await db.insert(users).values({
           id: decoded.uid,
           email: decoded.email ?? null,
-          firstName,
-          lastName,
-          role: "client",
-          hasCompletedOnboarding: false,
-        });
-      } catch {
-        // Email already taken by an old-app record — insert without email
-        try {
-          await db.insert(users).values({
-            id: decoded.uid,
-            email: null,
-            firstName,
-            lastName,
-            role: "client",
-            hasCompletedOnboarding: false,
-          }).onConflictDoNothing();
-        } catch (e) {
-          console.error("[/api/user/me] Failed to create user row", e);
-        }
+          firstName: inheritedFirstName,
+          lastName: inheritedLastName,
+          role,
+          hasCompletedOnboarding,
+        }).onConflictDoNothing();
+      } catch (e) {
+        console.error("[/api/user/me] Failed to create user row", e);
       }
 
       result = await db.select().from(users).where(eq(users.id, decoded.uid)).limit(1);
