@@ -40,11 +40,11 @@ export function isFirebaseError(err: unknown): err is FirebaseError {
   return typeof err === "object" && err !== null && "code" in err;
 }
 
-async function createSession(idToken: string): Promise<void> {
+async function createSession(idToken: string, userData?: { firstName?: string; lastName?: string }): Promise<void> {
   const res = await fetch("/api/auth/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ idToken }),
+    body: JSON.stringify({ idToken, ...userData }),
   });
   if (!res.ok) throw new Error("Failed to establish session");
 }
@@ -65,7 +65,7 @@ export async function signUpWithEmail(
   const { user } = await createUserWithEmailAndPassword(auth, email, password);
   await updateProfile(user, { displayName: `${firstName} ${lastName}`.trim() });
   const idToken = await user.getIdToken();
-  await createSession(idToken);
+  await createSession(idToken, { firstName, lastName });
   return user;
 }
 

@@ -284,8 +284,8 @@ export default function SettingsPage() {
                 fontWeight: 700,
                 padding: "3px 10px",
                 borderRadius: 99,
-                background: profile?.role === "admin" ? "#fee2e2" : "#eff6ff",
-                color: profile?.role === "admin" ? "#dc2626" : "#2563eb",
+                background: profile?.role === "vendor" ? "#fee2e2" : "#eff6ff",
+                color: profile?.role === "vendor" ? "#dc2626" : "#2563eb",
                 textTransform: "uppercase",
                 letterSpacing: "0.5px",
               }}
@@ -305,11 +305,11 @@ export default function SettingsPage() {
                 fontWeight: 600,
                 padding: "3px 10px",
                 borderRadius: 99,
-                background: profile?.onboarded ? "#dcfce7" : "#fef3c7",
-                color: profile?.onboarded ? "#166534" : "#92400e",
+                background: profile?.hasCompletedOnboarding ? "#dcfce7" : "#fef3c7",
+                color: profile?.hasCompletedOnboarding ? "#166534" : "#92400e",
               }}
             >
-              {profile?.onboarded ? "Complete" : "Pending"}
+              {profile?.hasCompletedOnboarding ? "Complete" : "Pending"}
             </span>
           </div>
         </div>

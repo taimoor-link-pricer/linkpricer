@@ -53,7 +53,7 @@ export default function DashboardPage() {
 
   const firstName = profile?.displayName?.split(" ")[0] ?? profile?.email?.split("@")[0] ?? "there";
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-  const isAdmin = profile?.role === "admin";
+  const isAdmin = profile?.role === "vendor";
 
   function handleSearch() {
     const q = searchQuery.trim();

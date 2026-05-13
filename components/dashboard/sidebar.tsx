@@ -37,7 +37,7 @@ interface SidebarProps {
 export function DashboardSidebar({ isOpen, onClose }: SidebarProps) {
   const { profile, handleSignOut } = useAuthContext();
   const pathname = usePathname();
-  const isAdmin = profile?.role === "admin";
+  const isAdmin = profile?.role === "vendor";
 
   const firstName = profile?.displayName
     ? profile.displayName.split(" ")[0]

@@ -9,10 +9,19 @@ import {
 } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
-import { getUserProfile, type UserProfile } from "@/lib/firebase/firestore";
 import { signOut } from "@/lib/firebase/auth-client";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
+
+export type UserProfile = {
+  uid: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  displayName: string | null;
+  role: "client" | "vendor";
+  hasCompletedOnboarding: boolean;
+};
 
 interface AuthContextValue {
   profile: UserProfile | null;
@@ -22,29 +31,14 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function profileFromFirebaseUser(
-  user: import("firebase/auth").User
-): UserProfile {
-  return {
-    uid: user.uid,
-    email: user.email,
-    displayName: user.displayName,
-    role: "client",
-    onboarded: false,
-  };
-}
-
 interface AuthProviderProps {
   children: ReactNode;
   requireAdmin?: boolean;
 }
 
 export function AuthProvider({ children, requireAdmin = false }: AuthProviderProps) {
-  const [profile, setProfile] = useState<UserProfile | null>(() => {
-    const u = auth.currentUser;
-    return u ? profileFromFirebaseUser(u) : null;
-  });
-  const [loading, setLoading] = useState(() => !auth.currentUser);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
@@ -58,16 +52,56 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
       }
 
       try {
-        const p = await getUserProfile(user.uid);
-        const resolvedProfile = p ?? profileFromFirebaseUser(user);
-        setProfile(resolvedProfile);
+        const res = await fetch("/api/user/me");
 
-        if (requireAdmin && resolvedProfile.role !== "admin") {
-          router.replace(ROUTES.dashboard);
-          return;
+        if (res.ok) {
+          const data = await res.json();
+          const resolved: UserProfile = {
+            uid: user.uid,
+            email: data.email ?? user.email,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            displayName: [data.firstName, data.lastName].filter(Boolean).join(" ") || user.displayName || null,
+            role: data.role as "client" | "vendor",
+            hasCompletedOnboarding: data.hasCompletedOnboarding,
+          };
+          setProfile(resolved);
+
+          if (requireAdmin && resolved.role !== "vendor") {
+            router.replace(ROUTES.dashboard);
+            return;
+          }
+
+          if (!requireAdmin && resolved.role !== "vendor" && !resolved.hasCompletedOnboarding) {
+            router.replace(ROUTES.onboarding);
+            return;
+          }
+        } else {
+          // User exists in Firebase but not in PG yet — treat as new unboarded client
+          setProfile({
+            uid: user.uid,
+            email: user.email,
+            firstName: null,
+            lastName: null,
+            displayName: user.displayName,
+            role: "client",
+            hasCompletedOnboarding: false,
+          });
+
+          if (!requireAdmin) {
+            router.replace(ROUTES.onboarding);
+          }
         }
       } catch {
-        setProfile(profileFromFirebaseUser(user));
+        setProfile({
+          uid: user.uid,
+          email: user.email,
+          firstName: null,
+          lastName: null,
+          displayName: user.displayName,
+          role: "client",
+          hasCompletedOnboarding: false,
+        });
       } finally {
         setLoading(false);
       }

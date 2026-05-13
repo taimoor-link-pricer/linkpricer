@@ -3,8 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
-import { auth } from "@/lib/firebase/client";
-import { completeOnboarding } from "@/lib/firebase/firestore";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -109,18 +107,20 @@ export function OnboardingWizard() {
     } else {
       setSubmitting(true);
       try {
-        const user = auth.currentUser;
-        if (user) {
-          await completeOnboarding(user.uid, {
+        await fetch("/api/user/onboarding", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             userType: data.userType,
+            userTypeOther: data.userTypeOther || undefined,
             monthlySpend: data.monthlySpend,
-            challenges: data.biggestChallenge,
-            importanceFactors: data.priorityFactors,
-            acquisitionMethods: data.currentMethod,
-          });
-        }
+            biggestChallenge: data.biggestChallenge,
+            priorityFactors: data.priorityFactors,
+            currentMethod: data.currentMethod,
+          }),
+        });
       } catch {
-        // proceed regardless — onboarding data is non-critical for access
+        // proceed regardless
       }
       router.push(ROUTES.dashboard);
     }
