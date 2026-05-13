@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { ROUTES } from "@/lib/constants";
+
 const BENEFITS = [
   { icon: "💰", title: "True market pricing", desc: "See price differences across 60+ marketplaces in seconds." },
   { icon: "📊", title: "SEO metrics built-in", desc: "DR, traffic, and keyword data for every domain." },
@@ -19,9 +22,9 @@ export function AuthBrandPanel() {
       }}
     >
       <div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: "#ffffff", letterSpacing: -0.5, marginBottom: 48 }}>
+        <Link href={ROUTES.home} style={{ fontSize: 22, fontWeight: 900, color: "#ffffff", letterSpacing: -0.5, marginBottom: 48, display: "block", textDecoration: "none" }}>
           Linkpricer
-        </div>
+        </Link>
         <h1 style={{ fontSize: 34, fontWeight: 900, color: "#ffffff", lineHeight: 1.15, letterSpacing: -0.75, marginBottom: 14 }}>
           One search.<br />Best price wins.
         </h1>

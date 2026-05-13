@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { ROUTES } from "@/lib/constants";
+
 const HIGHLIGHTS = [
   { icon: "✓", text: "Free to compare — no credit card needed" },
   { icon: "✓", text: "60+ marketplaces in one dashboard" },
@@ -20,9 +23,9 @@ export function SignupBrandPanel() {
       }}
     >
       <div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: "#ffffff", letterSpacing: -0.5, marginBottom: 48 }}>
+        <Link href={ROUTES.home} style={{ fontSize: 22, fontWeight: 900, color: "#ffffff", letterSpacing: -0.5, marginBottom: 48, display: "block", textDecoration: "none" }}>
           Linkpricer
-        </div>
+        </Link>
         <h2 style={{ fontSize: 30, fontWeight: 900, color: "#ffffff", lineHeight: 1.2, letterSpacing: -0.5, marginBottom: 12 }}>
           Start building smarter.<br />Compare. Order. Track.
         </h2>

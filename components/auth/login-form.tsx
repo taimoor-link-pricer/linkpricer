@@ -93,7 +93,7 @@ export function LoginForm() {
     <section style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", padding: "48px 40px", background: "#ffffff" }}>
       {/* Mobile logo */}
       <div style={{ display: "none", marginBottom: 32, alignSelf: "flex-start" }} className="mobile-logo">
-        <span style={{ fontSize: 20, fontWeight: 900, color: "#0052cc", letterSpacing: -0.5 }}>Linkpricer</span>
+        <Link href={ROUTES.home} style={{ fontSize: 20, fontWeight: 900, color: "#0052cc", letterSpacing: -0.5, textDecoration: "none" }}>Linkpricer</Link>
       </div>
 
       <div style={{ width: "100%", maxWidth: 420 }}>
