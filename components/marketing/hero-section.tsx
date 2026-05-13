@@ -4,290 +4,441 @@ import { useState } from "react";
 import Link from "next/link";
 import { ROUTES } from "@/lib/constants";
 
-type PreviewResult = {
-  domain: string | null;
-  price: number | null;
-  currency: string | null;
-  dr: number | null;
-  monthlyTraffic: number | null;
+const STATIC_ROWS = [
+  { id: "F0", domain: "forbes.com", refs: "1.8M", price: "$1,380", grade: "A+", score: 92, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 94, traffic: "71M", keywords: "8.4M" },
+  { id: "H1", domain: "healthline.com", refs: "92K", price: "$1,265", grade: "A+", score: 88, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 91, traffic: "184M", keywords: "4.8M" },
+  { id: "T2", domain: "techcrunch.com", refs: "184K", price: "$977", grade: "A", score: 78, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 92, traffic: "14M", keywords: "1.8M" },
+  { id: "O3", domain: "oneangrygamer.net", refs: "2.1K", price: "$230", grade: "A", score: 71, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 58, traffic: "410K", keywords: "38K" },
+  { id: "B4", domain: "betimate.com", refs: "980", price: "$212", grade: "B+", score: 58, gradeClass: "hp-grade-b", country: "🇬🇧", countryCode: "GB", dr: 41, traffic: "320K", keywords: "25K" },
+  { id: "M5", domain: "medium.com", refs: "456K", price: "$1,820", grade: "A+", score: 92, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 87, traffic: "1.2M", keywords: "3.2M" },
+];
+
+const DOMAIN_DATA: Record<string, typeof STATIC_ROWS[0]> = {
+  "forbes.com": STATIC_ROWS[0],
+  "healthline.com": STATIC_ROWS[1],
+  "techcrunch.com": STATIC_ROWS[2],
+  "oneangrygamer.net": STATIC_ROWS[3],
+  "betimate.com": STATIC_ROWS[4],
+  "medium.com": STATIC_ROWS[5],
 };
 
-function formatPrice(price: number | null, currency: string | null): string {
-  if (price == null) return "—";
-  const sym = currency?.toUpperCase() === "USD" ? "$" : "€";
-  return `${sym}${Math.round(price).toLocaleString()}`;
-}
+const HOW_STEPS = [
+  { num: "1", title: "Paste your domain list", body: "Bulk-paste domains with or without your known prices. We normalize and match them across marketplaces." },
+  { num: "2", title: "Compare & favorite", body: "See where each domain is available and the lowest purchase price. Add domains to Favorites to build your shortlist." },
+  { num: "3", title: "Order in one go", body: 'Checkout directly via Linkpricer or leave order details to us. You get an "Order received" email instantly.' },
+  { num: "4", title: "Track in your dashboard", body: "All communication continues by email. Progress is mirrored in your dashboard for full visibility." },
+  { num: "5", title: "Invoice after confirmation", body: "When the marketplace confirms your order, we email the invoice. Pay first, then delivery continues." },
+  { num: "6", title: "Content handling", body: "Upload your own article or ask us to write it — either way, you see every step until publication." },
+];
 
-function formatTraffic(n: number | null): string {
-  if (n == null) return "—";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return String(n);
-}
+const VALUE_CARDS = [
+  { icon: "💰", title: "True market pricing", body: "Stop guessing. See price differences across marketplaces in seconds." },
+  { icon: "📧", title: "One order, not 50 emails", body: "Centralize purchasing — let your dashboard and inbox reflect the status." },
+  { icon: "✅", title: "Fewer surprises", body: "Acceptance rules and requirements surfaced up front. Choose viable domains only." },
+  { icon: "🎁", title: "Always free to compare", body: "Build lists, favorite targets, and compare prices without paying a cent." },
+];
 
-function formatDR(n: number | null): string {
-  if (n == null) return "—";
-  return String(Math.round(n));
-}
+const FEATURE_CARDS = [
+  { title: "📊 Bulk search", body: "Paste hundreds of domains at once for instant availability & best-price matching." },
+  { title: "🔄 Marketplace comparison", body: "We unify listings from multiple marketplaces and show the best place to purchase." },
+  { title: "❤️ Favorites list", body: "Shortlist domains you like and come back later or order in one go." },
+  { title: "🛒 Direct ordering", body: "Checkout via Linkpricer or delegate ordering to us with your instructions." },
+  { title: "📧 Email-first workflow", body: 'Automatic "Order received" email. Ongoing communication continues by email.' },
+  { title: "📋 Dashboard tracking", body: "Mirror of your email thread: see order status, confirmations, content, and publication." },
+  { title: "✍️ Content options", body: "Upload your article or let us write it for you. Status visible end-to-end." },
+  { title: "🔒 Privacy & security", body: "GDPR-friendly data handling, role-based access, and exportable records." },
+  { title: "💵 Zero cost to compare", body: "Comparisons are free. You only pay when you place an order." },
+];
+
+const PRICE_CARDS = [
+  { title: "No paywall for research", body: "Paste, compare, and favorite domains without entering a card." },
+  { title: "Transparent checkout", body: "Before you pay, you see exactly what is being ordered and the total due." },
+  { title: "Invoices by email", body: "Once a marketplace confirms your order via API, we email the invoice so you can pay and continue." },
+];
+
+const FAQS = [
+  { q: "Do I need a credit card to compare prices?", a: "No. Linkpricer is free for research: paste lists, compare, and favorite domains without payment. No credit card required, no trial period." },
+  { q: "What happens after I place an order?", a: 'You receive an "Order received" email immediately. Communication continues by email, and the same status appears in your dashboard. We keep you updated every step of the way.' },
+  { q: "When do I pay?", a: "When the marketplace confirms your order via API, we email the invoice. Pay first, then we proceed with content and publication. No surprises." },
+  { q: "Can I upload my own article?", a: "Yes. You can upload your article or ask us to write it. You will see progress end-to-end in your dashboard." },
+  { q: "What integrations do you support?", a: "We connect to 40+ marketplaces to confirm availability and orders. More sources are added over time. Check our Marketplaces page for the full list." },
+  { q: "Is my data secure?", a: "We follow GDPR-friendly practices, provide exports, and limit access by role. Your data is encrypted in transit and at rest." },
+];
+
+const BLOG_CARDS = [
+  { emoji: "📚", title: "The Complete Guide to Guest Posting", body: "Learn the fundamentals of guest posting and how to maximize link value from each placement." },
+  { emoji: "🔍", title: "Evaluating Backlink Quality in 2026", body: "Understand what makes a backlink valuable and how to spot red flags before you buy." },
+  { emoji: "📈", title: "Bulk Outreach: A New Era of Link Building", body: "How to scale your link-building efforts without losing quality or burning out your team." },
+];
 
 export function HeroSection() {
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<PreviewResult[] | null>(null);
-  const [rateLimited, setRateLimited] = useState(false);
-  const [remaining, setRemaining] = useState<number | null>(null);
-  const [searchedDomain, setSearchedDomain] = useState("");
-  const [noResults, setNoResults] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [demoRows, setDemoRows] = useState(STATIC_ROWS);
+  const [demoCount, setDemoCount] = useState(6);
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-  async function handleSearch() {
-    const term = query.trim();
-    if (!term || loading) return;
-
-    setLoading(true);
-    setResults(null);
-    setNoResults(false);
-    setRateLimited(false);
-    setSearchedDomain(term);
-
-    try {
-      const res = await fetch(`/api/preview/search?domain=${encodeURIComponent(term)}`);
-
-      if (res.status === 429) {
-        setRateLimited(true);
-        return;
-      }
-
-      if (!res.ok) {
-        setNoResults(true);
-        return;
-      }
-
-      const data = await res.json() as { results: PreviewResult[]; remaining: number };
-      setRemaining(data.remaining);
-
-      if (data.results.length === 0) {
-        setNoResults(true);
-      } else {
-        setResults(data.results);
-      }
-    } catch {
-      setNoResults(true);
-    } finally {
-      setLoading(false);
+  function handleSearch() {
+    const domain = searchInput.trim().toLowerCase();
+    if (!domain) return;
+    const found = DOMAIN_DATA[domain];
+    if (found) {
+      setDemoRows([{ ...found, id: "D0" }]);
+      setDemoCount(1);
+    } else {
+      setDemoRows([]);
+      setDemoCount(0);
     }
   }
-
-  const signupHref = `${ROUTES.signup}?domain=${encodeURIComponent(searchedDomain)}`;
 
   return (
     <>
       <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes lp-fade-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        .hero-section { padding: 60px 40px; }
-        .hero-h1 { font-size: 48px; }
-        .hero-search-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-        .hero-search-input { flex: 1; }
-        .hero-search-or { color: #9ca3af; }
-        .stats-row { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
-        .preview-result-row { display: grid; grid-template-columns: 1fr 100px 60px 90px 120px; align-items: center; padding: 14px 0; border-bottom: 1px solid #e8eaed; gap: 12px; }
-        .preview-result-row:last-child { border-bottom: none; }
-        @media (max-width: 768px) {
-          .hero-section { padding: 36px 16px; }
-          .hero-h1 { font-size: 28px; letter-spacing: -0.5px; }
-          .hero-search-row { flex-direction: column; align-items: stretch; }
-          .hero-search-or { display: none; }
-          .hero-search-input { width: 100%; }
-          .stats-row { gap: 20px; }
-          .preview-result-row { grid-template-columns: 1fr 80px 50px; }
-          .preview-col-traffic { display: none; }
-          .preview-col-btn { display: none; }
+        .hp-hero { padding: 80px 40px; background: linear-gradient(135deg, #f0f7ff 0%, #ffffff 100%); text-align: center; }
+        .hp-hero-content { max-width: 900px; margin: 0 auto; }
+        .hp-h1 { font-size: 56px; font-weight: 900; margin: 0 0 16px; line-height: 1.1; letter-spacing: -1px; color: #111827; }
+        .hp-sub { font-size: 18px; color: #4b5563; margin: 0 0 32px; line-height: 1.6; }
+        .hp-cta { display: flex; gap: 12px; justify-content: center; margin-bottom: 16px; flex-wrap: wrap; }
+        .hp-cta-btn { padding: 13px 28px; font-size: 15px; font-weight: 600; border-radius: 10px; text-decoration: none; cursor: pointer; border: none; display: inline-block; transition: all 0.2s; }
+        .hp-btn-primary { background: #0052cc; color: #fff; }
+        .hp-btn-primary:hover { background: #003a99; }
+        .hp-btn-secondary { background: #fff; color: #0052cc; border: 1px solid #0052cc; }
+        .hp-btn-secondary:hover { background: #f0f7ff; }
+        .hp-trust { font-size: 13px; color: #9ca3af; margin-bottom: 48px; }
+        .hp-visual { max-width: 900px; margin: 0 auto; padding: 32px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; text-align: center; color: #9ca3af; font-size: 48px; min-height: 200px; display: flex; align-items: center; justify-content: center; }
+        .hp-proof { display: flex; justify-content: center; gap: 48px; margin-top: 48px; flex-wrap: wrap; }
+        .hp-proof-stat { font-size: 32px; font-weight: 900; color: #0052cc; }
+        .hp-proof-label { font-size: 12px; color: #9ca3af; margin-top: 4px; }
+
+        .hp-demo { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 28px; max-width: 1400px; margin: 40px auto; }
+        .hp-demo-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .hp-demo-title { font-size: 18px; font-weight: 700; color: #111827; }
+        .hp-demo-badge { background: #e6f2ff; color: #0052cc; padding: 4px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+        .hp-demo-search { display: flex; gap: 12px; margin-bottom: 24px; }
+        .hp-demo-input { flex: 1; padding: 11px 14px; border: 1px solid #e5e7eb; border-radius: 10px; font-size: 14px; outline: none; font-family: Inter, -apple-system, system-ui, sans-serif; }
+        .hp-demo-input:focus { border-color: #0052cc; box-shadow: 0 0 0 3px rgba(0,82,204,0.1); }
+        .hp-demo-go { padding: 11px 28px; background: #0052cc; color: #fff; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+        .hp-demo-go:hover { background: #003a99; }
+        .hp-table { width: 100%; border-collapse: collapse; }
+        .hp-table th { text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 600; color: #9ca3af; letter-spacing: 0.3px; text-transform: uppercase; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+        .hp-table td { padding: 14px 12px; font-size: 13.5px; color: #374151; border-bottom: 1px solid #e5e7eb; vertical-align: middle; }
+        .hp-table tr:last-child td { border-bottom: none; }
+        .hp-table tr:hover td { background: #f9fafb; }
+        .hp-mono { font-family: "JetBrains Mono", "Fira Mono", monospace; font-weight: 600; color: #0052cc; }
+        .hp-grade { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 9px; border-radius: 8px; font-weight: 700; font-size: 12px; }
+        .hp-grade-a { background: #e6f6ed; color: #0a8a4a; }
+        .hp-grade-b { background: #fef3c7; color: #a35d00; }
+        .hp-buy { padding: 8px 14px; background: #0052cc; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 12px; text-decoration: none; display: inline-block; transition: background 0.2s; }
+        .hp-buy:hover { background: #003a99; }
+        .hp-demo-footer { margin-top: 16px; padding: 12px; background: #f9fafb; border-radius: 8px; font-size: 12px; color: #6b7280; }
+
+        .hp-section { padding: 100px 40px; max-width: 1600px; margin: 0 auto; }
+        .hp-section-bg { background: #f9fafb; }
+        .hp-section-full { max-width: 100%; padding: 100px 40px; }
+        .hp-section h2 { font-size: 44px; font-weight: 900; margin: 0 0 0; text-align: center; letter-spacing: -1px; color: #111827; }
+
+        .hp-how-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 56px; }
+        .hp-step { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px; text-align: center; transition: all 0.3s; }
+        .hp-step:hover { border-color: #0052cc; box-shadow: 0 8px 24px rgba(0,82,204,0.1); transform: translateY(-4px); }
+        .hp-step-num { font-size: 40px; font-weight: 900; color: #0052cc; margin-bottom: 12px; }
+        .hp-step h3 { font-size: 18px; font-weight: 700; margin: 0 0 12px; color: #111827; }
+        .hp-step p { margin: 0; font-size: 14px; color: #4b5563; }
+
+        .hp-value-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 32px; margin-top: 56px; max-width: 1600px; margin-left: auto; margin-right: auto; }
+        .hp-value { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 36px; transition: all 0.3s; }
+        .hp-value:hover { border-color: #0052cc; box-shadow: 0 8px 24px rgba(0,82,204,0.1); transform: translateY(-4px); }
+        .hp-value-icon { font-size: 32px; margin-bottom: 12px; }
+        .hp-value h3 { font-size: 20px; font-weight: 700; margin: 0 0 12px; color: #111827; }
+        .hp-value p { margin: 0; font-size: 14px; color: #4b5563; }
+
+        .hp-feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 56px; }
+        .hp-feat { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 28px; transition: all 0.3s; }
+        .hp-feat:hover { border-color: #0052cc; box-shadow: 0 6px 16px rgba(0,82,204,0.08); transform: translateY(-4px); }
+        .hp-feat h3 { font-size: 16px; font-weight: 700; margin: 0 0 10px; color: #111827; }
+        .hp-feat p { margin: 0; font-size: 13px; color: #4b5563; line-height: 1.6; }
+
+        .hp-price-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 56px; }
+        .hp-price { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px; text-align: center; transition: all 0.3s; }
+        .hp-price:hover { border-color: #0052cc; box-shadow: 0 8px 24px rgba(0,82,204,0.1); transform: translateY(-4px); }
+        .hp-price h3 { font-size: 18px; font-weight: 700; margin: 0 0 12px; color: #111827; }
+        .hp-price p { margin: 0; font-size: 14px; color: #4b5563; }
+
+        .hp-social { display: grid; grid-template-columns: 2fr 1fr; gap: 48px; align-items: center; }
+        .hp-testimonials { display: flex; flex-direction: column; gap: 24px; }
+        .hp-testimonial { background: #fff; border-left: 4px solid #0052cc; border-radius: 8px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .hp-testimonial-text { font-size: 15px; color: #111827; margin: 0; font-weight: 500; line-height: 1.6; }
+        .hp-testimonial-meta { font-size: 12px; color: #9ca3af; margin-top: 10px; }
+        .hp-security { background: #fff; border-radius: 12px; padding: 28px; border: 1px solid #e5e7eb; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .hp-security h3 { font-size: 18px; font-weight: 700; margin: 0 0 18px; color: #111827; }
+        .hp-security-item { display: flex; gap: 12px; margin: 14px 0; font-size: 13px; color: #4b5563; align-items: flex-start; }
+        .hp-security-check { color: #0a8a4a; font-weight: 900; font-size: 16px; flex-shrink: 0; }
+
+        .hp-cta-strip { background: linear-gradient(135deg, #0052cc 0%, #003a99 100%); color: #fff; padding: 64px 40px; text-align: center; border-radius: 16px; margin: 80px 40px; max-width: 1200px; margin-left: auto; margin-right: auto; }
+        .hp-cta-strip h2 { color: #fff; font-size: 36px; font-weight: 900; margin: 0 0 12px; letter-spacing: -0.5px; }
+        .hp-cta-strip p { color: #e6f2ff; margin: 0 0 24px; font-size: 16px; }
+
+        .hp-faq-grid { display: grid; gap: 12px; margin-top: 56px; }
+        .hp-faq-item { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px; cursor: pointer; transition: all 0.2s; }
+        .hp-faq-item:hover { border-color: #0052cc; background: #f0f7ff; }
+        .hp-faq-q { font-weight: 700; color: #111827; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+        .hp-faq-toggle { font-size: 18px; transition: transform 0.2s; flex-shrink: 0; }
+        .hp-faq-a { margin-top: 14px; font-size: 13px; color: #4b5563; line-height: 1.7; padding-top: 14px; border-top: 1px solid #e5e7eb; }
+
+        .hp-blog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 56px; }
+        .hp-blog-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; transition: all 0.3s; }
+        .hp-blog-card:hover { border-color: #0052cc; box-shadow: 0 8px 24px rgba(0,82,204,0.08); transform: translateY(-6px); }
+        .hp-blog-img { width: 100%; height: 180px; background: linear-gradient(135deg, #f0f7ff 0%, #e6f2ff 100%); display: flex; align-items: center; justify-content: center; font-size: 40px; }
+        .hp-blog-body { padding: 20px; }
+        .hp-blog-body h3 { font-size: 15px; font-weight: 700; margin: 0 0 8px; color: #111827; }
+        .hp-blog-body p { margin: 0; font-size: 12px; color: #4b5563; line-height: 1.5; }
+
+        @keyframes hp-fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        @media (max-width: 1024px) {
+          .hp-how-grid, .hp-feat-grid, .hp-price-grid, .hp-blog-grid { grid-template-columns: repeat(2, 1fr); }
+          .hp-social { grid-template-columns: 1fr; }
+          .hp-hero { padding: 60px 20px; }
+          .hp-h1 { font-size: 40px; }
+          .hp-section { padding: 60px 20px; }
+          .hp-cta-strip { margin: 40px 20px; }
+          .hp-demo { margin: 40px 20px; }
+        }
+        @media (max-width: 640px) {
+          .hp-h1 { font-size: 28px; }
+          .hp-how-grid, .hp-feat-grid, .hp-price-grid, .hp-blog-grid { grid-template-columns: 1fr; }
+          .hp-value-grid { grid-template-columns: 1fr; }
+          .hp-social { grid-template-columns: 1fr; }
+          .hp-proof { gap: 24px; }
+          .hp-cta-strip { padding: 40px 20px; }
         }
       `}</style>
 
-      {/* Hero headline */}
-      <section className="hero-section" style={{ background: "linear-gradient(135deg, #eff6ff 0%, #f5f6f8 100%)" }}>
-        <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-          <h1 className="hero-h1" style={{ fontWeight: 900, color: "#000000", margin: "0 0 12px", letterSpacing: -1 }}>
-            One search. 60+ vendors. Best price wins.
-          </h1>
-          <p style={{ fontSize: 17, color: "#4b5563", margin: "0 0 12px", maxWidth: 560, lineHeight: 1.6 }}>
-            Compare backlink prices across all major marketplaces and find the best deal in seconds.
+      {/* Hero */}
+      <div className="hp-hero">
+        <div className="hp-hero-content">
+          <h1 className="hp-h1">One search. 60+ vendors. 1.54M offers</h1>
+          <p className="hp-sub">
+            The same domain can cost 10× more on one marketplace vs. another. LinkPricer shows you where to buy at the best price, for up to 200 domains at once.
           </p>
-          <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
-            We aggregate marketplace offers across 40,000+ websites so you can save up to 70% on your link-building budget.
-          </p>
-        </div>
-      </section>
-
-      {/* Search & results */}
-      <section className="hero-section" style={{ background: "#ffffff" }}>
-        <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-
-          {/* Search box */}
-          <div style={{ background: "#f5f6f8", borderRadius: 12, padding: 24, marginBottom: 40, border: "1px solid #e8eaed" }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1a202c", margin: "0 0 16px" }}>
-              Domain Price Preview — See live prices from our marketplace
-            </h3>
-            <div className="hero-search-row">
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                placeholder="E.g., forbes.com"
-                className="hero-search-input"
-                style={{ padding: "11px 14px", border: "1px solid #e8eaed", borderRadius: 10, fontSize: 14, outline: "none", background: "#ffffff" }}
-              />
-              <span className="hero-search-or">or</span>
-              <button
-                onClick={handleSearch}
-                disabled={loading || !query.trim()}
-                style={{ padding: "11px 24px", background: "#0052cc", color: "#ffffff", border: "none", borderRadius: 10, fontWeight: 600, cursor: loading || !query.trim() ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 14, opacity: loading || !query.trim() ? 0.7 : 1, whiteSpace: "nowrap" }}
-              >
-                {loading && (
-                  <span style={{ width: 14, height: 14, border: "2px solid #ffffff", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} />
-                )}
-                {loading ? "Searching…" : "Check Prices"}
-              </button>
-              <Link
-                href={ROUTES.signup}
-                style={{ padding: "11px 20px", border: "1px solid #0052cc", background: "#ffffff", color: "#0052cc", borderRadius: 10, fontWeight: 600, textDecoration: "none", fontSize: 14, textAlign: "center", whiteSpace: "nowrap" }}
-              >
-                Sign in for full access
-              </Link>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-              <p style={{ fontSize: 12, color: "#6b7280", margin: 0 }}>
-                Try{" "}
-                <button onClick={() => setQuery("forbes.com")} style={{ color: "#0052cc", background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12 }}>forbes.com</button>
-                {" "}or{" "}
-                <button onClick={() => setQuery("techcrunch.com")} style={{ color: "#0052cc", background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12 }}>techcrunch.com</button>
-              </p>
-              {remaining !== null && !rateLimited && (
-                <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>
-                  {remaining} free search{remaining !== 1 ? "es" : ""} remaining
-                </p>
-              )}
-            </div>
+          <div className="hp-cta">
+            <Link href={ROUTES.signup} className="hp-cta-btn hp-btn-primary">Start free — compare prices</Link>
+            <a href="#how" className="hp-cta-btn hp-btn-secondary">See how it works</a>
           </div>
-
-          {/* Stats */}
-          <div style={{ textAlign: "center", marginBottom: 40 }}>
-            <p style={{ fontSize: 17, color: "#1a202c", margin: 0 }}>
-              Total domains in our database:{" "}
-              <strong style={{ color: "#0052cc", fontSize: 22 }}>40,000+</strong> and counting
-            </p>
+          <div className="hp-trust">✓ No credit card &bull; Free to compare &bull; Pay only when we confirm the webmaster accepts</div>
+          <div className="hp-visual">[Product demo or screenshot]</div>
+          <div className="hp-proof">
+            {[{ stat: "60+", label: "Vendors aggregated" }, { stat: "1.54M+", label: "Offers indexed" }, { stat: "3,000+", label: "Registered users" }].map((item) => (
+              <div key={item.label} style={{ textAlign: "center" }}>
+                <div className="hp-proof-stat">{item.stat}</div>
+                <div className="hp-proof-label">{item.label}</div>
+              </div>
+            ))}
           </div>
-
-          {/* Results panel */}
-          {(results || rateLimited || noResults) && (
-            <div style={{ background: "linear-gradient(135deg, #eff6ff 0%, #f5f6f8 100%)", borderRadius: 14, padding: 24, border: "1px solid #cce5ff", animation: "lp-fade-up 0.3s ease-out" }}>
-
-              {/* Rate limited */}
-              {rateLimited && (
-                <div style={{ textAlign: "center", padding: "24px 0" }}>
-                  <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
-                  <p style={{ fontSize: 16, fontWeight: 700, color: "#111827", margin: "0 0 8px" }}>
-                    You&apos;ve used all 5 free searches
-                  </p>
-                  <p style={{ fontSize: 14, color: "#6b7280", margin: "0 0 20px" }}>
-                    Create a free account to get unlimited searches, full pricing data, and direct ordering.
-                  </p>
-                  <Link
-                    href={`${ROUTES.signup}?domain=${encodeURIComponent(query.trim())}`}
-                    style={{ display: "inline-block", padding: "13px 32px", background: "#0052cc", color: "#ffffff", borderRadius: 10, fontWeight: 700, fontSize: 14, textDecoration: "none" }}
-                  >
-                    Sign up free — no credit card
-                  </Link>
-                </div>
-              )}
-
-              {/* No results */}
-              {noResults && !rateLimited && (
-                <div style={{ textAlign: "center", padding: "24px 0" }}>
-                  <p style={{ fontSize: 15, fontWeight: 600, color: "#374151", margin: "0 0 8px" }}>
-                    No results found for &ldquo;{searchedDomain}&rdquo;
-                  </p>
-                  <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 16px" }}>
-                    This domain may not be in our marketplace yet. Sign up to request it.
-                  </p>
-                  <Link href={ROUTES.signup} style={{ color: "#0052cc", fontWeight: 600, fontSize: 13 }}>
-                    Create free account →
-                  </Link>
-                </div>
-              )}
-
-              {/* Results */}
-              {results && results.length > 0 && (
-                <>
-                  {/* Column headers */}
-                  <div className="preview-result-row" style={{ borderBottom: "2px solid #e8eaed", paddingBottom: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>Domain</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>Best Price</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>DR</span>
-                    <span className="preview-col-traffic" style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>Traffic</span>
-                    <span className="preview-col-btn" />
-                  </div>
-
-                  {results.map((row, i) => (
-                    <div key={i} className="preview-result-row">
-                      <span style={{ fontWeight: 600, color: "#0052cc", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {row.domain}
-                      </span>
-                      <span style={{ fontWeight: 700, color: "#006621", fontSize: 15 }}>
-                        {formatPrice(row.price, row.currency)}
-                      </span>
-                      <span style={{ fontSize: 14, color: "#374151", fontWeight: 500 }}>
-                        {formatDR(row.dr)}
-                      </span>
-                      <span className="preview-col-traffic" style={{ fontSize: 13, color: "#6b7280" }}>
-                        {formatTraffic(row.monthlyTraffic)}
-                      </span>
-                      <span className="preview-col-btn">
-                        <Link
-                          href={`${ROUTES.signup}?domain=${encodeURIComponent(row.domain ?? searchedDomain)}`}
-                          style={{ display: "inline-block", padding: "7px 16px", background: "#0052cc", color: "#ffffff", borderRadius: 8, fontWeight: 600, fontSize: 12, textDecoration: "none", whiteSpace: "nowrap" }}
-                        >
-                          Get access →
-                        </Link>
-                      </span>
-                    </div>
-                  ))}
-
-                  <div style={{ marginTop: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-                    <p style={{ fontSize: 12, color: "#6b7280", margin: 0 }}>
-                      Showing top 3 of many results. Sign up to see all vendors and prices.
-                    </p>
-                    <Link
-                      href={signupHref}
-                      style={{ padding: "10px 24px", background: "#0052cc", color: "#ffffff", borderRadius: 10, fontWeight: 600, fontSize: 13, textDecoration: "none", whiteSpace: "nowrap" }}
-                    >
-                      See full catalog (40,000+ domains) →
-                    </Link>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
         </div>
-      </section>
+      </div>
 
-      {/* Social proof */}
-      <section className="hero-section" style={{ textAlign: "center", background: "#f5f6f8" }}>
-        <div className="stats-row">
-          {[
-            { stat: "60+", label: "Vendors aggregated" },
-            { stat: "1.5M+", label: "Offers indexed" },
-            { stat: "3,000+", label: "Registered users" },
-          ].map((item) => (
-            <div key={item.label} style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 32, fontWeight: 900, color: "#0052cc" }}>{item.stat}</div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>{item.label}</div>
+      {/* Domain Analysis Demo */}
+      <div className="hp-demo">
+        <div className="hp-demo-header">
+          <div className="hp-demo-title">Domain analysis results</div>
+          <div className="hp-demo-badge">{demoCount} domain{demoCount !== 1 ? "s" : ""}</div>
+        </div>
+        <div className="hp-demo-search">
+          <input
+            className="hp-demo-input"
+            type="text"
+            placeholder="Enter domain name (e.g., forbes.com)"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+          />
+          <button className="hp-demo-go" onClick={handleSearch}>Search</button>
+        </div>
+        <table className="hp-table">
+          <thead>
+            <tr>
+              <th style={{ width: "5%" }}></th>
+              <th style={{ width: "22%" }}>Domain</th>
+              <th style={{ width: "15%" }}>Best Price</th>
+              <th style={{ width: "12%" }}>Value</th>
+              <th style={{ width: "10%" }}>Country</th>
+              <th style={{ width: "10%" }}>DR</th>
+              <th style={{ width: "13%" }}>Traffic</th>
+              <th style={{ width: "13%" }}>Keywords</th>
+            </tr>
+          </thead>
+          <tbody>
+            {demoRows.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ textAlign: "center", color: "#9ca3af", padding: "32px 12px" }}>
+                  No result found for that domain. Try: forbes.com, healthline.com, techcrunch.com
+                </td>
+              </tr>
+            ) : demoRows.map((row) => (
+              <tr key={row.id}>
+                <td style={{ color: "#9ca3af", fontWeight: 600 }}>{row.id}</td>
+                <td>
+                  <span className="hp-mono">{row.domain}</span>
+                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>EN · {row.refs} ref. domains</div>
+                </td>
+                <td>
+                  <Link href={`${ROUTES.signup}?domain=${encodeURIComponent(row.domain)}`} className="hp-buy">
+                    Buy {row.price}
+                  </Link>
+                </td>
+                <td>
+                  <span className={`hp-grade ${row.gradeClass}`}>{row.grade} {row.score}</span>
+                </td>
+                <td>{row.country} {row.countryCode}</td>
+                <td style={{ fontFamily: "monospace", fontWeight: 600 }}>{row.dr}</td>
+                <td style={{ fontFamily: "monospace", fontWeight: 600 }}>{row.traffic}</td>
+                <td style={{ fontFamily: "monospace", fontWeight: 600 }}>{row.keywords}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="hp-demo-footer">
+          💡 Try searching for a domain above to see best prices across 60+ vendors.{" "}
+          <Link href={ROUTES.signup} style={{ color: "#0052cc", fontWeight: 600, textDecoration: "none" }}>Sign in</Link>{" "}
+          to see all available offers and marketplace details.
+        </div>
+      </div>
+
+      {/* How It Works */}
+      <section className="hp-section" id="how">
+        <h2>How it works in 6 steps</h2>
+        <div className="hp-how-grid">
+          {HOW_STEPS.map((step) => (
+            <div key={step.num} className="hp-step">
+              <div className="hp-step-num">{step.num}</div>
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
             </div>
           ))}
         </div>
       </section>
+
+      {/* Why Linkpricer */}
+      <div style={{ background: "#f9fafb" }}>
+        <div className="hp-section">
+          <h2>Why choose Linkpricer?</h2>
+          <div className="hp-value-grid">
+            {VALUE_CARDS.map((card) => (
+              <div key={card.title} className="hp-value">
+                <div className="hp-value-icon">{card.icon}</div>
+                <h3>{card.title}</h3>
+                <p>{card.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Features */}
+      <section className="hp-section">
+        <h2>What&rsquo;s included</h2>
+        <div className="hp-feat-grid">
+          {FEATURE_CARDS.map((card) => (
+            <div key={card.title} className="hp-feat">
+              <h3>{card.title}</h3>
+              <p>{card.body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Pricing Transparency */}
+      <div style={{ background: "#f9fafb" }}>
+        <div className="hp-section">
+          <h2>Free to use, transparent pricing</h2>
+          <div className="hp-price-grid">
+            {PRICE_CARDS.map((card) => (
+              <div key={card.title} className="hp-price">
+                <h3>{card.title}</h3>
+                <p>{card.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Social Proof + Security */}
+      <div style={{ background: "#f9fafb" }}>
+        <div className="hp-section">
+          <div className="hp-social">
+            <div className="hp-testimonials">
+              <div className="hp-testimonial">
+                <p className="hp-testimonial-text">&ldquo;We turned two weeks of vendor hunting into minutes.&rdquo;</p>
+                <div className="hp-testimonial-meta">— SEO Agency Lead</div>
+              </div>
+              <div className="hp-testimonial">
+                <p className="hp-testimonial-text">&ldquo;Our team favorites lists, orders, and tracks — all in one place.&rdquo;</p>
+                <div className="hp-testimonial-meta">— Freelance Link Builder</div>
+              </div>
+              <div className="hp-testimonial">
+                <p className="hp-testimonial-text">Case studies and receipts available on request</p>
+              </div>
+            </div>
+            <div className="hp-security">
+              <h3>Security &amp; compliance</h3>
+              {["Role-based access", "GDPR-aligned data choices", "Exports for finance & audit"].map((item) => (
+                <div key={item} className="hp-security-item">
+                  <span className="hp-security-check">✓</span>
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* CTA Strip */}
+      <div className="hp-cta-strip">
+        <h2>Ready to compare prices?</h2>
+        <p>It&rsquo;s free to paste your list, favorite domains, and see the best place to purchase.</p>
+        <Link href={ROUTES.signup} className="hp-cta-btn" style={{ background: "#fff", color: "#0052cc", fontWeight: 700, borderRadius: 10, padding: "13px 28px", textDecoration: "none", display: "inline-block" }}>
+          Start free
+        </Link>
+      </div>
+
+      {/* FAQ */}
+      <section className="hp-section">
+        <h2>Frequently asked questions</h2>
+        <div className="hp-faq-grid">
+          {FAQS.map((faq, i) => (
+            <div
+              key={i}
+              className="hp-faq-item"
+              onClick={() => setOpenFaq(openFaq === i ? null : i)}
+            >
+              <div className="hp-faq-q">
+                {faq.q}
+                <span className="hp-faq-toggle" style={{ transform: openFaq === i ? "rotate(45deg)" : "none" }}>+</span>
+              </div>
+              {openFaq === i && (
+                <div className="hp-faq-a">{faq.a}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Blog */}
+      <div style={{ background: "#f9fafb" }} id="blog">
+        <div className="hp-section">
+          <h2>Latest from the blog</h2>
+          <div className="hp-blog-grid">
+            {BLOG_CARDS.map((card) => (
+              <div key={card.title} className="hp-blog-card">
+                <div className="hp-blog-img">{card.emoji}</div>
+                <div className="hp-blog-body">
+                  <h3>{card.title}</h3>
+                  <p>{card.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </>
   );
 }

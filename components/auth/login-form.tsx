@@ -12,39 +12,29 @@ import {
   isFirebaseError,
 } from "@/lib/firebase/auth-client";
 
-function GoogleIcon() {
-  return (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.66l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-    </svg>
-  );
-}
-
-const inputStyle = {
+const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "11px 14px",
   border: "1px solid #e8eaed",
   borderRadius: 10,
   fontSize: 14,
+  fontFamily: "inherit",
   outline: "none",
   background: "#ffffff",
   color: "#000000",
-  boxSizing: "border-box" as const,
+  boxSizing: "border-box",
+  transition: "border-color 0.2s, box-shadow 0.2s",
 };
 
-const labelStyle = {
+const labelStyle: React.CSSProperties = {
   display: "block",
-  fontSize: 12,
+  fontSize: 14,
   fontWeight: 600,
-  color: "#4b5563",
-  marginBottom: 6,
+  color: "#1a202c",
+  marginBottom: 8,
 };
 
 export function LoginForm() {
-  const [remember, setRemember] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -78,10 +68,8 @@ export function LoginForm() {
     setError(null);
     setIsLoading(true);
     const fd = new FormData(e.currentTarget);
-    const email = fd.get("email") as string;
-    const password = fd.get("password") as string;
     try {
-      await signInWithEmail(email, password);
+      await signInWithEmail(fd.get("email") as string, fd.get("password") as string);
       router.push(await getPostLoginRoute(false));
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
@@ -101,133 +89,91 @@ export function LoginForm() {
     }
   }
 
+  function focusInput(e: React.FocusEvent<HTMLInputElement>) {
+    e.currentTarget.style.borderColor = "#0052cc";
+    e.currentTarget.style.boxShadow = "0 0 0 3px #e6f2ff";
+  }
+
+  function blurInput(e: React.FocusEvent<HTMLInputElement>) {
+    e.currentTarget.style.borderColor = "#e8eaed";
+    e.currentTarget.style.boxShadow = "none";
+  }
+
   return (
-    <section style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", padding: "48px 40px", background: "#ffffff" }}>
-      {/* Mobile logo */}
-      <div style={{ display: "none", marginBottom: 32, alignSelf: "flex-start" }} className="mobile-logo">
-        <Link href={ROUTES.home} style={{ fontSize: 20, fontWeight: 900, color: "#0052cc", letterSpacing: -0.5, textDecoration: "none" }}>Linkpricer</Link>
-      </div>
+    <div style={{ background: "#ffffff", border: "1px solid #e8eaed", borderRadius: 14, padding: 48, width: "100%", maxWidth: 420, boxShadow: "0 4px 12px rgba(0,0,0,0.06)" }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      <div style={{ width: "100%", maxWidth: 420 }}>
-        {/* Header */}
-        <div style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 28, fontWeight: 900, color: "#000000", letterSpacing: -0.5, margin: "0 0 8px" }}>
-            Welcome back
-          </h2>
-          <p style={{ fontSize: 14, color: "#6b7280", margin: 0 }}>
-            Sign in to your Linkpricer account.
-          </p>
+      <Link href={ROUTES.home} style={{ display: "block", fontSize: 20, fontWeight: 800, color: "#000000", marginBottom: 32, textAlign: "center", textDecoration: "none" }}>
+        Linkpricer
+      </Link>
+
+      <h1 style={{ fontSize: 28, fontWeight: 900, color: "#000000", margin: "0 0 8px", letterSpacing: -0.5 }}>Welcome back</h1>
+      <p style={{ fontSize: 14, color: "#6b7280", margin: "0 0 32px" }}>Log in to your account to compare domains and manage orders.</p>
+
+      <form onSubmit={handleSubmit} noValidate>
+        <div style={{ marginBottom: 20 }}>
+          <label htmlFor="email" style={labelStyle}>Email address</label>
+          <input id="email" name="email" type="email" placeholder="you@example.com" required style={inputStyle} onFocus={focusInput} onBlur={blurInput} />
         </div>
 
-        {/* Google sign-in */}
-        <button
-          type="button"
-          onClick={handleGoogleSignIn}
-          disabled={isLoading}
-          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "11px 16px", background: "#ffffff", border: "1px solid #e8eaed", borderRadius: 10, fontSize: 14, fontWeight: 600, color: "#000000", cursor: isLoading ? "not-allowed" : "pointer", opacity: isLoading ? 0.6 : 1, marginBottom: 20 }}
-        >
-          <GoogleIcon />
-          Continue with Google
-        </button>
-
-        {/* Divider */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <div style={{ flex: 1, height: 1, background: "#e8eaed" }} />
-          <span style={{ fontSize: 12, color: "#9ca3af", fontWeight: 500 }}>or sign in with email</span>
-          <div style={{ flex: 1, height: 1, background: "#e8eaed" }} />
+        <div style={{ marginBottom: 20 }}>
+          <label htmlFor="password" style={labelStyle}>Password</label>
+          <input id="password" name="password" type="password" placeholder="••••••••" required style={inputStyle} onFocus={focusInput} onBlur={blurInput} />
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} noValidate style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div>
-            <label htmlFor="email" style={labelStyle}>Email address</label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              placeholder="you@example.com"
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#0052cc"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(0,82,204,0.1)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#e8eaed"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <label htmlFor="password" style={{ ...labelStyle, marginBottom: 0 }}>Password</label>
-              <Link href={ROUTES.forgotPassword} style={{ fontSize: 12, color: "#0052cc", textDecoration: "none", fontWeight: 500 }}>
-                Forgot password?
-              </Link>
-            </div>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              placeholder="••••••••"
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#0052cc"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(0,82,204,0.1)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#e8eaed"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-
-          {/* Remember me */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              id="remember"
-              name="remember"
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-              style={{ width: 16, height: 16, accentColor: "#0052cc", cursor: "pointer" }}
-            />
-            <label htmlFor="remember" style={{ fontSize: 13, color: "#4b5563", cursor: "pointer" }}>
-              Remember me
-            </label>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <p role="alert" style={{ fontSize: 13, color: "#dc2626", fontWeight: 500, margin: 0 }}>
-              {error}
-            </p>
-          )}
-
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={isLoading}
-            style={{ width: "100%", padding: "13px", background: "#0052cc", color: "#ffffff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: isLoading ? "not-allowed" : "pointer", opacity: isLoading ? 0.7 : 1, marginTop: 4 }}
-          >
-            {isLoading ? "Signing in…" : "Sign in"}
-          </button>
-        </form>
-
-        {/* Sign up CTA */}
-        <p style={{ textAlign: "center", fontSize: 13, color: "#6b7280", marginTop: 24 }}>
-          Don&apos;t have an account?{" "}
-          <Link href={ROUTES.signup} style={{ color: "#0052cc", fontWeight: 700, textDecoration: "none" }}>
-            Sign up free
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, fontSize: 13 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 400, color: "#4b5563" }}>
+            <input type="checkbox" name="remember" style={{ width: 16, height: 16, cursor: "pointer" }} />
+            Remember me
+          </label>
+          <Link href={ROUTES.forgotPassword ?? "/forgot-password"} style={{ color: "#0052cc", textDecoration: "none" }}>
+            Forgot password?
           </Link>
-        </p>
-
-        {/* Legal */}
-        <div style={{ marginTop: 32, paddingTop: 24, borderTop: "1px solid #f0f2f5", display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "8px 16px" }}>
-          {[
-            { label: "Privacy", href: "/privacy" },
-            { label: "Terms", href: "/terms" },
-            { label: "Contact", href: "/contact" },
-          ].map((link) => (
-            <Link key={link.href} href={link.href} style={{ fontSize: 11, color: "#9ca3af", textDecoration: "none" }}>
-              {link.label}
-            </Link>
-          ))}
-          <span style={{ fontSize: 11, color: "#d1d5db" }}>© 2026 Linkpricer</span>
         </div>
+
+        {error && (
+          <p style={{ fontSize: 13, color: "#dc2626", margin: "0 0 16px", fontWeight: 500 }}>{error}</p>
+        )}
+
+        <button
+          type="submit"
+          disabled={isLoading}
+          style={{ width: "100%", padding: "12px 16px", background: "#0052cc", color: "#ffffff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: isLoading ? "not-allowed" : "pointer", opacity: isLoading ? 0.7 : 1, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+        >
+          {isLoading && <span style={{ width: 14, height: 14, border: "2px solid #ffffff", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} />}
+          {isLoading ? "Signing in…" : "Log in"}
+        </button>
+      </form>
+
+      <div style={{ display: "flex", alignItems: "center", margin: "24px 0", color: "#9ca3af", fontSize: 13 }}>
+        <div style={{ flex: 1, height: 1, background: "#e8eaed" }} />
+        <span style={{ margin: "0 12px" }}>or</span>
+        <div style={{ flex: 1, height: 1, background: "#e8eaed" }} />
       </div>
-    </section>
+
+      <button
+        type="button"
+        onClick={handleGoogleSignIn}
+        disabled={isLoading}
+        style={{ width: "100%", padding: "11px 16px", background: "#ffffff", color: "#1a202c", border: "1px solid #e8eaed", borderRadius: 10, fontSize: 14, fontWeight: 500, cursor: isLoading ? "not-allowed" : "pointer", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "border-color 0.2s" }}
+        onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#0052cc"; e.currentTarget.style.background = "#f5f6f8"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e8eaed"; e.currentTarget.style.background = "#ffffff"; }}
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+          <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+          <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+          <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+        </svg>
+        Continue with Google
+      </button>
+
+      <div style={{ textAlign: "center", fontSize: 14, color: "#6b7280", marginTop: 24 }}>
+        Don&apos;t have an account?{" "}
+        <Link href={ROUTES.signup} style={{ color: "#0052cc", textDecoration: "none", fontWeight: 600 }}>
+          Sign up free
+        </Link>
+      </div>
+    </div>
   );
 }

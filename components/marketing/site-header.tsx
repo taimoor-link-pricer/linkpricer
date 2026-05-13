@@ -27,10 +27,10 @@ export function SiteHeader() {
         <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: "-0.5px", color: "#000000" }}>Linkpricer</div>
 
         <nav className="site-nav" style={{ gap: 32, alignItems: "center" }}>
-          <Link href="#" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>Marketplaces</Link>
-          <Link href="#" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>Blog</Link>
-          <Link href="#" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>About</Link>
-          <Link href="#" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>API</Link>
+          <Link href="#marketplaces" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>Marketplaces</Link>
+          <Link href="#blog" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>Blog</Link>
+          <Link href="#about" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>About</Link>
+          <Link href="#api" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>API</Link>
         </nav>
 
         <div className="site-header-actions" style={{ gap: 10, alignItems: "center" }}>

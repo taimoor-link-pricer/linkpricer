@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { AuthBrandPanel } from "@/components/auth/auth-brand-panel";
 import { LoginForm } from "@/components/auth/login-form";
 
 export const metadata: Metadata = {
@@ -9,21 +8,8 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <>
-      <style>{`
-        .auth-root { display: flex; flex-direction: row; min-height: 100vh; }
-        .auth-brand { width: 420px; flex-shrink: 0; }
-        @media (max-width: 900px) {
-          .auth-brand { display: none; }
-          .auth-root { flex-direction: column; }
-        }
-      `}</style>
-      <main className="auth-root">
-        <div className="auth-brand">
-          <AuthBrandPanel />
-        </div>
-        <LoginForm />
-      </main>
-    </>
+    <main style={{ margin: 0, padding: 0, background: "#eff0f3", fontFamily: "Inter, -apple-system, system-ui, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+      <LoginForm />
+    </main>
   );
 }
