@@ -126,20 +126,25 @@ type Domain = {
   refDomains: number;
   grade: string;
   score: number;
-  bestPrice: number;
+  bestPrice: number | null;
   yourPrice: number | null;
+  noPrice?: boolean;
   offers: Offer[];
 };
+
+const SAMPLE_INPUT = "forbes.com\nbetimate.com\noneangrygamer.net\ntechcrunch.com 1100\nhealthline.com\npitchfork.com\nobscure-blog-2017.example";
 
 const SAMPLE_DOMAINS: Domain[] = [
   {
     domain: "forbes.com", country: "US", lang: "EN", category: "Business / Finance",
     dr: 94, drTrend: "up", traffic: 71400000, keywords: 8420000, refDomains: 1840000,
-    grade: "A+", score: 92, bestPrice: 1200, yourPrice: null,
+    grade: "A+", score: 92, bestPrice: 1200, yourPrice: 1800,
     offers: [
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1300, maxPrice: 1450, quality: 5, delivery: 7, tat: 5, link: "Dofollow", example: "https://forbes.com/sites/example/luxury-watches" },
-      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 1395, maxPrice: 1395, quality: 4, delivery: 10, tat: 7, link: "Dofollow", example: "https://forbes.com/sites/example/fintech" },
-      { name: "Vendor: John D.", type: "Vendor", updated: "04-05-2026 11:00", minPrice: 1200, maxPrice: 1200, quality: 3, delivery: 14, tat: 12, link: "Dofollow", example: null },
+      { name: "Vendor: John D.", type: "Vendor", updated: "04-05-2026 11:00", minPrice: 1200, maxPrice: 1200, quality: 3, delivery: 14, tat: 12, link: "Dofollow", example: "https://forbes.com/sites/example/2023/markets" },
+      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1300, maxPrice: 1450, quality: 5, delivery: 7, tat: 5, link: "Dofollow", example: "https://forbes.com/sites/example/2025/luxury-watches" },
+      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 1395, maxPrice: 1395, quality: 4, delivery: 10, tat: 7, link: "Dofollow", example: "https://forbes.com/sites/example/2024/fintech" },
+      { name: "Sedo Marketplace", type: "DB", updated: "01-05-2026 22:00", minPrice: 1500, maxPrice: 1700, quality: 4, delivery: 14, tat: 10, link: "Dofollow", example: "https://forbes.com/sites/example/2024/automotive" },
+      { name: "Linkbuilder.io", type: "DB", updated: "03-05-2026 10:00", minPrice: 1620, maxPrice: 1620, quality: 4, delivery: 9, tat: 8, link: "Dofollow", example: null },
     ],
   },
   {
@@ -148,32 +153,43 @@ const SAMPLE_DOMAINS: Domain[] = [
     grade: "B+", score: 58, bestPrice: 160, yourPrice: null,
     offers: [
       { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 160, maxPrice: 220, quality: 4, delivery: 5, tat: 4, link: "Dofollow", example: "https://betimate.com/predictions/example" },
-      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 175, maxPrice: 175, quality: 4, delivery: 7, tat: 6, link: "Dofollow", example: null },
+      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 175, maxPrice: 175, quality: 4, delivery: 7, tat: 6, link: "Dofollow", example: "https://betimate.com/blog/value-bets-guide" },
+      { name: "Vendor: Maria K.", type: "Vendor", updated: "02-05-2026 18:00", minPrice: 195, maxPrice: 195, quality: 5, delivery: 6, tat: 5, link: "Dofollow", example: "https://betimate.com/blog/odds-calculation" },
     ],
   },
   {
     domain: "oneangrygamer.net", country: "US", lang: "EN", category: "Gaming / Entertainment",
     dr: 58, drTrend: "flat", traffic: 410000, keywords: 38200, refDomains: 2140,
-    grade: "A", score: 71, bestPrice: 200, yourPrice: null,
+    grade: "A", score: 71, bestPrice: 200, yourPrice: 200,
     offers: [
       { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 200, maxPrice: 240, quality: 4, delivery: 8, tat: 7, link: "Dofollow", example: "https://oneangrygamer.net/2025/example-review" },
+      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 210, maxPrice: 210, quality: 4, delivery: 7, tat: 6, link: "Dofollow", example: "https://oneangrygamer.net/2024/example-feature" },
+      { name: "Vendor: Alex P.", type: "Vendor", updated: "29-04-2026 10:00", minPrice: 225, maxPrice: 225, quality: 3, delivery: 10, tat: 9, link: "Nofollow", example: null },
     ],
   },
   {
     domain: "techcrunch.com", country: "US", lang: "EN", category: "Technology",
-    dr: 92, drTrend: "flat", traffic: 14000000, keywords: 1800000, refDomains: 184000,
-    grade: "A+", score: 88, bestPrice: 850, yourPrice: null,
+    dr: 92, drTrend: "up", traffic: 14200000, keywords: 1840000, refDomains: 184000,
+    grade: "A", score: 78, bestPrice: 850, yourPrice: 1100,
     offers: [
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 850, maxPrice: 1100, quality: 5, delivery: 10, tat: 8, link: "Dofollow", example: "https://techcrunch.com/example/startup" },
+      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 850, maxPrice: 950, quality: 5, delivery: 7, tat: 5, link: "Dofollow", example: "https://techcrunch.com/2025/example" },
+      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 920, maxPrice: 920, quality: 4, delivery: 10, tat: 7, link: "Dofollow", example: "https://techcrunch.com/2024/example" },
     ],
   },
   {
-    domain: "healthline.com", country: "US", lang: "EN", category: "Health",
-    dr: 91, drTrend: "up", traffic: 184000000, keywords: 4800000, refDomains: 92000,
-    grade: "A+", score: 89, bestPrice: 1100, yourPrice: null,
+    domain: "healthline.com", country: "US", lang: "EN", category: "Health / Medical",
+    dr: 91, drTrend: "flat", traffic: 184000000, keywords: 4800000, refDomains: 92000,
+    grade: "A+", score: 88, bestPrice: 1100, yourPrice: null,
     offers: [
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1100, maxPrice: 1400, quality: 5, delivery: 7, tat: 6, link: "Dofollow", example: null },
+      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1100, maxPrice: 1300, quality: 5, delivery: 7, tat: 6, link: "Dofollow", example: "https://healthline.com/example" },
+      { name: "Sedo Marketplace", type: "DB", updated: "01-05-2026 22:00", minPrice: 1200, maxPrice: 1400, quality: 4, delivery: 14, tat: 10, link: "Dofollow", example: null },
     ],
+  },
+  {
+    domain: "pitchfork.com", country: "US", lang: "EN", category: "Music / Entertainment",
+    dr: 88, drTrend: "down", traffic: 4200000, keywords: 480000, refDomains: 38000,
+    grade: "B", score: 42, bestPrice: null, yourPrice: null, noPrice: true,
+    offers: [],
   },
 ];
 
@@ -221,6 +237,11 @@ function ExpandedPanel({
             style={{ padding: "5px 12px", borderRadius: 7, border: `1.5px solid ${C.line}`, background: "rgba(15,22,32,0.04)", color: C.ink2, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
           >
             {showAll ? "Show top 3" : `Show all (${sortedOffers.length})`}
+          </button>
+          <button
+            style={{ padding: "5px 12px", borderRadius: 7, border: `1.5px solid ${C.line}`, background: "rgba(15,22,32,0.04)", color: C.ink2, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}
+          >
+            ▾ Filter
           </button>
         </div>
       </div>
@@ -340,89 +361,65 @@ function OfferCard({
         )}
       </div>
 
-      {/* Details */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-          <span style={{ color: C.ink3 }}>Delivery guarantee</span>
-          <span style={{ fontWeight: 600, color: C.ink2 }}>{offer.delivery} days</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-          <span style={{ color: C.ink3 }}>Avg. TAT</span>
-          <span style={{ fontWeight: 600, color: C.ink2 }}>{offer.tat} days</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, alignItems: "center" }}>
-          <span style={{ color: C.ink3 }}>Link type</span>
-          <span
-            style={{
-              background: "#e6f6ed",
-              color: C.good,
-              borderRadius: 4,
-              padding: "1px 7px",
-              fontSize: 11,
-              fontWeight: 600,
-            }}
-          >
-            {offer.link}
+      {/* Details 2×2 grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {[
+          { label: "Delivery guarantee", value: `${offer.delivery} days` },
+          { label: "Avg. TAT", value: `${offer.tat} days` },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ background: C.bg3, borderRadius: 8, border: `1px solid ${C.line2}`, padding: "10px 12px" }}>
+            <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>{label}</div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{value}</div>
+          </div>
+        ))}
+        <div style={{ background: C.bg3, borderRadius: 8, border: `1px solid ${C.line2}`, padding: "10px 12px" }}>
+          <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Link type</div>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: offer.link === "Dofollow" ? "#e6f6ed" : "#fef3c7", color: offer.link === "Dofollow" ? C.good : "#a35d00", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700 }}>
+            {offer.link === "Dofollow" ? "✓" : "✗"} {offer.link}
           </span>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, alignItems: "center" }}>
-          <span style={{ color: C.ink3 }}>Source</span>
-          <span
-            style={{
-              background: C.line2,
-              color: C.ink3,
-              borderRadius: 4,
-              padding: "1px 7px",
-              fontSize: 11,
-              fontWeight: 600,
-            }}
-          >
-            {offer.type}
+        <div style={{ background: C.bg3, borderRadius: 8, border: `1px solid ${C.line2}`, padding: "10px 12px" }}>
+          <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Source</div>
+          <span style={{ display: "inline-block", background: C.line2, color: C.ink3, borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700 }}>
+            {offer.type === "API" ? "Live API" : offer.type === "DB" ? "Synced" : "Vendor"}
           </span>
         </div>
       </div>
 
       {/* Example link */}
       {offer.example ? (
-        <div
+        <a
+          href={offer.example}
+          target="_blank"
+          rel="noopener noreferrer"
           style={{
-            border: `1px dashed ${C.mute2}`,
-            borderRadius: 7,
-            padding: "7px 10px",
+            display: "flex", alignItems: "center", gap: 10, padding: "9px 10px",
+            border: `1px dashed ${C.mute2}`, borderRadius: 8, textDecoration: "none",
+            color: C.ink2, background: "#fbfcfe",
           }}
         >
-          <div style={{ fontSize: 10, fontWeight: 600, color: C.ink3, marginBottom: 3, textTransform: "uppercase" }}>
-            Example placement
+          <div style={{ width: 32, height: 24, background: C.line2, borderRadius: 4, flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: C.mute, fontWeight: 600, marginBottom: 2 }}>Published example</div>
+            <div style={{ fontSize: 11, color: C.ink2, fontFamily: C.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {offer.example.replace(/^https?:\/\//, "")}
+            </div>
           </div>
-          <a
-            href={offer.example}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              fontSize: 11,
-              color: C.accent,
-              fontFamily: C.mono,
-              wordBreak: "break-all",
-              textDecoration: "none",
-            }}
-          >
-            {offer.example}
-          </a>
-        </div>
+          <span style={{ fontSize: 12, color: C.accent, flexShrink: 0 }}>↗</span>
+        </a>
       ) : (
-        <div
-          style={{
-            border: `1px dashed ${C.mute2}`,
-            borderRadius: 7,
-            padding: "7px 10px",
-          }}
-        >
-          <div style={{ fontSize: 11, color: C.mute, fontStyle: "italic" }}>No example available</div>
+        <div style={{ padding: "9px 10px", border: `1px dashed ${C.mute2}`, borderRadius: 8, fontSize: 11.5, color: C.mute, textAlign: "center", background: "#fbfcfe" }}>
+          No published example available
         </div>
       )}
 
+      {/* Niche pricing link */}
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: C.ink3, cursor: "pointer" }}>
+        NICHE PRICING ›
+      </div>
+
       {/* Buttons */}
-      <div style={{ display: "flex", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <button
           onMouseEnter={() => setHandleHover(true)}
           onMouseLeave={() => setHandleHover(false)}
@@ -430,19 +427,22 @@ function OfferCard({
             onAddToCart({ domain: domainName, offerName: offer.name, price: ourPrice })
           }
           style={{
-            flex: 1,
-            padding: "8px 0",
+            padding: "9px 0",
             background: handleHover ? C.accent700 : C.accent,
             color: "#fff",
             border: "none",
-            borderRadius: 7,
+            borderRadius: 8,
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: 700,
             cursor: "pointer",
             transition: "background 0.15s",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 5,
           }}
         >
-          We&apos;ll handle it
+          <span style={{ fontSize: 11 }}>◎</span> We&apos;ll handle it
         </button>
         <button
           onMouseEnter={() => setBuyHover(true)}
@@ -451,19 +451,23 @@ function OfferCard({
             onAddToCart({ domain: domainName, offerName: offer.name, price: offer.minPrice })
           }
           style={{
-            flex: 1,
-            padding: "8px 0",
+            padding: "9px 0",
             background: buyHover ? C.line2 : "#fff",
-            color: C.accent,
-            border: `1px solid ${C.accent}`,
-            borderRadius: 7,
+            color: C.ink2,
+            border: `1px solid ${C.line}`,
+            borderRadius: 8,
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: 700,
             cursor: "pointer",
             transition: "background 0.15s",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
           }}
         >
-          Buy direct
+          Buy direct <span style={{ fontSize: 11 }}>↗</span>
+
         </button>
       </div>
     </div>
@@ -506,28 +510,27 @@ function CartPopup({
         style={{
           background: "#fff",
           borderRadius: 16,
-          padding: 28,
-          width: 440,
-          maxHeight: "80vh",
+          width: 460,
+          maxHeight: "85vh",
           display: "flex",
           flexDirection: "column",
-          gap: 18,
-          boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+          overflow: "hidden",
+          boxShadow: "0 24px 60px rgba(15,22,32,0.28)",
         }}
       >
         {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.ink, margin: 0 }}>Your cart</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${C.line}` }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Your cart</div>
+            <div style={{ fontSize: 12, color: C.mute, marginTop: 2 }}>{items.length} {items.length === 1 ? "placement" : "placements"}</div>
+          </div>
           <button
             onClick={onClose}
             style={{
-              background: "transparent",
-              border: "none",
-              fontSize: 20,
-              cursor: "pointer",
-              color: C.ink3,
-              lineHeight: 1,
-              padding: "2px 6px",
+              width: 30, height: 30, borderRadius: 8,
+              border: `1px solid ${C.line}`, background: "#fff",
+              cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center",
+              color: C.mute, fontSize: 16, fontWeight: 600,
             }}
           >
             ×
@@ -535,66 +538,66 @@ function CartPopup({
         </div>
 
         {/* Items */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
-          {items.map((item, idx) => (
+        <div style={{ maxHeight: 340, overflow: "auto" }}>
+          {items.length === 0 ? (
+            <div style={{ padding: 40, textAlign: "center", color: C.mute, fontSize: 13 }}>Cart is empty.</div>
+          ) : items.map((item, idx) => (
             <div
               key={idx}
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                background: C.line2,
-                borderRadius: 9,
-                padding: "10px 14px",
+                display: "flex", alignItems: "flex-start", gap: 12,
+                padding: "14px 20px",
+                borderBottom: idx < items.length - 1 ? `1px solid ${C.line}` : "none",
               }}
             >
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.ink, fontFamily: C.mono }}>
-                  {item.domain}
-                </div>
-                <div style={{ fontSize: 12, color: C.ink3 }}>{item.offerName}</div>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: C.bg3, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: C.mono, fontSize: 11, fontWeight: 700, color: C.ink3 }}>
+                {item.domain.slice(0, 1).toUpperCase()}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontWeight: 700, color: C.ink }}>{priceFmt(item.price, currency)}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, fontFamily: C.mono }}>{item.domain}</div>
+                <div style={{ fontSize: 11.5, color: C.mute, marginTop: 2 }}>via <strong style={{ color: C.ink2 }}>{item.offerName}</strong></div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{priceFmt(item.price, currency)}</div>
                 <button
                   onClick={() => onRemove(idx)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    color: C.mute,
-                    fontSize: 16,
-                    lineHeight: 1,
-                    padding: "2px 4px",
-                  }}
+                  style={{ marginTop: 4, fontSize: 11, color: C.mute, background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}
                 >
-                  ×
+                  Remove
                 </button>
               </div>
             </div>
           ))}
+
+          {/* Add another domain */}
+          <button
+            onClick={onClose}
+            style={{
+              width: "100%", padding: "11px 20px",
+              display: "flex", alignItems: "center", gap: 8,
+              background: "#fbfcfe", border: "none",
+              borderTop: `1px dashed ${C.line}`,
+              fontSize: 12.5, color: C.mute, fontWeight: 500,
+              cursor: "pointer", textAlign: "left",
+            }}
+          >
+            <span style={{ fontSize: 14, color: C.mute2 }}>+</span>
+            Add another domain to this order
+          </button>
         </div>
 
         {/* Summary */}
-        <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ borderTop: `1px solid ${C.line}`, padding: "14px 20px", background: "#fbfcfe", display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.ink3 }}>
             <span>Subtotal</span>
             <span>{priceFmt(subtotal, currency)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.ink3 }}>
-            <span>Linkpricer fee (15%)</span>
+            <span>Linkpricer fee <span style={{ fontSize: 11 }}>(15%)</span></span>
             <span>{priceFmt(fee, currency)}</span>
           </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: 16,
-              fontWeight: 700,
-              color: C.ink,
-              marginTop: 4,
-            }}
-          >
+          <div style={{ height: 1, background: C.line, margin: "2px 0" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: C.ink }}>
             <span>Total</span>
             <span>{priceFmt(total, currency)}</span>
           </div>
@@ -603,34 +606,41 @@ function CartPopup({
         {/* Pay note */}
         <div
           style={{
-            background: "#e6f6ed",
-            border: `1px solid #b3e6cd`,
+            margin: "0 20px",
+            background: "#e8f6ee",
+            border: `1px solid #c9e9d4`,
             borderRadius: 8,
-            padding: "9px 13px",
-            fontSize: 12,
-            color: C.good,
-            fontWeight: 600,
+            padding: "9px 12px",
+            display: "flex", gap: 8, alignItems: "flex-start",
           }}
         >
-          ✓ Pay only after publication
+          <span style={{ color: "#0a7a3b", fontSize: 13, lineHeight: 1, marginTop: 1 }}>✓</span>
+          <div style={{ fontSize: 11.5, color: "#0e5f30", lineHeight: 1.45 }}>
+            <strong>Pay only after publication.</strong> No charge today — each article goes live before billing.
+          </div>
         </div>
 
         {/* CTA */}
-        <button
-          style={{
-            width: "100%",
-            padding: "12px 0",
-            background: C.accent,
-            color: "#fff",
-            border: "none",
-            borderRadius: 9,
-            fontSize: 15,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          Continue to brief ›
-        </button>
+        <div style={{ padding: "12px 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <button
+            style={{
+              width: "100%",
+              padding: "13px 0",
+              background: C.accent,
+              color: "#fff",
+              border: "none",
+              borderRadius: 9,
+              fontSize: 14.5,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Continue to brief ›
+          </button>
+          <button style={{ background: "none", border: "none", fontSize: 12.5, color: C.mute, cursor: "pointer", padding: 4, textDecoration: "underline" }}>
+            Save as list &amp; buy later
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -639,6 +649,11 @@ function CartPopup({
 // ─── ResultsTable ─────────────────────────────────────────────────────────────
 type SortKey = "domain" | "score" | "dr" | "traffic" | "keywords";
 type SortDir = "asc" | "desc";
+
+function SortArrow({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
+  if (sortKey !== col) return <span style={{ color: C.mute2, marginLeft: 3 }}>↔</span>;
+  return <span style={{ color: C.accent, marginLeft: 3 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
+}
 
 function ResultsTable({
   results,
@@ -697,15 +712,6 @@ function ResultsTable({
     }
     return sortDir === "asc" ? (av as number) - (bv as number) : (bv as number) - (av as number);
   });
-
-  function SortArrow({ col }: { col: SortKey }) {
-    if (sortKey !== col) return <span style={{ color: C.mute2, marginLeft: 3 }}>↔</span>;
-    return (
-      <span style={{ color: C.accent, marginLeft: 3 }}>
-        {sortDir === "asc" ? "↑" : "↓"}
-      </span>
-    );
-  }
 
   function handleDownloadCSV() {
     const header = "Domain,Country,Category,DR,Traffic,Keywords,Grade,Score,Best Price\n";
@@ -826,21 +832,21 @@ function ResultsTable({
             <tr>
               <th style={{ ...thStyle(), width: 36 }} />
               <th style={thStyle("domain")} onClick={() => handleSort("domain")}>
-                Domain <SortArrow col="domain" />
+                Domain <SortArrow col="domain" sortKey={sortKey} sortDir={sortDir} />
               </th>
               <th style={thStyle()}>Actions</th>
               <th style={thStyle("score")} onClick={() => handleSort("score")}>
-                Value <SortArrow col="score" />
+                Value <SortArrow col="score" sortKey={sortKey} sortDir={sortDir} />
               </th>
               <th style={thStyle()}>Country</th>
               <th style={thStyle("dr")} onClick={() => handleSort("dr")}>
-                DR <SortArrow col="dr" />
+                DR <SortArrow col="dr" sortKey={sortKey} sortDir={sortDir} />
               </th>
               <th style={thStyle("traffic")} onClick={() => handleSort("traffic")}>
-                Traffic <SortArrow col="traffic" />
+                Traffic <SortArrow col="traffic" sortKey={sortKey} sortDir={sortDir} />
               </th>
               <th style={thStyle("keywords")} onClick={() => handleSort("keywords")}>
-                Keywords <SortArrow col="keywords" />
+                Keywords <SortArrow col="keywords" sortKey={sortKey} sortDir={sortDir} />
               </th>
               <th style={thStyle()}>Category</th>
             </tr>
@@ -1000,7 +1006,7 @@ function DomainRow({
               onMouseEnter={() => setBuyHover(true)}
               onMouseLeave={() => setBuyHover(false)}
               onClick={() =>
-                onAddToCart({ domain: row.domain, offerName: row.offers[0].name, price: row.bestPrice })
+                onAddToCart({ domain: row.domain, offerName: row.offers[0].name, price: row.bestPrice ?? 0 })
               }
               style={{
                 padding: "5px 12px",
@@ -1015,7 +1021,7 @@ function DomainRow({
                 whiteSpace: "nowrap",
               }}
             >
-              Buy {priceFmt(row.bestPrice, currency)}
+              Buy {priceFmt(withFee(row.bestPrice), currency)}
             </button>
           ) : (
             <button
@@ -1094,13 +1100,13 @@ function DomainRow({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 function SearchPageInner() {
-  const [pasteValue, setPasteValue] = useState("");
+  const [pasteValue, setPasteValue] = useState(SAMPLE_INPUT);
   const [niche, setNiche] = useState("general");
   const [nicheOpen, setNicheOpen] = useState(false);
   const [currency, setCurrency] = useState<Currency>("USD");
   const [analyzing, setAnalyzing] = useState(false);
-  const [results, setResults] = useState<Domain[] | null>(null);
-  const [notFound, setNotFound] = useState<string[]>([]);
+  const [results, setResults] = useState<Domain[] | null>(SAMPLE_DOMAINS);
+  const [notFound, setNotFound] = useState<string[]>(["obscure-blog-2017.example"]);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [analyzeHover, setAnalyzeHover] = useState(false);
@@ -1194,7 +1200,7 @@ function SearchPageInner() {
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
-            <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / analyze</span>
+            <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / domain analysis</span>
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {["Analyze", "Lists", "Orders", "Vendors", "Reports"].map((tab) => (
