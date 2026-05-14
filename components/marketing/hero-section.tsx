@@ -203,12 +203,22 @@ export function HeroSection() {
           .hp-demo { margin: 40px 20px; }
         }
         @media (max-width: 640px) {
-          .hp-h1 { font-size: 28px; }
+          .hp-h1 { font-size: 26px; letter-spacing: -0.5px; }
+          .hp-sub { font-size: 15px; }
+          .hp-hero { padding: 48px 16px; }
           .hp-how-grid, .hp-feat-grid, .hp-price-grid, .hp-blog-grid { grid-template-columns: 1fr; }
           .hp-value-grid { grid-template-columns: 1fr; }
           .hp-social { grid-template-columns: 1fr; }
           .hp-proof { gap: 24px; }
-          .hp-cta-strip { padding: 40px 20px; }
+          .hp-cta-strip { padding: 40px 20px; margin: 24px 16px; }
+          .hp-section { padding: 48px 16px; }
+          .hp-section h2 { font-size: 28px; letter-spacing: -0.5px; }
+          .hp-demo { margin: 24px 16px; padding: 20px 16px; }
+          .hp-demo-header { flex-wrap: wrap; gap: 8px; }
+          .hp-demo-search { flex-direction: column; }
+          .hp-demo-go { width: 100%; }
+          .hp-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+          .hp-cta-strip h2 { font-size: 26px; }
         }
       `}</style>
 
@@ -253,6 +263,7 @@ export function HeroSection() {
           />
           <button className="hp-demo-go" onClick={handleSearch}>Search</button>
         </div>
+        <div className="hp-table-wrap">
         <table className="hp-table">
           <thead>
             <tr>
@@ -296,6 +307,7 @@ export function HeroSection() {
             ))}
           </tbody>
         </table>
+        </div>
         <div className="hp-demo-footer">
           💡 Try searching for a domain above to see best prices across 60+ vendors.{" "}
           <Link href={ROUTES.signup} style={{ color: "#0052cc", fontWeight: 600, textDecoration: "none" }}>Sign in</Link>{" "}

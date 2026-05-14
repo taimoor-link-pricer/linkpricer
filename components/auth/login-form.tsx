@@ -49,7 +49,7 @@ export function LoginForm() {
         if (!data.hasCompletedOnboarding) return ROUTES.onboarding;
       }
     } catch {}
-    return ROUTES.dashboard;
+    return ROUTES.search;
   }
 
   useEffect(() => {
