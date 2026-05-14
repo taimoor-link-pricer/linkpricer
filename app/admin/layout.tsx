@@ -13,6 +13,11 @@ const ADMIN_NAV = [
   { label: "Marketplaces", href: "/admin/marketplaces", icon: "🏪" },
 ];
 
+const BLOG_NAV = [
+  { label: "Blog Posts", href: ROUTES.adminBlog, icon: "📝" },
+  { label: "Authors", href: ROUTES.adminBlogAuthors, icon: "✍️" },
+];
+
 function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { profile, handleSignOut } = useAuthContext();
   const pathname = usePathname();
@@ -51,9 +56,16 @@ function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
         <button onClick={onClose} className="admin-sidebar-close" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#6b7280", padding: 4, lineHeight: 1 }} aria-label="Close">✕</button>
       </div>
 
-      <div style={{ padding: "0 12px 8px", flex: 1 }}>
+      <div style={{ padding: "0 12px 8px", flex: 1, overflowY: "auto" }}>
         <div style={sectionLabel}>Admin</div>
         {ADMIN_NAV.map((item) => (
+          <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
+            <span style={{ fontSize: 15 }}>{item.icon}</span>
+            <span>{item.label}</span>
+          </Link>
+        ))}
+        <div style={{ ...sectionLabel, marginTop: 12 }}>Content</div>
+        {BLOG_NAV.map((item) => (
           <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
             <span style={{ fontSize: 15 }}>{item.icon}</span>
             <span>{item.label}</span>

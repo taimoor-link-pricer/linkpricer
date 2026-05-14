@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import React, { useState, Suspense } from "react";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -858,7 +858,7 @@ function ResultsTable({
               const gs = gradeStyle(row.grade);
               const isLast = idx === sorted.length - 1 && notFound.length === 0;
               return (
-                <>
+                <React.Fragment key={row.domain}>
                   <DomainRow
                     key={row.domain}
                     row={row}
@@ -882,7 +882,7 @@ function ResultsTable({
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               );
             })}
             {notFound.map((d, idx) => (
