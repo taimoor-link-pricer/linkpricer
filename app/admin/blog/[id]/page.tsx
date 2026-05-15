@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { useState, useEffect, useCallback, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -309,6 +309,11 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
   // Image library modal state
   const [libraryMode, setLibraryMode] = useState<"cover" | "editor" | null>(null);
 
+  // loadedContent is set once when fetch returns — state so effects re-run when it arrives
+  const [loadedContent, setLoadedContent] = useState<string | null>(null);
+  // prevent double-sync if both editor and loadedContent deps fire close together
+  const contentSynced = useRef(false);
+
   function showToast(msg: string, type: "success" | "error" = "success") {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
@@ -348,20 +353,22 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
         setMetaDescription(post.metaDescription ?? "");
         setOriginalPublishedAt(post.publishedAt);
         if (post.cssContent) setCssContent(post.cssContent);
+        if (post.contentType === "html") setActiveTab("code");
+
         const content = post.htmlContent || post.content || "";
         setHtmlContent(content);
-        if (editor && content) editor.commands.setContent(content);
-        if (post.contentType === "html") setActiveTab("code");
+        setLoadedContent(content); // triggers the sync effect below
       })
       .catch(() => showToast("Failed to load post", "error"));
   }, [id, isNew]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-sync once editor is ready in edit mode
+  // Sync loaded content into editor — runs whenever editor becomes ready OR content arrives,
+  // whichever is last. The synced ref prevents double-loading.
   useEffect(() => {
-    if (editor && htmlContent && !isNew && editor.isEmpty) {
-      editor.commands.setContent(htmlContent);
-    }
-  }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!editor || !loadedContent || isNew || contentSynced.current) return;
+    editor.commands.setContent(loadedContent);
+    contentSynced.current = true;
+  }, [editor, loadedContent, isNew]);
 
   // Load authors
   useEffect(() => {

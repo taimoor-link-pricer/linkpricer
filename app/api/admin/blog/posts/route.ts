@@ -56,38 +56,39 @@ export async function GET(req: NextRequest) {
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const [{ total }] = await db
-      .select({ total: count() })
-      .from(blogPosts)
-      .where(where);
+    // Run count + rows in parallel — avoids paying the Neon cold-start twice
+    const [countResult, rows] = await Promise.all([
+      db.select({ total: count() }).from(blogPosts).where(where),
+      // Select only list-safe columns — skip content/htmlContent (can be MBs)
+      db
+        .select({
+          id: blogPosts.id,
+          title: blogPosts.title,
+          slug: blogPosts.slug,
+          excerpt: blogPosts.excerpt,
+          category: blogPosts.category,
+          author: blogPosts.author,
+          coverImageUrl: blogPosts.coverImageUrl,
+          published: blogPosts.published,
+          publishedAt: blogPosts.publishedAt,
+          createdAt: blogPosts.createdAt,
+          updatedAt: blogPosts.updatedAt,
+        })
+        .from(blogPosts)
+        .where(where)
+        .orderBy(desc(blogPosts.createdAt))
+        .limit(PAGE_SIZE)
+        .offset((page - 1) * PAGE_SIZE),
+    ]);
 
-    // Select only list-safe columns — skip content/htmlContent (can be MBs)
-    const rows = await db
-      .select({
-        id: blogPosts.id,
-        title: blogPosts.title,
-        slug: blogPosts.slug,
-        excerpt: blogPosts.excerpt,
-        category: blogPosts.category,
-        author: blogPosts.author,
-        coverImageUrl: blogPosts.coverImageUrl,
-        published: blogPosts.published,
-        publishedAt: blogPosts.publishedAt,
-        createdAt: blogPosts.createdAt,
-        updatedAt: blogPosts.updatedAt,
-      })
-      .from(blogPosts)
-      .where(where)
-      .orderBy(desc(blogPosts.createdAt))
-      .limit(PAGE_SIZE)
-      .offset((page - 1) * PAGE_SIZE);
+    const total = Number(countResult[0].total);
 
     return NextResponse.json({
       posts: rows,
-      total: Number(total),
+      total,
       page,
       pageSize: PAGE_SIZE,
-      totalPages: Math.ceil(Number(total) / PAGE_SIZE),
+      totalPages: Math.ceil(total / PAGE_SIZE),
     });
   } catch (err) {
     console.error("[GET /api/admin/blog/posts]", err);

@@ -78,12 +78,7 @@ function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
           <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{profile?.displayName ?? profile?.email?.split("@")[0] ?? "Admin"}</div>
           <div style={{ fontSize: 11, color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile?.email ?? ""}</div>
         </div>
-        <Link href={ROUTES.dashboard} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", textDecoration: "none", marginBottom: 10 }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = "#0052cc"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = "#6b7280"; }}>
-          ← Back to dashboard
-        </Link>
-        <button onClick={handleSignOut} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+<button onClick={handleSignOut} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: 0 }}
           onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#dc2626"; }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}>
           <span>↩</span><span>Sign out</span>
