@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState, Suspense } from "react";
+import React, { useState, Suspense, useRef, useEffect } from "react";
+import Link from "next/link";
+import { useAuthContext } from "@/lib/contexts/auth-context";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -50,10 +52,9 @@ function countryFlag(code: string): string {
 }
 
 function gradeStyle(grade: string): { background: string; color: string } {
-  if (grade === "A+" || grade === "A")
-    return { background: "#e6f6ed", color: "#0a8a4a" };
-  if (grade === "B+" || grade === "B")
-    return { background: "#fef3c7", color: "#a35d00" };
+  const g = (grade ?? "C")[0].toUpperCase();
+  if (g === "A") return { background: "#e6f6ed", color: "#0a8a4a" };
+  if (g === "B") return { background: "#fef3c7", color: "#a35d00" };
   return { background: "#fee2e2", color: "#b91c1c" };
 }
 
@@ -196,8 +197,13 @@ const SAMPLE_DOMAINS: Domain[] = [
 // ─── Cart types ───────────────────────────────────────────────────────────────
 type CartItem = {
   domain: string;
+  dr: number;
+  traffic: number;
   offerName: string;
+  offerType: "API" | "Vendor" | "DB";
   price: number; // raw USD, pre-fee
+  delivery: number;
+  link: string;
 };
 
 // ─── ExpandedPanel ────────────────────────────────────────────────────────────
@@ -256,6 +262,8 @@ function ExpandedPanel({
             yourPrice={domainData.yourPrice}
             currency={currency}
             domainName={domainData.domain}
+            domainDr={domainData.dr}
+            domainTraffic={domainData.traffic}
             onAddToCart={onAddToCart}
             typeIcon={typeIcon(offer.type)}
           />
@@ -271,6 +279,8 @@ function OfferCard({
   yourPrice,
   currency,
   domainName,
+  domainDr,
+  domainTraffic,
   onAddToCart,
   typeIcon,
 }: {
@@ -279,6 +289,8 @@ function OfferCard({
   yourPrice: number | null;
   currency: Currency;
   domainName: string;
+  domainDr: number;
+  domainTraffic: number;
   onAddToCart: (item: CartItem) => void;
   typeIcon: React.ReactNode;
 }) {
@@ -424,7 +436,7 @@ function OfferCard({
           onMouseEnter={() => setHandleHover(true)}
           onMouseLeave={() => setHandleHover(false)}
           onClick={() =>
-            onAddToCart({ domain: domainName, offerName: offer.name, price: ourPrice })
+            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: ourPrice, delivery: offer.delivery, link: offer.link })
           }
           style={{
             padding: "9px 0",
@@ -448,7 +460,7 @@ function OfferCard({
           onMouseEnter={() => setBuyHover(true)}
           onMouseLeave={() => setBuyHover(false)}
           onClick={() =>
-            onAddToCart({ domain: domainName, offerName: offer.name, price: offer.minPrice })
+            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link })
           }
           style={{
             padding: "9px 0",
@@ -480,10 +492,12 @@ function CartPopup({
   currency,
   onClose,
   onRemove,
+  onCheckout,
 }: {
   items: CartItem[];
   currency: Currency;
   onClose: () => void;
+  onCheckout: () => void;
   onRemove: (idx: number) => void;
 }) {
   const subtotal = items.reduce((s, i) => s + i.price, 0);
@@ -623,6 +637,7 @@ function CartPopup({
         {/* CTA */}
         <div style={{ padding: "12px 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
           <button
+            onClick={onCheckout}
             style={{
               width: "100%",
               padding: "13px 0",
@@ -1006,7 +1021,7 @@ function DomainRow({
               onMouseEnter={() => setBuyHover(true)}
               onMouseLeave={() => setBuyHover(false)}
               onClick={() =>
-                onAddToCart({ domain: row.domain, offerName: row.offers[0].name, price: row.bestPrice ?? 0 })
+                onAddToCart({ domain: row.domain, dr: row.dr, traffic: row.traffic, offerName: row.offers[0]?.name ?? "Marketplace", offerType: row.offers[0]?.type ?? "DB", price: row.bestPrice ?? 0, delivery: row.offers[0]?.delivery ?? 14, link: row.offers[0]?.link ?? "Dofollow" })
               }
               style={{
                 padding: "5px 12px",
@@ -1098,6 +1113,343 @@ function DomainRow({
   );
 }
 
+// ─── Checkout Modal ───────────────────────────────────────────────────────────
+type BriefItem = CartItem & {
+  title: string; targetUrl: string; anchorText: string; niche: string;
+  contentMode: "linkpricer" | "upload" | "url";
+  brief: string; articleUrl: string; tone: string; contentPrice: number;
+};
+
+function CheckoutModal({ cartItems, onClose, onPlaced }: {
+  cartItems: CartItem[];
+  onClose: () => void; onPlaced: () => void;
+}) {
+  const [items, setItems] = useState<BriefItem[]>(() =>
+    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: 120 }))
+  );
+  const [expandedIdx, setExpandedIdx] = useState(0);
+  const [placing, setPlacing] = useState(false);
+
+  const subtotal = items.reduce((s, i) => s + i.price + i.contentPrice, 0);
+  const fee = Math.round(subtotal * 0.15);
+  const total = subtotal + fee;
+  const readyCount = items.filter(i => !!i.title && !!i.targetUrl && !!i.anchorText && !!i.brief).length;
+
+  function change(idx: number, patch: Partial<BriefItem>) {
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+  }
+
+  async function handlePlace() {
+    setPlacing(true);
+    await new Promise(r => setTimeout(r, 900));
+    onPlaced();
+  }
+
+  const inp: React.CSSProperties = { width: "100%", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", fontSize: 13, color: C.ink, outline: "none", boxSizing: "border-box" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", overflowY: "auto" }}>
+      <div style={{ minHeight: "100vh", background: C.bg, padding: "20px 32px 60px" }}>
+        {/* Header */}
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
+            <span style={{ marginLeft: 14, fontSize: 12, color: C.mute }}>
+              <button onClick={onClose} style={{ background: "none", border: "none", color: C.mute, cursor: "pointer", fontSize: 12, padding: 0 }}>Cart</button>
+              <span style={{ margin: "0 8px" }}>›</span>
+              <span style={{ color: C.ink2 }}>Checkout</span>
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <span style={{ fontSize: 12, color: C.mute, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: C.good }}>✓</span> Secure checkout · escrow protected
+            </span>
+            <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${C.line}`, background: "#fff", cursor: "pointer", fontSize: 18, color: C.mute, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+          </div>
+        </header>
+
+        {/* Stepper */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 24 }}>
+          {["Cart", "Article briefs", "Confirm order"].map((s, i) => (
+            <React.Fragment key={s}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px", borderRadius: 999, fontSize: 12, fontWeight: 700, background: i === 1 ? C.accent : i < 1 ? "#fff" : C.bg3, color: i === 1 ? "#fff" : i < 1 ? C.ink2 : C.mute, border: i < 1 ? `1px solid ${C.line}` : "none" }}>
+                <span style={{ width: 18, height: 18, borderRadius: 999, fontSize: 10, fontWeight: 800, background: i === 1 ? "#fff" : i < 1 ? C.good : C.line, color: i === 1 ? C.accent : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{i < 1 ? "✓" : i + 1}</span>
+                {s}
+              </div>
+              {i < 2 && <div style={{ width: 24, height: 1, background: C.line }} />}
+            </React.Fragment>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px", gap: 18, alignItems: "flex-start" }}>
+          {/* LEFT — briefs */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 20px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Article briefs</h2>
+                <span style={{ fontSize: 11.5, color: C.mute }}>{readyCount} of {items.length} ready · briefs auto-saved</span>
+              </div>
+              <p style={{ margin: "4px 0 0", fontSize: 12.5, color: C.mute }}>Tell us what to write. We assign editors fluent in your niche.</p>
+            </div>
+
+            {items.map((item, i) => {
+              const ready = !!(item.title && item.targetUrl && item.anchorText && item.brief);
+              return (
+              <div key={item.domain + i} style={{ background: "#fff", border: `1px solid ${expandedIdx === i ? C.accent : C.line}`, borderRadius: 14, overflow: "hidden", boxShadow: expandedIdx === i ? `0 0 0 3px ${C.accent50}` : "none" }}>
+                {/* Card header row */}
+                <div onClick={() => setExpandedIdx(prev => prev === i ? -1 : i)} style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, borderBottom: expandedIdx === i ? `1px solid ${C.line2}` : "none", background: expandedIdx === i ? C.accent50 : "transparent", cursor: "pointer" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, flexShrink: 0, background: ready ? "#e8f6ee" : "#fdf2dd", color: ready ? C.good : "#a35d00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12, border: `1px solid ${ready ? "#bbf0c8" : "#f3d99c"}` }}>
+                    {ready ? "✓" : i + 1}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontFamily: C.mono, fontWeight: 700, fontSize: 14 }}>{item.domain}</span>
+                      <span style={{ fontSize: 11, color: C.mute }}>via {item.offerName}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: item.title ? C.ink2 : C.mute, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || "No title yet"}</div>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999, background: ready ? "#e8f6ee" : "#fdf2dd", color: ready ? C.good : "#a35d00", flexShrink: 0 }}>
+                    {ready ? "Ready" : "Brief needed"}
+                  </span>
+                  <span style={{ color: C.mute }}>{expandedIdx === i ? "▲" : "▼"}</span>
+                </div>
+
+                {/* Expanded form */}
+                {expandedIdx === i && (
+                  <div style={{ padding: "18px 22px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                    {/* Left column */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      {[
+                        { label: "Article title", key: "title", type: "text", ph: "e.g. Why fintech founders should rethink onboarding in 2026" },
+                        { label: "Target URL (where the link points)", key: "targetUrl", type: "url", ph: "https://yourbrand.com/blog/article-slug" },
+                        { label: "Anchor text", key: "anchorText", type: "text", ph: "e.g. fintech onboarding flow" },
+                      ].map(({ label, key, type, ph }) => (
+                        <div key={key}>
+                          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>{label}</label>
+                          <input type={type} value={(item as unknown as Record<string, string>)[key]} onChange={e => change(i, { [key]: e.target.value } as Partial<BriefItem>)} style={key === "targetUrl" || key === "anchorText" ? { ...inp, fontFamily: C.mono } : inp} placeholder={ph} />
+                        </div>
+                      ))}
+                      {/* Niche / Category */}
+                      <div>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Niche / Category</label>
+                        <select value={item.niche} onChange={e => change(i, { niche: e.target.value })} style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}>
+                          <option value="">Select niche…</option>
+                          {["Fintech", "SaaS", "E-commerce", "Health & Wellness", "Travel", "Real Estate", "Education", "Marketing", "Legal", "Crypto / Web3", "Other"].map(n => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    {/* Right column */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Who writes the article?</label>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: "+$120 · 750 words", cp: 120 }, { mode: "upload", title: "I'll upload content", sub: "Free · .docx, .md, .pdf", cp: 0 }].map(opt => (
+                            <button key={opt.mode} onClick={() => change(i, { contentMode: opt.mode as BriefItem["contentMode"], contentPrice: opt.cp })} style={{ padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === opt.mode ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === opt.mode ? C.accent : C.line}` }}>
+                              <div style={{ fontWeight: 700, fontSize: 12.5, color: item.contentMode === opt.mode ? C.accent : C.ink2 }}>{opt.title}</div>
+                              <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>{opt.sub}</div>
+                            </button>
+                          ))}
+                        </div>
+                        <button onClick={() => change(i, { contentMode: "url", contentPrice: 0 })} style={{ width: "100%", padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === "url" ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === "url" ? C.accent : C.line}` }}>
+                          <div style={{ fontWeight: 700, fontSize: 12.5, color: item.contentMode === "url" ? C.accent : C.ink2 }}>Article already published</div>
+                          <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>Free · provide URL to existing article</div>
+                        </button>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>
+                          {item.contentMode === "linkpricer" ? "Brief for the editor" : item.contentMode === "upload" ? "Upload article" : "Article URL"}
+                        </label>
+                        {item.contentMode === "linkpricer" ? (
+                          <textarea value={item.brief} onChange={e => change(i, { brief: e.target.value })} style={{ ...inp, minHeight: 100, resize: "vertical" as const, lineHeight: 1.5 }} placeholder="Editorial piece — lead with industry insight…" />
+                        ) : item.contentMode === "upload" ? (
+                          <div style={{ border: `1.5px dashed ${C.line}`, borderRadius: 9, padding: 22, textAlign: "center" as const, background: C.bg3, cursor: "pointer" }}>
+                            <div style={{ fontSize: 20, color: C.mute }}>↑</div>
+                            <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 6 }}>Drop .docx, .md or .pdf</div>
+                            <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>or click to choose · max 5 MB</div>
+                          </div>
+                        ) : (
+                          <input type="url" value={item.articleUrl} onChange={e => change(i, { articleUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-title" />
+                        )}
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Tone</label>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const }}>
+                          {["Editorial", "Authoritative", "Friendly", "Technical"].map(t => (
+                            <button key={t} onClick={() => change(i, { tone: t })} style={{ padding: "6px 11px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: item.tone === t ? C.ink : "#fff", color: item.tone === t ? "#fff" : C.ink2, border: `1px solid ${item.tone === t ? C.ink : C.line}` }}>{t}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              );
+            })}
+          </div>
+
+          {/* RIGHT — summary */}
+          <div style={{ position: "sticky", top: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
+              <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700 }}>Estimated cost</h3>
+              {items.map(item => (
+                <div key={item.domain} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.line2}` }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 8, background: C.bg3, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: C.mono, fontWeight: 800, fontSize: 13, color: C.ink2, marginTop: 1 }}>{item.domain[0].toUpperCase()}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" as const }}>
+                      <span style={{ fontFamily: C.mono, fontWeight: 700, fontSize: 12.5 }}>{item.domain}</span>
+                      <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 4, background: C.bg3, fontWeight: 700, color: C.ink2 }}>DR {item.dr}</span>
+                      <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "#e8f6ee", fontWeight: 700, color: C.good }}>✓ {item.link}</span>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: C.mute, marginTop: 2 }}>
+                      via <strong style={{ color: C.ink2 }}>{item.offerName}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${(item.price + item.contentPrice).toLocaleString()}</div>
+                </div>
+              ))}
+              <div style={{ marginTop: 14, fontSize: 13 }}>
+                {[{ l: `${items.length} placements subtotal`, v: `$${subtotal.toLocaleString()}` }, { l: "Linkpricer fee (15%)", v: `$${fee.toLocaleString()}` }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
+                  <div key={r.l} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", color: r.m ? C.mute : C.ink2 }}>
+                    <span>{r.l}</span><span style={{ fontFamily: C.mono, fontWeight: 700 }}>{r.v}</span>
+                  </div>
+                ))}
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 6px", marginTop: 6, borderTop: `1px solid ${C.line2}` }}>
+                  <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>Estimated total</span>
+                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>${total.toLocaleString()}</span>
+                </div>
+                <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 9, background: "#e8f6ee", border: "1px solid #bbf0c8", display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: C.good }}>✓</span>
+                  <div style={{ fontSize: 11.5, color: "#0d5e2e", lineHeight: 1.4 }}><strong>$0 charged today.</strong> Each placement is invoiced after the publication URL is delivered and verified live.</div>
+                </div>
+              </div>
+            </div>
+            <button onClick={handlePlace} disabled={placing} style={{ padding: 16, background: placing ? C.ink2 : C.ink, color: "#fff", border: "none", borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: placing ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              {placing ? "Placing order…" : "✓ Place order"}
+            </button>
+            <div style={{ fontSize: 11.5, color: C.mute, textAlign: "center" as const, lineHeight: 1.5 }}>
+              By placing this order you agree to the <span style={{ color: C.accent, cursor: "pointer" }}>marketplace terms</span>. We&apos;ll send an invoice for each placement once the publication URL is delivered.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Order Placed Modal ────────────────────────────────────────────────────────
+function OrderPlacedModal({ onClose }: { onClose: () => void }) {
+  const orderId = React.useRef(`ord_${Math.random().toString(36).slice(2, 8)}`);
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 18, padding: "44px 48px", maxWidth: 700, width: "100%" }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ width: 64, height: 64, borderRadius: 999, background: "#e8f6ee", color: C.good, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "3px solid #bbf0c8", marginBottom: 14, fontSize: 28 }}>✓</div>
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: -0.5, color: C.ink }}>Order confirmed.</h1>
+          <p style={{ margin: "6px 0 0", color: C.mute, fontSize: 14 }}>
+            <strong style={{ color: C.good }}>$0 charged today.</strong>{" "}Order ID <strong style={{ color: C.ink, fontFamily: C.mono }}>#{orderId.current}</strong>
+          </p>
+        </div>
+        <div style={{ background: C.bg3, borderRadius: 12, padding: "18px 22px", marginBottom: 24 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: C.mute, textTransform: "uppercase" as const, marginBottom: 14 }}>What happens next</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
+            {[{ icon: "✏️", t: "Editors assigned", d: "Within 24 hours, a specialist in your niche will be assigned to each article." }, { icon: "👁️", t: "Drafts ready to review", d: "2–3 days. Review drafts in your dashboard, request edits, or approve for publication." }, { icon: "🔗", t: "Published & invoiced", d: "Once live, we verify the URL and invoice that placement individually." }].map(s => (
+              <div key={s.t} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 9, background: "#fff", border: `1px solid ${C.line}`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{s.icon}</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: C.ink }}>{s.t}</div>
+                <div style={{ fontSize: 12, color: C.mute, lineHeight: 1.5 }}>{s.d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button onClick={onClose} style={{ padding: "12px 22px", background: C.ink, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↗ View your orders</button>
+          <button onClick={onClose} style={{ padding: "12px 22px", background: "#fff", color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↓ Download receipt</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Profile Menu ─────────────────────────────────────────────────────────────
+function ProfileMenu() {
+  const { profile, loading, handleSignOut } = useAuthContext();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const initials = profile?.displayName
+    ? profile.displayName.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase()
+    : profile?.email?.[0].toUpperCase() ?? "";
+
+  return (
+    <div ref={ref} style={{ position: "relative", marginLeft: 8 }}>
+      <button
+        onClick={() => !loading && setOpen(v => !v)}
+        style={{
+          width: 36, height: 36, borderRadius: "50%",
+          background: loading ? C.line : "linear-gradient(135deg, #2c64f0, #7c3aed)",
+          border: "2px solid #fff", boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
+          cursor: loading ? "default" : "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "#fff", fontWeight: 800, fontSize: 13, letterSpacing: 0.5,
+          transition: "background 0.3s ease",
+        }}
+      >
+        {!loading && initials}
+      </button>
+
+      {open && (
+        <div style={{ position: "absolute", right: 0, top: 44, width: 220, background: "#fff", borderRadius: 12, border: `1px solid ${C.line}`, boxShadow: "0 8px 32px rgba(15,22,32,0.14)", zIndex: 999, overflow: "hidden" }}>
+          {/* User info */}
+          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line2}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 38, height: 38, borderRadius: "50%", background: "linear-gradient(135deg, #2c64f0, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{initials}</div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile?.displayName ?? "User"}</div>
+                <div style={{ fontSize: 11.5, color: C.mute, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile?.email}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Menu items */}
+          <div style={{ padding: "6px 0" }}>
+            {[
+              { label: "My profile", icon: "👤", href: "/dashboard/profile" },
+              { label: "Settings", icon: "⚙️", href: "/dashboard/settings" },
+              { label: "My orders", icon: "📦", href: "/dashboard/orders" },
+            ].map(item => (
+              <a key={item.label} href={item.href} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", fontSize: 13, color: C.ink2, textDecoration: "none", cursor: "pointer" }}
+                onMouseEnter={e => (e.currentTarget.style.background = C.bg3)}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                <span style={{ fontSize: 15 }}>{item.icon}</span>
+                {item.label}
+              </a>
+            ))}
+            <div style={{ height: 1, background: C.line2, margin: "4px 0" }} />
+            <button
+              onClick={handleSignOut}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", width: "100%", fontSize: 13, color: "#dc2626", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
+              onMouseEnter={e => (e.currentTarget.style.background = "#fff5f5")}
+              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            >
+              <span style={{ fontSize: 15 }}>🚪</span>
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 function SearchPageInner() {
   const [pasteValue, setPasteValue] = useState(SAMPLE_INPUT);
@@ -1109,6 +1461,8 @@ function SearchPageInner() {
   const [notFound, setNotFound] = useState<string[]>(["obscure-blog-2017.example"]);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [orderPlaced, setOrderPlaced] = useState(false);
   const [analyzeHover, setAnalyzeHover] = useState(false);
 
   const RATES: Record<Currency, number> = { USD: 1, EUR: 0.92, GBP: 0.79 };
@@ -1137,23 +1491,33 @@ function SearchPageInner() {
     setNotFound([]);
   }
 
-  function handleAnalyze() {
+  async function handleAnalyze() {
     if (domainCount === 0) return;
     setAnalyzing(true);
     setResults(null);
 
-    setTimeout(() => {
-      const found: Domain[] = [];
-      const missing: string[] = [];
-      for (const line of parsedLines.slice(0, MAX_DOMAINS)) {
-        const match = SAMPLE_DOMAINS.find((s) => s.domain === line.domain);
-        if (match) found.push({ ...match, yourPrice: line.yourPriceUsd });
-        else missing.push(line.domain);
-      }
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domains: parsedDomains.slice(0, MAX_DOMAINS) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Analysis failed");
+
+      // Merge user-entered yourPrice back in
+      const priceByDomain = new Map(parsedLines.map((l) => [l.domain, l.yourPriceUsd]));
+      const found: Domain[] = (data.found as Domain[]).map((d) => ({
+        ...d,
+        yourPrice: priceByDomain.get(d.domain) ?? null,
+      }));
       setResults(found);
-      setNotFound(missing);
+      setNotFound(data.notFound ?? []);
+    } catch (err) {
+      console.error("[handleAnalyze]", err);
+    } finally {
       setAnalyzing(false);
-    }, 950);
+    }
   }
 
   function handleSampleChip(domain: string) {
@@ -1191,7 +1555,23 @@ function SearchPageInner() {
           currency={currency}
           onClose={() => setCartOpen(false)}
           onRemove={handleRemoveFromCart}
+          onCheckout={() => {
+            setCartOpen(false);
+            setCheckoutOpen(true);
+          }}
         />
+      )}
+
+      {checkoutOpen && (
+        <CheckoutModal
+          cartItems={cartItems}
+          onClose={() => setCheckoutOpen(false)}
+          onPlaced={() => { setCheckoutOpen(false); setOrderPlaced(true); setCartItems([]); }}
+        />
+      )}
+
+      {orderPlaced && (
+        <OrderPlacedModal onClose={() => setOrderPlaced(false)} />
       )}
 
       <div style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
@@ -1203,16 +1583,28 @@ function SearchPageInner() {
             <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / domain analysis</span>
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            {["Analyze", "Lists", "Orders", "Vendors", "Reports"].map((tab) => (
-              <span key={tab} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: tab === "Analyze" ? C.ink : C.mute, background: tab === "Analyze" ? "#eef0f4" : "transparent" }}>
-                {tab}
-              </span>
-            ))}
+            {([
+              { label: "Analyze", href: null },
+              { label: "Lists", href: "/dashboard/favorites" },
+              { label: "Orders", href: "/dashboard/orders" },
+              { label: "Vendors", href: null },
+              { label: "Reports", href: null },
+            ] as { label: string; href: string | null }[]).map(({ label, href }) =>
+              href ? (
+                <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: C.mute, background: "transparent", textDecoration: "none" }}>
+                  {label}
+                </Link>
+              ) : (
+                <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "default", color: label === "Analyze" ? C.ink : C.mute, background: label === "Analyze" ? "#eef0f4" : "transparent" }}>
+                  {label}
+                </span>
+              )
+            )}
             <span style={{ width: 1, height: 20, background: C.line, margin: "0 10px" }} />
             <button style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 13px", border: `1.5px solid ${C.line}`, borderRadius: 8, background: "rgba(15,22,32,0.04)", fontSize: 12.5, fontWeight: 700, color: C.ink2, cursor: "pointer" }}>
               🔍 Search
             </button>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg, #2c64f0, #7c3aed)", marginLeft: 8 }} />
+            <ProfileMenu />
           </nav>
         </header>
 

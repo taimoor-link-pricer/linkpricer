@@ -1,14 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth";
-import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
-
-function getAdminStorage() {
-  // Reuse existing admin app or init with storage bucket
-  const apps = getApps();
-  const app = apps[0];
-  return getStorage(app);
-}
 
 export async function POST(req: NextRequest) {
   const admin = await requireAdminSession();
@@ -37,7 +29,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Storage not configured" }, { status: 500 });
     }
 
-    const storage = getAdminStorage();
+    const storage = getStorage();
     const ext = file.name.split(".").pop() ?? "jpg";
     const filename = `blog-images/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
     const storageBucket = storage.bucket(bucket);

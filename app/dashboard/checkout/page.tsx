@@ -1,18 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useAuthContext } from "@/lib/contexts/auth-context";
+import { useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
-
-function LoadingSpinner() {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#f5f6f8" }}>
-      <div style={{ width: 36, height: 36, border: "3px solid #e8eaed", borderTopColor: "#0052cc", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-}
 
 type ContentMode = "linkpricer" | "upload" | "url";
 
@@ -33,35 +24,17 @@ interface CartItem {
   category: string;
 }
 
-const INITIAL_ITEMS: CartItem[] = [
-  {
-    domain: "techcrunch.com", dr: 94, traffic: 51200000,
-    marketplace: "Adsy", gpPrice: 1100, contentPrice: 120, delivery: 14,
-    anchor: "fintech onboarding flow",
-    target: "https://yourbrand.com/blog/fintech-onboarding-guide",
-    title: "Why fintech founders should rethink onboarding in 2026",
-    brief: "Editorial piece — lead with industry insight; link appears naturally in section 3 (case study). Avoid promotional tone.",
-    contentMode: "linkpricer", tone: "Editorial", category: "Fintech",
-  },
-  {
-    domain: "forbes.com", dr: 92, traffic: 84000000,
-    marketplace: "Vendor: Marek K.", gpPrice: 1450, contentPrice: 0, delivery: 21,
-    anchor: "CEE fintech market",
-    target: "https://yourbrand.com/insights/cee-fintech-2026",
-    title: "Fintech in CEE: 5 trends shaping 2026",
-    brief: "",
-    contentMode: "upload", tone: "Authoritative", category: "Finance",
-  },
-  {
-    domain: "oneangrygamer.net", dr: 56, traffic: 410000,
-    marketplace: "Adsy", gpPrice: 580, contentPrice: 120, delivery: 10,
-    anchor: "indie game economics",
-    target: "https://yourbrand.com/blog/indie-launch-2026",
-    title: "The economics of indie game launches in 2026",
-    brief: "Industry-first commentary; we want to be quoted as a primary source.",
-    contentMode: "linkpricer", tone: "Friendly", category: "Gaming",
-  },
-];
+// Shape stored in localStorage by the search page
+interface StoredCartItem {
+  domain: string;
+  dr: number;
+  traffic: number;
+  offerName: string;
+  offerType: string;
+  price: number;
+  delivery: number;
+  link: string;
+}
 
 const FEE_RATE = 0.15;
 const TONES = ["Editorial", "Authoritative", "Friendly", "Technical"];
@@ -70,12 +43,33 @@ const CATEGORIES = ["Fintech", "SaaS", "Crypto", "Gaming", "Health", "Finance", 
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function CheckoutPage() {
-  const { loading } = useAuthContext();
-  const [items, setItems] = useState<CartItem[]>(INITIAL_ITEMS);
+  const router = useRouter();
+  const [items, setItems] = useState<CartItem[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<number>(0);
   const [placed, setPlaced] = useState(false);
 
-  if (loading) return <LoadingSpinner />;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("lp_cart");
+      if (!raw) { router.replace(ROUTES.search); return; }
+      const stored: StoredCartItem[] = JSON.parse(raw);
+      if (!stored.length) { router.replace(ROUTES.search); return; }
+      setItems(stored.map(s => ({
+        domain: s.domain,
+        dr: s.dr,
+        traffic: s.traffic,
+        marketplace: s.offerName,
+        gpPrice: s.price,
+        contentPrice: 120,
+        delivery: s.delivery,
+        anchor: "", target: "", title: "", brief: "",
+        contentMode: "linkpricer",
+        tone: "Editorial", category: "General",
+      })));
+    } catch {
+      router.replace(ROUTES.search);
+    }
+  }, [router]);
 
   const subtotal = items.reduce((s, x) => s + x.gpPrice + x.contentPrice, 0);
   const fee = Math.round(subtotal * FEE_RATE);
@@ -89,7 +83,12 @@ export default function CheckoutPage() {
     setItems(prev => prev.filter((_, i) => i !== idx));
   }
 
-  if (placed) return <OrderConfirmed items={items} total={total} />;
+  if (placed) {
+    localStorage.removeItem("lp_cart");
+    return <OrderConfirmed items={items} total={total} />;
+  }
+
+  if (items.length === 0) return null;
 
   return (
     <>

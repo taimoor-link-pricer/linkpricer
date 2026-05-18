@@ -8,7 +8,7 @@ const DEMO_FEATURES = [
 ];
 
 const HOW_STEPS = [
-  { num: "1", title: "Paste your domain list", description: "Bulk-paste domains with or without your known prices. We normalize and match them across marketplaces." },
+  { num: "1", title: "Paste your domain list", description: "Paste a URL or bulk URLs of any domain you're considering for a guest post or backlink placement. No formatting required." },
   { num: "2", title: "Compare & favorite", description: "See where each domain is available and the lowest purchase price. Add domains to Favorites to build your shortlist." },
   { num: "3", title: "Order in one go", description: "Checkout directly via Linkpricer or leave order details to us. You get an Order received email instantly." },
   { num: "4", title: "Track in your dashboard", description: "All communication continues by email. Progress is mirrored in your dashboard for full visibility." },
