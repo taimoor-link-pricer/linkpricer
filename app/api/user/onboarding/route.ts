@@ -21,9 +21,19 @@ export async function POST(req: NextRequest) {
       currentMethod: string[];
     };
 
-    await db.update(users)
-      .set({ hasCompletedOnboarding: true })
-      .where(eq(users.id, decoded.uid));
+    // Upsert by Firebase UID. If email already exists under a different ID (legacy user),
+    // fall back to updating by email instead.
+    try {
+      await db.insert(users)
+        .values({ id: decoded.uid, email: decoded.email ?? null, hasCompletedOnboarding: true, role: "client" })
+        .onConflictDoUpdate({ target: users.id, set: { hasCompletedOnboarding: true } });
+    } catch {
+      if (decoded.email) {
+        await db.update(users)
+          .set({ hasCompletedOnboarding: true })
+          .where(eq(users.email, decoded.email));
+      }
+    }
 
     try {
       await db.insert(onboardingResponses).values({

@@ -40,17 +40,19 @@ export async function GET() {
         }
       }
 
-      try {
-        await db.insert(users).values({
-          id: decoded.uid,
-          email: decoded.email ?? null,
-          firstName: inheritedFirstName,
-          lastName: inheritedLastName,
-          role,
-          hasCompletedOnboarding,
-        }).onConflictDoNothing();
-      } catch (e) {
-        console.error("[/api/user/me] Failed to create user row", e);
+      if (decoded.email) {
+        try {
+          await db.insert(users).values({
+            id: decoded.uid,
+            email: decoded.email,
+            firstName: inheritedFirstName,
+            lastName: inheritedLastName,
+            role,
+            hasCompletedOnboarding,
+          }).onConflictDoNothing();
+        } catch (e) {
+          console.error("[/api/user/me] Failed to create user row", e);
+        }
       }
 
       result = await db.select().from(users).where(eq(users.id, decoded.uid)).limit(1);

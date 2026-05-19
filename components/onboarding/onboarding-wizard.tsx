@@ -83,6 +83,7 @@ export function OnboardingWizard() {
     biggestChallenge: "", priorityFactors: [], currentMethod: [],
   });
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const router = useRouter();
 
   function update(patch: Partial<FormData>) {
@@ -106,8 +107,9 @@ export function OnboardingWizard() {
       setStep(s => s + 1);
     } else {
       setSubmitting(true);
+      setSubmitError(null);
       try {
-        await fetch("/api/user/onboarding", {
+        const res = await fetch("/api/user/onboarding", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -119,10 +121,17 @@ export function OnboardingWizard() {
             currentMethod: data.currentMethod,
           }),
         });
+        if (!res.ok) {
+          setSubmitError("Something went wrong. Please try again.");
+          setSubmitting(false);
+          return;
+        }
       } catch {
-        // proceed regardless
+        setSubmitError("Network error. Please check your connection and try again.");
+        setSubmitting(false);
+        return;
       }
-      router.push(ROUTES.dashboard);
+      router.push(ROUTES.search);
     }
   }
 
@@ -238,6 +247,9 @@ export function OnboardingWizard() {
           >
             Back
           </button>
+          {submitError && (
+            <p style={{ fontSize: 13, color: "#dc2626", fontWeight: 500, margin: "0 0 8px", textAlign: "center" }}>{submitError}</p>
+          )}
           <button
             onClick={handleNext}
             disabled={!isValid() || submitting}

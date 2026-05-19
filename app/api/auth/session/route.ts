@@ -37,14 +37,16 @@ export async function POST(req: NextRequest) {
         lastName = parts.slice(1).join(" ") || null;
       }
 
-      await db.insert(users).values({
-        id: decoded.uid,
-        email: decoded.email ?? null,
-        firstName,
-        lastName,
-        role: "client",
-        hasCompletedOnboarding: false,
-      }).onConflictDoNothing();
+      if (decoded.email) {
+        await db.insert(users).values({
+          id: decoded.uid,
+          email: decoded.email,
+          firstName,
+          lastName,
+          role: "client",
+          hasCompletedOnboarding: false,
+        }).onConflictDoNothing();
+      }
     } catch (dbErr) {
       console.error("[/api/auth/session] PG upsert failed", dbErr);
       // Don't fail session creation if DB write fails

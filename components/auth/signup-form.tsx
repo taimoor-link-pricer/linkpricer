@@ -40,8 +40,7 @@ export function SignupForm() {
   const [tosAccepted, setTosAccepted] = useState(false);
   const router = useRouter();
 
-  async function getPostLoginRoute(isNewUser: boolean): Promise<string> {
-    if (isNewUser) return ROUTES.onboarding;
+  async function getPostLoginRoute(): Promise<string> {
     try {
       const res = await fetch("/api/user/me");
       if (res.ok) {
@@ -50,7 +49,7 @@ export function SignupForm() {
         if (!data.hasCompletedOnboarding) return ROUTES.onboarding;
       }
     } catch {}
-    return ROUTES.dashboard;
+    return ROUTES.search;
   }
 
   useEffect(() => {
@@ -58,7 +57,7 @@ export function SignupForm() {
       .then(async (result) => {
         if (result) {
           setIsLoading(true);
-          router.push(await getPostLoginRoute(result.isNewUser));
+          router.push(await getPostLoginRoute());
         }
       })
       .catch(() => {});
@@ -76,7 +75,7 @@ export function SignupForm() {
     const lastName = nameParts.slice(1).join(" ") || "";
     try {
       await signUpWithEmail(firstName, lastName, fd.get("email") as string, fd.get("password") as string);
-      router.push(ROUTES.onboarding);
+      router.push(await getPostLoginRoute());
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
       setIsLoading(false);
@@ -87,8 +86,8 @@ export function SignupForm() {
     setError(null);
     setIsLoading(true);
     try {
-      const { isNewUser } = await startGoogleSignIn();
-      router.push(await getPostLoginRoute(isNewUser));
+      await startGoogleSignIn();
+      router.push(await getPostLoginRoute());
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
       setIsLoading(false);
