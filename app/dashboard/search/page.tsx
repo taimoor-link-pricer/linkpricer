@@ -334,11 +334,20 @@ function OfferCard({
       )}
 
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-        <div>
-          <div style={{ marginBottom: 4 }}>{typeIcon}</div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.name}</div>
-          <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>Updated {offer.updated}</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: 6, flexShrink: 0,
+            background: offer.type === "Vendor" ? "#fdf2dd" : offer.type === "API" ? "#e9f1fe" : "#eef0f4",
+            color: offer.type === "Vendor" ? "#a35d00" : offer.type === "API" ? "#1d4ed8" : "#374151",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13,
+          }}>
+            {offer.type === "Vendor" ? "◈" : offer.type === "API" ? "⚡" : "◇"}
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.name}</div>
+            <div style={{ fontSize: 11, color: C.mute }}>Updated {offer.updated}</div>
+          </div>
         </div>
         <Stars n={offer.quality} />
       </div>
@@ -373,25 +382,25 @@ function OfferCard({
         )}
       </div>
 
-      {/* Details 2×2 grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      {/* Details rows */}
+      <div style={{ display: "flex", flexDirection: "column" }}>
         {[
           { label: "Delivery guarantee", value: `${offer.delivery} days` },
           { label: "Avg. TAT", value: `${offer.tat} days` },
         ].map(({ label, value }) => (
-          <div key={label} style={{ background: C.bg3, borderRadius: 8, border: `1px solid ${C.line2}`, padding: "10px 12px" }}>
-            <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>{label}</div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{value}</div>
+          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${C.line2}` }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: C.mute }}>{label}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.ink2 }}>{value}</span>
           </div>
         ))}
-        <div style={{ background: C.bg3, borderRadius: 8, border: `1px solid ${C.line2}`, padding: "10px 12px" }}>
-          <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Link type</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${C.line2}` }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.mute }}>Link type</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: offer.link === "Dofollow" ? "#e6f6ed" : "#fef3c7", color: offer.link === "Dofollow" ? C.good : "#a35d00", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700 }}>
             {offer.link === "Dofollow" ? "✓" : "✗"} {offer.link}
           </span>
         </div>
-        <div style={{ background: C.bg3, borderRadius: 8, border: `1px solid ${C.line2}`, padding: "10px 12px" }}>
-          <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Source</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${C.line2}` }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.mute }}>Source</span>
           <span style={{ display: "inline-block", background: C.line2, color: C.ink3, borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700 }}>
             {offer.type === "API" ? "Live API" : offer.type === "DB" ? "Synced" : "Vendor"}
           </span>
@@ -424,11 +433,6 @@ function OfferCard({
           No published example available
         </div>
       )}
-
-      {/* Niche pricing link */}
-      <div style={{ fontSize: 11.5, fontWeight: 700, color: C.ink3, cursor: "pointer" }}>
-        NICHE PRICING ›
-      </div>
 
       {/* Buttons */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -1338,7 +1342,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
 // ─── Order Placed Modal ────────────────────────────────────────────────────────
 function OrderPlacedModal({ onClose }: { onClose: () => void }) {
-  const orderId = React.useRef(`ord_${Math.random().toString(36).slice(2, 8)}`);
+  const [orderId] = useState(() => `ord_${Math.random().toString(36).slice(2, 8)}`);
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 18, padding: "44px 48px", maxWidth: 700, width: "100%" }}>
@@ -1346,7 +1350,7 @@ function OrderPlacedModal({ onClose }: { onClose: () => void }) {
           <div style={{ width: 64, height: 64, borderRadius: 999, background: "#e8f6ee", color: C.good, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "3px solid #bbf0c8", marginBottom: 14, fontSize: 28 }}>✓</div>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: -0.5, color: C.ink }}>Order confirmed.</h1>
           <p style={{ margin: "6px 0 0", color: C.mute, fontSize: 14 }}>
-            <strong style={{ color: C.good }}>$0 charged today.</strong>{" "}Order ID <strong style={{ color: C.ink, fontFamily: C.mono }}>#{orderId.current}</strong>
+            <strong style={{ color: C.good }}>$0 charged today.</strong>{" "}Order ID <strong style={{ color: C.ink, fontFamily: C.mono }}>#{orderId}</strong>
           </p>
         </div>
         <div style={{ background: C.bg3, borderRadius: 12, padding: "18px 22px", marginBottom: 24 }}>
