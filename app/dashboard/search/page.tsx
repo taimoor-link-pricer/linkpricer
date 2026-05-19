@@ -1452,13 +1452,13 @@ function ProfileMenu() {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 function SearchPageInner() {
-  const [pasteValue, setPasteValue] = useState(SAMPLE_INPUT);
+  const [pasteValue, setPasteValue] = useState("");
   const [niche, setNiche] = useState("general");
   const [nicheOpen, setNicheOpen] = useState(false);
   const [currency, setCurrency] = useState<Currency>("USD");
   const [analyzing, setAnalyzing] = useState(false);
-  const [results, setResults] = useState<Domain[] | null>(SAMPLE_DOMAINS);
-  const [notFound, setNotFound] = useState<string[]>(["obscure-blog-2017.example"]);
+  const [results, setResults] = useState<Domain[] | null>(null);
+  const [notFound, setNotFound] = useState<string[]>([]);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
