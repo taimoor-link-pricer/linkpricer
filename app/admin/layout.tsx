@@ -11,6 +11,7 @@ const ADMIN_NAV = [
   { label: "Users", href: ROUTES.adminUsers, icon: "👥" },
   { label: "All Orders", href: ROUTES.adminOrders, icon: "📋" },
   { label: "Marketplaces", href: "/admin/marketplaces", icon: "🏪" },
+  { label: "Domain Examples", href: "/admin/domain-examples", icon: "🔗" },
 ];
 
 const BLOG_NAV = [

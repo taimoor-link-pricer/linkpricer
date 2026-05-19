@@ -1,25 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { ROUTES } from "@/lib/constants";
 
-const STATIC_ROWS = [
-  { id: "F0", domain: "forbes.com", refs: "1.8M", price: "$1,380", grade: "A+", score: 92, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 94, traffic: "71M", keywords: "8.4M" },
-  { id: "H1", domain: "healthline.com", refs: "92K", price: "$1,265", grade: "A+", score: 88, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 91, traffic: "184M", keywords: "4.8M" },
-  { id: "T2", domain: "techcrunch.com", refs: "184K", price: "$977", grade: "A", score: 78, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 92, traffic: "14M", keywords: "1.8M" },
-  { id: "O3", domain: "oneangrygamer.net", refs: "2.1K", price: "$230", grade: "A", score: 71, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 58, traffic: "410K", keywords: "38K" },
-  { id: "B4", domain: "betimate.com", refs: "980", price: "$212", grade: "B+", score: 58, gradeClass: "hp-grade-b", country: "🇬🇧", countryCode: "GB", dr: 41, traffic: "320K", keywords: "25K" },
-  { id: "M5", domain: "medium.com", refs: "456K", price: "$1,820", grade: "A+", score: 92, gradeClass: "hp-grade-a", country: "🇺🇸", countryCode: "US", dr: 87, traffic: "1.2M", keywords: "3.2M" },
-];
-
-const DOMAIN_DATA: Record<string, typeof STATIC_ROWS[0]> = {
-  "forbes.com": STATIC_ROWS[0],
-  "healthline.com": STATIC_ROWS[1],
-  "techcrunch.com": STATIC_ROWS[2],
-  "oneangrygamer.net": STATIC_ROWS[3],
-  "betimate.com": STATIC_ROWS[4],
-  "medium.com": STATIC_ROWS[5],
+type DomainRow = {
+  id: string;
+  domain: string;
+  country: string;
+  dr: number;
+  traffic: string;
+  keywords: string;
+  refs: string;
+  grade: string;
+  gradeClass: string;
+  price: string;
 };
 
 const HOW_STEPS = [
@@ -73,22 +68,41 @@ const BLOG_CARDS = [
 
 export function HeroSection() {
   const [searchInput, setSearchInput] = useState("");
-  const [demoRows, setDemoRows] = useState(STATIC_ROWS);
-  const [demoCount, setDemoCount] = useState(6);
+  const [demoRows, setDemoRows] = useState<DomainRow[]>([]);
+  const [tableLoading, setTableLoading] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/search-domains")
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) { setDemoRows(data.domains ?? []); setTableLoading(false); } })
+      .catch(() => { if (!cancelled) { setDemoRows([]); setTableLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  function fetchDomains(q: string) {
+    setTableLoading(true);
+    const params = q ? `?q=${encodeURIComponent(q)}` : "";
+    fetch(`/api/search-domains${params}`)
+      .then((r) => r.json())
+      .then((data) => { setDemoRows(data.domains ?? []); setTableLoading(false); })
+      .catch(() => { setDemoRows([]); setTableLoading(false); });
+  }
+
+  function handleInputChange(val: string) {
+    setSearchInput(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchDomains(val.trim()), 350);
+  }
 
   function handleSearch() {
-    const domain = searchInput.trim().toLowerCase();
-    if (!domain) return;
-    const found = DOMAIN_DATA[domain];
-    if (found) {
-      setDemoRows([{ ...found, id: "D0" }]);
-      setDemoCount(1);
-    } else {
-      setDemoRows([]);
-      setDemoCount(0);
-    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    fetchDomains(searchInput.trim());
   }
+
+  const demoCount = demoRows.length;
 
   return (
     <>
@@ -258,7 +272,7 @@ export function HeroSection() {
             type="text"
             placeholder="Enter domain name (e.g., forbes.com)"
             value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
           />
           <button className="hp-demo-go" onClick={handleSearch}>Search</button>
@@ -278,18 +292,28 @@ export function HeroSection() {
             </tr>
           </thead>
           <tbody>
-            {demoRows.length === 0 ? (
+            {tableLoading ? (
+              Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 8 }).map((_, j) => (
+                    <td key={j} style={{ padding: "14px 12px", borderBottom: "1px solid #e5e7eb" }}>
+                      <div style={{ height: 13, borderRadius: 5, background: "#f3f4f6", width: j === 1 ? "70%" : "40%" }} />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : demoRows.length === 0 ? (
               <tr>
                 <td colSpan={8} style={{ textAlign: "center", color: "#9ca3af", padding: "32px 12px" }}>
-                  No result found for that domain. Try: forbes.com, healthline.com, techcrunch.com
+                  {searchInput ? `No domains found for "${searchInput}"` : "No domains available"}
                 </td>
               </tr>
-            ) : demoRows.map((row) => (
+            ) : demoRows.map((row: DomainRow) => (
               <tr key={row.id}>
                 <td style={{ color: "#9ca3af", fontWeight: 600 }}>{row.id}</td>
                 <td>
                   <span className="hp-mono">{row.domain}</span>
-                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>EN · {row.refs} ref. domains</div>
+                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>{row.country} · {row.refs} ref. domains</div>
                 </td>
                 <td>
                   <Link href={`${ROUTES.signup}?domain=${encodeURIComponent(row.domain)}`} className="hp-buy">
@@ -297,9 +321,9 @@ export function HeroSection() {
                   </Link>
                 </td>
                 <td>
-                  <span className={`hp-grade ${row.gradeClass}`}>{row.grade} {row.score}</span>
+                  <span className={`hp-grade ${row.gradeClass}`}>{row.grade}</span>
                 </td>
-                <td>{row.country} {row.countryCode}</td>
+                <td>{row.country}</td>
                 <td style={{ fontFamily: "monospace", fontWeight: 600 }}>{row.dr}</td>
                 <td style={{ fontFamily: "monospace", fontWeight: 600 }}>{row.traffic}</td>
                 <td style={{ fontFamily: "monospace", fontWeight: 600 }}>{row.keywords}</td>

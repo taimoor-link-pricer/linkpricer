@@ -61,7 +61,17 @@ export async function POST(req: NextRequest) {
   );
 
   try {
-    const [lpRows, gradeRows, marketplaceRows, vendorRows] = await Promise.all([
+    // Ensure domain_examples table exists
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS domain_examples (
+        domain TEXT PRIMARY KEY,
+        example_url TEXT,
+        example_title TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    const [lpRows, gradeRows, marketplaceRows, vendorRows, exampleRows] = await Promise.all([
       // LP catalog: DR, traffic, keywords, ref domains, min price
       db.execute(sql`
         SELECT
@@ -125,7 +135,24 @@ export async function POST(req: NextRequest) {
           AND LOWER(so.domain) IN (${domainList})
         ORDER BY so.min_price::float ASC
       `),
+      // Admin-set example URLs
+      db.execute(sql`
+        SELECT domain, example_url, example_title
+        FROM domain_examples
+        WHERE domain IN (${domainList})
+          AND example_url IS NOT NULL
+          AND example_url != ''
+      `),
     ]);
+
+    // Build example map keyed by domain
+    const exampleMap = new Map<string, { url: string; title: string }>();
+    for (const r of exampleRows.rows) {
+      exampleMap.set(r.domain as string, {
+        url: r.example_url as string,
+        title: (r.example_title as string) ?? "",
+      });
+    }
 
     // Build grade map
     const gradeMap = new Map<string, { grade: string; score: number }>();
@@ -154,6 +181,7 @@ export async function POST(req: NextRequest) {
     for (const r of marketplaceRows.rows) {
       const domain = r.domain as string;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
+      const ex = exampleMap.get(domain);
       offersMap.get(domain)!.push({
         name: (r.name as string) ?? "Marketplace",
         type: "DB",
@@ -164,13 +192,14 @@ export async function POST(req: NextRequest) {
         delivery: Number(r.delivery_time_days ?? 14),
         tat: Number(r.tat ?? r.delivery_time_days ?? 14),
         link: (r.link_type as string) ?? "Dofollow",
-        example: null,
+        example: ex?.url ?? null,
       });
     }
 
     for (const r of vendorRows.rows) {
       const domain = r.domain as string;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
+      const exV = exampleMap.get(domain);
       offersMap.get(domain)!.push({
         name: `Vendor: ${r.vendor_name as string}`,
         type: "Vendor",
@@ -181,7 +210,7 @@ export async function POST(req: NextRequest) {
         delivery: Number(r.delivery_time_days ?? 14),
         tat: Number(r.delivery_time_days ?? 14),
         link: "Dofollow",
-        example: null,
+        example: exV?.url ?? null,
       });
     }
 

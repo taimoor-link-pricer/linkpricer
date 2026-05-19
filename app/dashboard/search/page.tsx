@@ -133,66 +133,6 @@ type Domain = {
   offers: Offer[];
 };
 
-const SAMPLE_INPUT = "forbes.com\nbetimate.com\noneangrygamer.net\ntechcrunch.com 1100\nhealthline.com\npitchfork.com\nobscure-blog-2017.example";
-
-const SAMPLE_DOMAINS: Domain[] = [
-  {
-    domain: "forbes.com", country: "US", lang: "EN", category: "Business / Finance",
-    dr: 94, drTrend: "up", traffic: 71400000, keywords: 8420000, refDomains: 1840000,
-    grade: "A+", score: 92, bestPrice: 1200, yourPrice: 1800,
-    offers: [
-      { name: "Vendor: John D.", type: "Vendor", updated: "04-05-2026 11:00", minPrice: 1200, maxPrice: 1200, quality: 3, delivery: 14, tat: 12, link: "Dofollow", example: "https://forbes.com/sites/example/2023/markets" },
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1300, maxPrice: 1450, quality: 5, delivery: 7, tat: 5, link: "Dofollow", example: "https://forbes.com/sites/example/2025/luxury-watches" },
-      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 1395, maxPrice: 1395, quality: 4, delivery: 10, tat: 7, link: "Dofollow", example: "https://forbes.com/sites/example/2024/fintech" },
-      { name: "Sedo Marketplace", type: "DB", updated: "01-05-2026 22:00", minPrice: 1500, maxPrice: 1700, quality: 4, delivery: 14, tat: 10, link: "Dofollow", example: "https://forbes.com/sites/example/2024/automotive" },
-      { name: "Linkbuilder.io", type: "DB", updated: "03-05-2026 10:00", minPrice: 1620, maxPrice: 1620, quality: 4, delivery: 9, tat: 8, link: "Dofollow", example: null },
-    ],
-  },
-  {
-    domain: "betimate.com", country: "GB", lang: "EN", category: "Sports / Betting",
-    dr: 41, drTrend: "up", traffic: 320000, keywords: 24800, refDomains: 980,
-    grade: "B+", score: 58, bestPrice: 160, yourPrice: null,
-    offers: [
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 160, maxPrice: 220, quality: 4, delivery: 5, tat: 4, link: "Dofollow", example: "https://betimate.com/predictions/example" },
-      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 175, maxPrice: 175, quality: 4, delivery: 7, tat: 6, link: "Dofollow", example: "https://betimate.com/blog/value-bets-guide" },
-      { name: "Vendor: Maria K.", type: "Vendor", updated: "02-05-2026 18:00", minPrice: 195, maxPrice: 195, quality: 5, delivery: 6, tat: 5, link: "Dofollow", example: "https://betimate.com/blog/odds-calculation" },
-    ],
-  },
-  {
-    domain: "oneangrygamer.net", country: "US", lang: "EN", category: "Gaming / Entertainment",
-    dr: 58, drTrend: "flat", traffic: 410000, keywords: 38200, refDomains: 2140,
-    grade: "A", score: 71, bestPrice: 200, yourPrice: 200,
-    offers: [
-      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 200, maxPrice: 240, quality: 4, delivery: 8, tat: 7, link: "Dofollow", example: "https://oneangrygamer.net/2025/example-review" },
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 210, maxPrice: 210, quality: 4, delivery: 7, tat: 6, link: "Dofollow", example: "https://oneangrygamer.net/2024/example-feature" },
-      { name: "Vendor: Alex P.", type: "Vendor", updated: "29-04-2026 10:00", minPrice: 225, maxPrice: 225, quality: 3, delivery: 10, tat: 9, link: "Nofollow", example: null },
-    ],
-  },
-  {
-    domain: "techcrunch.com", country: "US", lang: "EN", category: "Technology",
-    dr: 92, drTrend: "up", traffic: 14200000, keywords: 1840000, refDomains: 184000,
-    grade: "A", score: 78, bestPrice: 850, yourPrice: 1100,
-    offers: [
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 850, maxPrice: 950, quality: 5, delivery: 7, tat: 5, link: "Dofollow", example: "https://techcrunch.com/2025/example" },
-      { name: "Getlinks", type: "API", updated: "05-05-2026 09:12", minPrice: 920, maxPrice: 920, quality: 4, delivery: 10, tat: 7, link: "Dofollow", example: "https://techcrunch.com/2024/example" },
-    ],
-  },
-  {
-    domain: "healthline.com", country: "US", lang: "EN", category: "Health / Medical",
-    dr: 91, drTrend: "flat", traffic: 184000000, keywords: 4800000, refDomains: 92000,
-    grade: "A+", score: 88, bestPrice: 1100, yourPrice: null,
-    offers: [
-      { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1100, maxPrice: 1300, quality: 5, delivery: 7, tat: 6, link: "Dofollow", example: "https://healthline.com/example" },
-      { name: "Sedo Marketplace", type: "DB", updated: "01-05-2026 22:00", minPrice: 1200, maxPrice: 1400, quality: 4, delivery: 14, tat: 10, link: "Dofollow", example: null },
-    ],
-  },
-  {
-    domain: "pitchfork.com", country: "US", lang: "EN", category: "Music / Entertainment",
-    dr: 88, drTrend: "down", traffic: 4200000, keywords: 480000, refDomains: 38000,
-    grade: "B", score: 42, bestPrice: null, yourPrice: null, noPrice: true,
-    offers: [],
-  },
-];
 
 // ─── Cart types ───────────────────────────────────────────────────────────────
 type CartItem = {
@@ -1955,10 +1895,10 @@ function SearchPageInner() {
           {/* Sample chips */}
           <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: C.mute, fontWeight: 600 }}>Try with:</span>
-            {SAMPLE_DOMAINS.map((d) => (
+            {["forbes.com", "betimate.com", "oneangrygamer.net", "techcrunch.com", "healthline.com", "pitchfork.com"].map((d) => (
               <button
-                key={d.domain}
-                onClick={() => handleSampleChip(d.domain)}
+                key={d}
+                onClick={() => handleSampleChip(d)}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 6,
                   padding: "7px 14px",
@@ -1971,7 +1911,7 @@ function SearchPageInner() {
                   cursor: "pointer",
                 }}
               >
-                + {d.domain}
+                + {d}
               </button>
             ))}
           </div>
