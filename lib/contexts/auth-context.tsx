@@ -12,6 +12,7 @@ import { auth } from "@/lib/firebase/client";
 import { signOut } from "@/lib/firebase/auth-client";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
+import { PageLoader } from "@/components/page-loader";
 
 export type UserProfile = {
   uid: string;
@@ -119,6 +120,8 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
     await signOut();
     router.push(ROUTES.home);
   }
+
+  if (loading) return <PageLoader />;
 
   return (
     <AuthContext.Provider value={{ profile, loading, handleSignOut }}>
