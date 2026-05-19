@@ -1,4 +1,4 @@
-"use client";
+"use client"; 
 
 const DEMO_FEATURES = [
   { icon: "📊", title: "See all available offers", description: "Every marketplace that has your domain, with prices side-by-side. Find the cheapest instantly." },
