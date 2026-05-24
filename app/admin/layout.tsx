@@ -14,6 +14,10 @@ const ADMIN_NAV = [
   { label: "Domain Examples", href: "/admin/domain-examples", icon: "🔗" },
 ];
 
+const SUPER_ADMIN_NAV = [
+  { label: "User Analytics", href: ROUTES.adminAnalyticsUsers, icon: "📈" },
+];
+
 const BLOG_NAV = [
   { label: "Blog Posts", href: ROUTES.adminBlog, icon: "📝" },
   { label: "Authors", href: ROUTES.adminBlogAuthors, icon: "✍️" },
@@ -60,6 +64,13 @@ function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
       <div style={{ padding: "0 12px 8px", flex: 1, overflowY: "auto" }}>
         <div style={sectionLabel}>Admin</div>
         {ADMIN_NAV.map((item) => (
+          <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
+            <span style={{ fontSize: 15 }}>{item.icon}</span>
+            <span>{item.label}</span>
+          </Link>
+        ))}
+        <div style={{ ...sectionLabel, marginTop: 12 }}>Analytics</div>
+        {SUPER_ADMIN_NAV.map((item) => (
           <Link key={item.href} href={item.href} style={navStyle(item.href)} onClick={onClose}>
             <span style={{ fontSize: 15 }}>{item.icon}</span>
             <span>{item.label}</span>

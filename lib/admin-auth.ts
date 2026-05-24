@@ -25,3 +25,25 @@ export async function requireAdminSession(): Promise<{ uid: string } | null> {
     return null;
   }
 }
+
+// Super admin: vendor-role user whose email is listed in SUPER_ADMIN_EMAILS (comma-separated env var)
+export async function requireSuperAdminSession(): Promise<{ uid: string } | null> {
+  const base = await requireAdminSession();
+  if (!base) return null;
+
+  const allowed = (process.env.SUPER_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowed.length === 0) return null;
+
+  const [user] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, base.uid))
+    .limit(1);
+
+  if (!user?.email || !allowed.includes(user.email.toLowerCase())) return null;
+
+  return base;
+}

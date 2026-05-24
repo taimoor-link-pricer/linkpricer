@@ -23,6 +23,7 @@ export const ROUTES = {
   adminOrders: "/admin/orders",
   adminBlog: "/admin/blog",
   adminBlogAuthors: "/admin/blog/authors",
+  adminAnalyticsUsers: "/admin/analytics/users",
   checkout: "/dashboard/checkout",
 } as const;
 
