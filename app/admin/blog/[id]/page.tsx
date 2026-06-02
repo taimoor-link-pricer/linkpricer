@@ -297,7 +297,7 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
   const [metaDescription, setMetaDescription] = useState("");
   const [htmlContent, setHtmlContent] = useState("");
   const [cssContent, setCssContent] = useState("");
-  const [activeTab, setActiveTab] = useState<"editor" | "code" | "split">("editor");
+  const [mode, setMode] = useState<"rich" | "html">("rich");
   const [showSEO, setShowSEO] = useState(false);
   const [authors, setAuthors] = useState<Author[]>([]);
   const [saving, setSaving] = useState(false);
@@ -308,6 +308,7 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
 
   // Image library modal state
   const [libraryMode, setLibraryMode] = useState<"cover" | "editor" | null>(null);
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
 
   // loadedContent is set once when fetch returns — state so effects re-run when it arrives
   const [loadedContent, setLoadedContent] = useState<string | null>(null);
@@ -353,7 +354,7 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
         setMetaDescription(post.metaDescription ?? "");
         setOriginalPublishedAt(post.publishedAt);
         if (post.cssContent) setCssContent(post.cssContent);
-        if (post.contentType === "html") setActiveTab("code");
+        if (post.contentType === "html") setMode("html");
 
         const content = post.htmlContent || post.content || "";
         setHtmlContent(content);
@@ -382,11 +383,31 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
     }
   }
 
-  const syncEditorFromHtml = useCallback(() => {
-    if (editor && htmlContent !== editor.getHTML()) {
-      editor.commands.setContent(htmlContent, { emitUpdate: false });
+  function switchMode(next: "rich" | "html") {
+    if (next === mode) return;
+    if (next === "html") {
+      // Rich → HTML: copy current TipTap output into the textarea (lossless one-way).
+      const current = editor?.getHTML() ?? "";
+      if (current && current !== "<p></p>") setHtmlContent(current);
+      setMode("html");
+      return;
     }
-  }, [editor, htmlContent]);
+    // HTML → Rich: TipTap will strip <style>, <svg>, custom classes, etc.
+    // If there's any meaningful content, surface a confirmation dialog.
+    if (htmlContent && htmlContent.trim()) {
+      setShowSwitchConfirm(true);
+      return;
+    }
+    setMode("rich");
+  }
+
+  function confirmSwitchToRich() {
+    if (editor && htmlContent) {
+      editor.commands.setContent(htmlContent);
+    }
+    setMode("rich");
+    setShowSwitchConfirm(false);
+  }
 
   // Upload cover image directly (no library)
   async function handleCoverUpload() {
@@ -444,13 +465,16 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
     if (!title || !slug) { showToast("Title and slug are required", "error"); return; }
     setSaving(true);
     try {
-      const content = editor?.getHTML() ?? htmlContent;
+      // In HTML mode, the textarea is the source of truth — never run through TipTap.
+      // In Rich mode, TipTap's serialized output is canonical.
+      const isHtmlMode = mode === "html";
+      const content = isHtmlMode ? htmlContent : (editor?.getHTML() ?? htmlContent);
       const resolvedCategory = category === "__custom__" ? customCategory : category;
       const body = {
         title, slug, excerpt, content,
         htmlContent: content,
         cssContent: cssContent || null,
-        contentType: activeTab === "code" ? "html" : "text",
+        contentType: isHtmlMode ? "html" : "text",
         category: resolvedCategory,
         authorId: authorId || null,
         coverImageUrl: coverImageUrl || null,
@@ -516,10 +540,63 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
         .cover-action-btn:hover { border-color: #dc2626; color: #dc2626; background: #fff5f5; }
         .cover-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         @keyframes slide-in { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes scale-in { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         @media (max-width: 768px) { .field-row-2 { grid-template-columns: 1fr; } .blog-editor { padding: 0; } }
       `}</style>
 
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+
+      {/* Mode-switch confirmation */}
+      {showSwitchConfirm && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.55)", zIndex: 250, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, animation: "fade-in 0.15s ease" }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowSwitchConfirm(false); }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="switch-confirm-title"
+        >
+          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 480, boxShadow: "0 24px 80px rgba(0,0,0,0.28)", overflow: "hidden", animation: "scale-in 0.18s ease" }}>
+            <div style={{ padding: "24px 28px 8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#fef3c7", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 20 }}>⚠️</div>
+                <h3 id="switch-confirm-title" style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: 0, lineHeight: 1.3 }}>
+                  Switch to the Rich Text editor?
+                </h3>
+              </div>
+              <p style={{ fontSize: 14, color: "#4b5563", lineHeight: 1.6, margin: "0 0 12px" }}>
+                The Rich Text editor only renders standard formatting. Switching will permanently remove these from your draft:
+              </p>
+              <ul style={{ fontSize: 13, color: "#4b5563", lineHeight: 1.8, margin: "0 0 14px", paddingLeft: 22 }}>
+                <li><code style={{ background: "#f3f4f6", padding: "1px 6px", borderRadius: 4, fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }}>&lt;style&gt;</code> blocks and inline CSS</li>
+                <li>SVG graphics, embedded charts, and iframes</li>
+                <li>Custom classes, IDs, and unsupported HTML tags</li>
+              </ul>
+              <p style={{ fontSize: 12, color: "#9ca3af", margin: 0, fontStyle: "italic", lineHeight: 1.5 }}>
+                You can switch back to Custom HTML afterward, but stripped content cannot be recovered until you reload the post.
+              </p>
+            </div>
+            <div style={{ padding: "16px 24px", background: "#f9fafb", borderTop: "1px solid #e8eaed", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button
+                onClick={() => setShowSwitchConfirm(false)}
+                style={{ background: "#fff", color: "#374151", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 18px", fontWeight: 600, fontSize: 13, cursor: "pointer", transition: "all 0.12s" }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#fff"; }}
+              >
+                Keep Custom HTML
+              </button>
+              <button
+                onClick={confirmSwitchToRich}
+                style={{ background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontWeight: 700, fontSize: 13, cursor: "pointer", transition: "background 0.12s" }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#b91c1c"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#dc2626"; }}
+              >
+                Switch & strip styles
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Image Library Modal */}
       {libraryMode === "cover" && (
@@ -717,76 +794,82 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
             <div className="section-header">
               <span style={{ fontSize: 15, fontWeight: 700, color: "#111827" }}>Content</span>
               <div className="tab-bar">
-                <button className={`tab-btn${activeTab === "editor" ? " active" : ""}`} onClick={() => setActiveTab("editor")}>✏️ Editor</button>
-                <button className={`tab-btn${activeTab === "code" ? " active" : ""}`} onClick={() => setActiveTab("code")}>{"</>"} Code</button>
-                <button className={`tab-btn${activeTab === "split" ? " active" : ""}`} onClick={() => setActiveTab("split")}>⊟ Split</button>
+                <button className={`tab-btn${mode === "rich" ? " active" : ""}`} onClick={() => switchMode("rich")}>✏️ Rich Text</button>
+                <button className={`tab-btn${mode === "html" ? " active" : ""}`} onClick={() => switchMode("html")}>{"</>"} Custom HTML</button>
               </div>
             </div>
 
-            {(activeTab === "editor" || activeTab === "split") && (
-              <div className="toolbar">
-                <ToolbarButton active={editor?.isActive("bold")} onClick={() => editor?.chain().focus().toggleBold().run()} title="Bold"><b>B</b></ToolbarButton>
-                <ToolbarButton active={editor?.isActive("italic")} onClick={() => editor?.chain().focus().toggleItalic().run()} title="Italic"><i>I</i></ToolbarButton>
-                <ToolbarButton active={editor?.isActive("strike")} onClick={() => editor?.chain().focus().toggleStrike().run()} title="Strikethrough"><s>S</s></ToolbarButton>
-                <ToolbarButton active={editor?.isActive("code")} onClick={() => editor?.chain().focus().toggleCode().run()} title="Inline code">{"<>"}</ToolbarButton>
-                <span className="toolbar-sep" />
-                <ToolbarButton active={editor?.isActive("heading", { level: 2 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} title="Heading 2">H2</ToolbarButton>
-                <ToolbarButton active={editor?.isActive("heading", { level: 3 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()} title="Heading 3">H3</ToolbarButton>
-                <ToolbarButton active={editor?.isActive("heading", { level: 4 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()} title="Heading 4">H4</ToolbarButton>
-                <span className="toolbar-sep" />
-                <ToolbarButton active={editor?.isActive("bulletList")} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="Bullet list">• List</ToolbarButton>
-                <ToolbarButton active={editor?.isActive("orderedList")} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="Ordered list">1. List</ToolbarButton>
-                <ToolbarButton active={editor?.isActive("blockquote")} onClick={() => editor?.chain().focus().toggleBlockquote().run()} title="Blockquote">"</ToolbarButton>
-                <ToolbarButton active={editor?.isActive("codeBlock")} onClick={() => editor?.chain().focus().toggleCodeBlock().run()} title="Code block">{"</>"}</ToolbarButton>
-                <span className="toolbar-sep" />
-                <ToolbarButton
-                  active={editor?.isActive("link")}
-                  onClick={() => {
-                    const url = prompt("Enter URL:");
-                    if (url) editor?.chain().focus().setLink({ href: url }).run();
-                    else if (editor?.isActive("link")) editor.chain().focus().unsetLink().run();
-                  }}
-                  title="Link"
-                >🔗</ToolbarButton>
-                <ToolbarButton onClick={() => setLibraryMode("editor")} title="Pick from image library">🖼</ToolbarButton>
-                <ToolbarButton onClick={handleEditorImageUpload} disabled={uploading} title="Upload image from device">
-                  {uploading ? "⏳" : "📤"}
-                </ToolbarButton>
-                <span className="toolbar-sep" />
-                <ToolbarButton onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="Insert table">⊞ Table</ToolbarButton>
-                {editor?.isActive("table") && (
-                  <>
-                    <ToolbarButton onClick={() => editor.chain().focus().addColumnAfter().run()} title="Add column">+Col</ToolbarButton>
-                    <ToolbarButton onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column">-Col</ToolbarButton>
-                    <ToolbarButton onClick={() => editor.chain().focus().addRowAfter().run()} title="Add row">+Row</ToolbarButton>
-                    <ToolbarButton onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row">-Row</ToolbarButton>
-                  </>
-                )}
-                <span className="toolbar-sep" />
-                <ToolbarButton onClick={() => editor?.chain().focus().undo().run()} title="Undo">↩</ToolbarButton>
-                <ToolbarButton onClick={() => editor?.chain().focus().redo().run()} title="Redo">↪</ToolbarButton>
-              </div>
-            )}
-
-            <div style={{ display: "flex", minHeight: 420 }}>
-              {activeTab !== "code" && (
-                <div className="tiptap-wrapper" style={{ flex: 1, borderRight: activeTab === "split" ? "1px solid #e8eaed" : "none" }}>
+            {mode === "rich" ? (
+              <>
+                <div className="toolbar">
+                  <ToolbarButton active={editor?.isActive("bold")} onClick={() => editor?.chain().focus().toggleBold().run()} title="Bold"><b>B</b></ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("italic")} onClick={() => editor?.chain().focus().toggleItalic().run()} title="Italic"><i>I</i></ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("strike")} onClick={() => editor?.chain().focus().toggleStrike().run()} title="Strikethrough"><s>S</s></ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("code")} onClick={() => editor?.chain().focus().toggleCode().run()} title="Inline code">{"<>"}</ToolbarButton>
+                  <span className="toolbar-sep" />
+                  <ToolbarButton active={editor?.isActive("heading", { level: 2 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} title="Heading 2">H2</ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("heading", { level: 3 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()} title="Heading 3">H3</ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("heading", { level: 4 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()} title="Heading 4">H4</ToolbarButton>
+                  <span className="toolbar-sep" />
+                  <ToolbarButton active={editor?.isActive("bulletList")} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="Bullet list">• List</ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("orderedList")} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="Ordered list">1. List</ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("blockquote")} onClick={() => editor?.chain().focus().toggleBlockquote().run()} title="Blockquote">"</ToolbarButton>
+                  <ToolbarButton active={editor?.isActive("codeBlock")} onClick={() => editor?.chain().focus().toggleCodeBlock().run()} title="Code block">{"</>"}</ToolbarButton>
+                  <span className="toolbar-sep" />
+                  <ToolbarButton
+                    active={editor?.isActive("link")}
+                    onClick={() => {
+                      const url = prompt("Enter URL:");
+                      if (url) editor?.chain().focus().setLink({ href: url }).run();
+                      else if (editor?.isActive("link")) editor.chain().focus().unsetLink().run();
+                    }}
+                    title="Link"
+                  >🔗</ToolbarButton>
+                  <ToolbarButton onClick={() => setLibraryMode("editor")} title="Pick from image library">🖼</ToolbarButton>
+                  <ToolbarButton onClick={handleEditorImageUpload} disabled={uploading} title="Upload image from device">
+                    {uploading ? "⏳" : "📤"}
+                  </ToolbarButton>
+                  <span className="toolbar-sep" />
+                  <ToolbarButton onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="Insert table">⊞ Table</ToolbarButton>
+                  {editor?.isActive("table") && (
+                    <>
+                      <ToolbarButton onClick={() => editor.chain().focus().addColumnAfter().run()} title="Add column">+Col</ToolbarButton>
+                      <ToolbarButton onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column">-Col</ToolbarButton>
+                      <ToolbarButton onClick={() => editor.chain().focus().addRowAfter().run()} title="Add row">+Row</ToolbarButton>
+                      <ToolbarButton onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row">-Row</ToolbarButton>
+                    </>
+                  )}
+                  <span className="toolbar-sep" />
+                  <ToolbarButton onClick={() => editor?.chain().focus().undo().run()} title="Undo">↩</ToolbarButton>
+                  <ToolbarButton onClick={() => editor?.chain().focus().redo().run()} title="Redo">↪</ToolbarButton>
+                </div>
+                <div className="tiptap-wrapper">
                   <EditorContent editor={editor} style={{ height: "100%" }} />
                 </div>
-              )}
-              {activeTab !== "editor" && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-                    <div style={{ padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", background: "#f9fafb", borderBottom: "1px solid #e8eaed" }}>HTML</div>
-                    <textarea value={htmlContent} onChange={(e) => setHtmlContent(e.target.value)} onBlur={syncEditorFromHtml} style={{ flex: 1, fontFamily: "monospace", fontSize: 12, lineHeight: 1.6, padding: 14, border: "none", outline: "none", resize: "none", minHeight: 280, background: "#fff" }} placeholder="<p>HTML content...</p>" />
-                  </div>
-                  <div style={{ flex: "0 0 180px", borderTop: "1px solid #e8eaed", display: "flex", flexDirection: "column" }}>
-                    <div style={{ padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", background: "#f9fafb", borderBottom: "1px solid #e8eaed" }}>CSS (Scoped)</div>
-                    <textarea value={cssContent} onChange={(e) => setCssContent(e.target.value)} style={{ flex: 1, fontFamily: "monospace", fontSize: 12, lineHeight: 1.6, padding: 14, border: "none", outline: "none", resize: "none", background: "#fff" }} placeholder=".my-class { color: red; }" />
-                  </div>
+              </>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <div style={{ padding: "10px 16px", background: "#fef3c7", borderBottom: "1px solid #fde68a", fontSize: 12, color: "#78350f", lineHeight: 1.5 }}>
+                  <strong>Custom HTML mode.</strong> Paste full HTML — including <code>&lt;style&gt;</code> blocks, <code>&lt;svg&gt;</code>, classes, and inline styles. Nothing is stripped. Renders exactly as written on the published page.
                 </div>
-              )}
-            </div>
+                <textarea
+                  value={htmlContent}
+                  onChange={(e) => setHtmlContent(e.target.value)}
+                  spellCheck={false}
+                  style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.6, padding: 16, border: "none", outline: "none", resize: "vertical", minHeight: 360, background: "#fff", width: "100%", boxSizing: "border-box" }}
+                  placeholder={"<div id=\"my-report\">\n  <style>#my-report { ... }</style>\n  <h1>...</h1>\n</div>"}
+                />
+                <div style={{ borderTop: "1px solid #e8eaed", background: "#f9fafb" }}>
+                  <div style={{ padding: "8px 16px", fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 0.5 }}>Live preview</div>
+                  <iframe
+                    srcDoc={htmlContent || "<p style=\"font-family:sans-serif;color:#9ca3af;padding:20px;\">Preview appears here as you type…</p>"}
+                    sandbox="allow-same-origin"
+                    style={{ width: "100%", height: 520, border: "none", background: "#fff" }}
+                    title="HTML preview"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
