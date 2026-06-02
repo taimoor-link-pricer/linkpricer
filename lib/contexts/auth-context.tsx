@@ -82,6 +82,11 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
             router.replace(ROUTES.onboarding);
             return;
           }
+        } else if (res.status === 401) {
+          // Server session cookie is invalid/expired while Firebase still has a user.
+          // Sign out fully — onAuthStateChanged will re-fire with null and route to login.
+          await signOut().catch(() => {});
+          return;
         } else {
           // User exists in Firebase but not in PG yet — treat as new unboarded client
           setProfile({

@@ -341,7 +341,10 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
   useEffect(() => {
     if (isNew) return;
     fetch(`/api/admin/blog/posts/${id}`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((post: BlogPost) => {
         setTitle(post.title);
         setSlug(post.slug);
@@ -365,15 +368,25 @@ export default function BlogEditorPage({ params }: { params: Promise<{ id: strin
 
   // Sync loaded content into editor — runs whenever editor becomes ready OR content arrives,
   // whichever is last. The synced ref prevents double-loading.
+  // In HTML mode we deliberately skip the editor sync: running raw HTML through TipTap
+  // strips <style>/<svg>/custom classes, and emitUpdate would then overwrite htmlContent
+  // with that stripped version — destroying the user's draft on every reopen.
   useEffect(() => {
     if (!editor || !loadedContent || isNew || contentSynced.current) return;
-    editor.commands.setContent(loadedContent);
+    if (mode === "html") {
+      contentSynced.current = true;
+      return;
+    }
+    editor.commands.setContent(loadedContent, { emitUpdate: false });
     contentSynced.current = true;
-  }, [editor, loadedContent, isNew]);
+  }, [editor, loadedContent, isNew, mode]);
 
   // Load authors
   useEffect(() => {
-    fetch("/api/admin/blog/authors").then((r) => r.json()).then(setAuthors).catch(() => {});
+    fetch("/api/admin/blog/authors")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setAuthors(Array.isArray(data) ? data : []))
+      .catch(() => setAuthors([]));
   }, []);
 
   function handleTitleChange(val: string) {
