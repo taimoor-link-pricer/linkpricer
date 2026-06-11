@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { signOut } from "@/lib/firebase/auth-client";
 
 interface UserRow {
   id: string;
@@ -41,7 +42,6 @@ export default function AdminAnalyticsUsersPage() {
   const [activeSearch, setActiveSearch] = useState("");
   const [data, setData] = useState<PagedResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
 
@@ -52,7 +52,11 @@ export default function AdminAnalyticsUsersPage() {
       const params = new URLSearchParams({ page: String(p) });
       if (search) params.set("search", search);
       const res = await fetch(`/api/admin/analytics/users?${params}`);
-      if (res.status === 403) { setForbidden(true); return; }
+      if (res.status === 403) {
+        await signOut().catch(() => {});
+        router.replace("/login");
+        return;
+      }
       if (!res.ok) throw new Error("Failed to fetch");
       setData(await res.json());
     } catch {
@@ -60,7 +64,7 @@ export default function AdminAnalyticsUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     fetchUsers("", 1);
@@ -83,16 +87,6 @@ export default function AdminAnalyticsUsersPage() {
   function goToPage(p: number) {
     setPage(p);
     fetchUsers(activeSearch, p);
-  }
-
-  if (forbidden) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 48 }}>🔒</div>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#111827", margin: 0 }}>Access Restricted</h2>
-        <p style={{ color: "#6b7280", fontSize: 14, margin: 0 }}>This page is only accessible to admins.</p>
-      </div>
-    );
   }
 
   const totalPages = data?.totalPages ?? 1;
