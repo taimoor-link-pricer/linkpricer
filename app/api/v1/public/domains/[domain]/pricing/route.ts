@@ -70,7 +70,7 @@ export async function GET(
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // 3. Daily limit — resets each UTC day
+  // 3. Daily limit
   const dailyUsed = k.usage_date === today ? (k.request_count ?? 0) : 0;
   if (dailyUsed >= k.daily_limit) {
     return jsonError(
@@ -81,7 +81,7 @@ export async function GET(
     );
   }
 
-  // 4. Per-minute limit — count recent requests from log
+  // 4. Per-minute limit
   const minuteRows = await db.execute(sql`
     SELECT COUNT(*) AS cnt
     FROM api_request_logs
@@ -109,45 +109,143 @@ export async function GET(
   let httpStatus = 200;
 
   try {
-    // 6. Pricing — aggregate lowest price per niche across all marketplaces
-    const pricingRows = await db.execute(sql`
+    // 6. Check cache first
+    const cacheRows = await db.execute(sql`
       SELECT
-        MIN(min_price::float)             AS standard_lowest,
-        MIN(gambling_min_price::float)    AS gambling_lowest,
-        MIN(adult_min_price::float)       AS adult_lowest,
-        MIN(cbd_min_price::float)         AS cbd_lowest,
-        MIN(loan_min_price::float)        AS loan_lowest,
-        MIN(dating_min_price::float)      AS dating_lowest,
-        MIN(crypto_min_price::float)      AS crypto_lowest,
+        MIN(min_price::float)               AS standard_lowest,
+        MIN(gambling_min_price::float)      AS gambling_lowest,
+        MIN(adult_min_price::float)         AS adult_lowest,
+        MIN(cbd_min_price::float)           AS cbd_lowest,
+        MIN(loan_min_price::float)          AS loan_lowest,
+        MIN(dating_min_price::float)        AS dating_lowest,
+        MIN(crypto_min_price::float)        AS crypto_lowest,
         MIN(trading_forex_min_price::float) AS forex_lowest,
-        MAX(fetched_at)                   AS last_updated
+        MAX(fetched_at)                     AS last_updated
       FROM marketplace_price_cache
       WHERE domain = ${domain}
         AND available = true
         AND expires_at > NOW()
     `);
 
-    const pr = pricingRows.rows[0] ?? null;
-    const hasPricing = pr != null && pr.last_updated != null;
+    const cached = cacheRows.rows[0] ?? null;
+    const cacheHit = cached?.last_updated != null;
 
-    // 7. Domain metrics
+    // 7. If no cache, fetch from source tables
+    let pr: Record<string, unknown> | null = null;
+    let lastUpdated: string | null = null;
+
+    if (cacheHit) {
+      pr = cached;
+      lastUpdated = cached.last_updated as string;
+    } else {
+      // Query lp_marketplace_domains + lp_domain_price
+      const sourceRows = await db.execute(sql`
+        SELECT
+          d."marketPlace"                    AS marketplace_name,
+          MIN(p.price::float)                AS min_price,
+          MIN(p.gambling::float)             AS gambling_min,
+          MIN(p.adult::float)                AS adult_min,
+          MIN(p.cbd::float)                  AS cbd_min,
+          MIN(p.loan::float)                 AS loan_min,
+          MIN(p.dating::float)               AS dating_min,
+          MIN(p.crypto::float)               AS crypto_min,
+          MIN(p."tradingForex"::float)       AS trading_forex_min
+        FROM lp_marketplace_domains d
+        JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true
+        WHERE LOWER(d.w) = ${domain}
+          AND d."isActive" = true
+          AND d."deletedAt" IS NULL
+        GROUP BY d."marketPlace"
+      `);
+
+      if (sourceRows.rows.length > 0) {
+        // Aggregate MIN across all marketplaces for the response
+        const agg: Record<string, number | null> = {
+          standard_lowest: null,
+          gambling_lowest: null,
+          adult_lowest: null,
+          cbd_lowest: null,
+          loan_lowest: null,
+          dating_lowest: null,
+          crypto_lowest: null,
+          forex_lowest: null,
+        };
+
+        for (const row of sourceRows.rows as any[]) {
+          const pick = (cur: number | null, next: unknown) => {
+            const n = toPrice(next);
+            if (n == null) return cur;
+            return cur == null ? n : Math.min(cur, n);
+          };
+          agg.standard_lowest  = pick(agg.standard_lowest,  row.min_price);
+          agg.gambling_lowest  = pick(agg.gambling_lowest,  row.gambling_min);
+          agg.adult_lowest     = pick(agg.adult_lowest,     row.adult_min);
+          agg.cbd_lowest       = pick(agg.cbd_lowest,       row.cbd_min);
+          agg.loan_lowest      = pick(agg.loan_lowest,      row.loan_min);
+          agg.dating_lowest    = pick(agg.dating_lowest,    row.dating_min);
+          agg.crypto_lowest    = pick(agg.crypto_lowest,    row.crypto_min);
+          agg.forex_lowest     = pick(agg.forex_lowest,     row.trading_forex_min);
+        }
+
+        pr = agg;
+        lastUpdated = new Date().toISOString();
+
+        // Write to cache asynchronously (one row per marketplace, 24h TTL)
+        for (const row of sourceRows.rows as any[]) {
+          db.execute(sql`
+            INSERT INTO marketplace_price_cache (
+              domain, marketplace_name, min_price,
+              gambling_min_price, adult_min_price, cbd_min_price,
+              loan_min_price, dating_min_price, crypto_min_price,
+              trading_forex_min_price, available, fetched_at, expires_at
+            ) VALUES (
+              ${domain}, ${row.marketplace_name}, ${row.min_price},
+              ${row.gambling_min}, ${row.adult_min}, ${row.cbd_min},
+              ${row.loan_min}, ${row.dating_min}, ${row.crypto_min},
+              ${row.trading_forex_min}, true, NOW(), NOW() + INTERVAL '24 hours'
+            )
+            ON CONFLICT (domain, marketplace_name) DO UPDATE SET
+              min_price             = EXCLUDED.min_price,
+              gambling_min_price    = EXCLUDED.gambling_min_price,
+              adult_min_price       = EXCLUDED.adult_min_price,
+              cbd_min_price         = EXCLUDED.cbd_min_price,
+              loan_min_price        = EXCLUDED.loan_min_price,
+              dating_min_price      = EXCLUDED.dating_min_price,
+              crypto_min_price      = EXCLUDED.crypto_min_price,
+              trading_forex_min_price = EXCLUDED.trading_forex_min_price,
+              available             = true,
+              fetched_at            = NOW(),
+              expires_at            = NOW() + INTERVAL '24 hours'
+          `).catch(() => {});
+        }
+      }
+    }
+
+    // 8. Domain metrics — try lp_domain_metrics first, fall back to domains table
     const metricRows = await db.execute(sql`
-      SELECT domain_rating, org_traffic, ref_domains, country_main_traffic
-      FROM domains
-      WHERE domain = ${domain}
+      SELECT
+        m."domainRating"  AS domain_rating,
+        m."orgTraffic"    AS org_traffic,
+        m."refDomains"    AS ref_domains,
+        d.country         AS country
+      FROM lp_marketplace_domains d
+      LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
+      WHERE LOWER(d.w) = ${domain}
+        AND d."isActive" = true
+        AND d."deletedAt" IS NULL
       LIMIT 1
     `);
 
     const mr = metricRows.rows[0] ?? null;
 
-    if (!hasPricing && !mr) {
+    if (!pr && !mr) {
       httpStatus = 404;
       return jsonError("domain_not_found", "No data found for this domain.", 404);
     }
 
-    const response = {
+    return NextResponse.json({
       domain,
-      found: hasPricing,
+      found: pr != null,
       pricing: {
         standard:      { lowest_price: toPrice(pr?.standard_lowest),  currency: "USD" },
         gambling:      { lowest_price: toPrice(pr?.gambling_lowest),   currency: "USD" },
@@ -162,27 +260,24 @@ export async function GET(
         domain_rating:   mr?.domain_rating != null ? Number(mr.domain_rating) : null,
         organic_traffic: mr?.org_traffic != null ? Number(mr.org_traffic) : null,
         ref_domains:     mr?.ref_domains != null ? Number(mr.ref_domains) : null,
-        country:         (mr?.country_main_traffic as string) ?? null,
+        country:         (mr?.country as string) ?? null,
       },
-      last_updated: hasPricing
-        ? new Date(pr!.last_updated as string).toISOString().slice(0, 10)
+      last_updated: lastUpdated
+        ? new Date(lastUpdated).toISOString().slice(0, 10)
         : null,
-    };
+    });
 
-    return NextResponse.json(response);
   } catch (err) {
     console.error("[/api/v1/public/domains/pricing]", err);
     httpStatus = 500;
     return jsonError("internal_error", "An internal error occurred. Please retry.", 500);
   } finally {
-    // 8. Log the request regardless of outcome
     const latencyMs = Date.now() - startMs;
     db.execute(sql`
       INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
       VALUES (${k.id}, ${k.user_id}, ${domain}, ${httpStatus}, ${latencyMs})
     `).catch(() => {});
 
-    // 9. Increment daily usage counter
     db.execute(sql`
       UPDATE api_keys
       SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
