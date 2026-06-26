@@ -16,7 +16,9 @@ export async function POST(req: NextRequest) {
 
     const planConfig = PLANS[plan];
 
-    if (!planConfig.priceId) {
+    // Read price ID at request time to avoid build-time env var inlining
+    const priceId = process.env[`STRIPE_PRICE_${plan.toUpperCase()}`] ?? "";
+    if (!priceId) {
       return NextResponse.json({ error: "Plan price not configured." }, { status: 500 });
     }
 
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
-      line_items: [{ price: planConfig.priceId, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${origin}/developers/dashboard?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/developers/dashboard`,
       metadata: { userId, plan },
