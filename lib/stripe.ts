@@ -1,7 +1,16 @@
 import Stripe from "stripe";
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2026-06-24.dahlia",
+function getStripeInstance(): Stripe {
+  return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: "2026-06-24.dahlia",
+  });
+}
+
+// Lazy proxy — defers Stripe SDK initialization to request time, not build time.
+export const stripe = new Proxy({} as Stripe, {
+  get(_target, prop) {
+    return (getStripeInstance() as unknown as Record<string | symbol, unknown>)[prop];
+  },
 });
 
 export const PLANS = {
