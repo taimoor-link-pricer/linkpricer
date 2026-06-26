@@ -20,7 +20,7 @@ function hashKey(key: string): string {
 
 function toPrice(val: unknown): number | null {
   const n = Number(val);
-  return val == null || val === "" || isNaN(n) ? null : Math.round(n * 100) / 100;
+  return val == null || val === "" || isNaN(n) || n === 0 ? null : Math.round(n * 100) / 100;
 }
 
 function jsonError(code: string, message: string, status: number, extra?: Record<string, string>) {
