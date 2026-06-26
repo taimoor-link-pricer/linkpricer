@@ -59,6 +59,7 @@ function DashboardContent() {
   const [dataLoading, setDataLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [newKeyModal, setNewKeyModal] = useState(false);
+  const [usageRefreshing, setUsageRefreshing] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -120,6 +121,19 @@ function DashboardContent() {
       if (pollingRef.current) clearTimeout(pollingRef.current);
     };
   }, [firebaseUser, sessionId, fetchMe, pollForKey]);
+
+  async function refreshUsage() {
+    setUsageRefreshing(true);
+    try {
+      const res = await fetch("/api/developers/me");
+      if (res.ok) {
+        const d: MeData = await res.json();
+        setData((prev) => prev ? { ...prev, usage: d.usage } : d);
+      }
+    } finally {
+      setUsageRefreshing(false);
+    }
+  }
 
   async function handleSignOut() {
     await signOut();
@@ -205,6 +219,10 @@ function DashboardContent() {
         .db-no-key { text-align: center; padding: 32px; }
         .db-no-key p { color: #6b7280; font-size: 14px; margin-bottom: 20px; }
 
+        .db-refresh-btn { background: none; border: none; cursor: pointer; color: #9ca3af; padding: 2px; border-radius: 4px; display: flex; align-items: center; transition: color 0.15s; }
+        .db-refresh-btn:hover { color: #0052cc; }
+        .db-refresh-btn.spinning svg { animation: spin 0.7s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .db-usage-nums { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
         .db-usage-used { font-size: 28px; font-weight: 900; color: #111827; letter-spacing: -0.5px; }
         .db-usage-limit { font-size: 14px; color: #9ca3af; }
@@ -355,7 +373,15 @@ function DashboardContent() {
 
           {/* Usage */}
           <div className="db-card">
-            <div className="db-card-label">Usage this month</div>
+            <div className="db-card-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              Usage this month
+              <button className={`db-refresh-btn${usageRefreshing ? " spinning" : ""}`} onClick={refreshUsage} title="Refresh usage">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                  <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                </svg>
+              </button>
+            </div>
             {data ? (
               <>
                 <div className="db-usage-nums">
