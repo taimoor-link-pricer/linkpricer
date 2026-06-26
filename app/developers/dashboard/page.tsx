@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -42,6 +42,14 @@ const PLAN_DETAILS = {
 };
 
 export default function DeveloperDashboardPage() {
+  return (
+    <Suspense fallback={<CenteredSpinner />}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+
+function DashboardContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session_id");
 
