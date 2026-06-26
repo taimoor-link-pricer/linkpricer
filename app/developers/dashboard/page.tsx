@@ -1,0 +1,587 @@
+"use client";
+
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { auth } from "@/lib/firebase/client";
+import {
+  signInWithEmail,
+  signUpWithEmail,
+  startGoogleSignIn,
+  signOut,
+  getAuthErrorMessage,
+  isFirebaseError,
+} from "@/lib/firebase/auth-client";
+
+type PlanKey = "starter" | "growth" | "scale";
+
+interface MeData {
+  user: {
+    email: string;
+    name: string | null;
+    plan: PlanKey | null;
+    planName: string | null;
+    monthlyQuota: number | null;
+  };
+  apiKey: {
+    id: string;
+    name: string;
+    plainKeyTemp: string | null;
+    dailyLimit: number;
+    perMinuteLimit: number;
+    lastUsedAt: string | null;
+  } | null;
+  usage: { used: number; limit: number };
+}
+
+const PLAN_DETAILS = {
+  starter: { label: "Starter", price: "$49/mo", queries: "10,000 queries", rate: "60 req/min", planKey: "starter" as PlanKey },
+  growth:  { label: "Growth",  price: "$199/mo", queries: "100,000 queries", rate: "300 req/min", planKey: "growth" as PlanKey },
+  scale:   { label: "Scale",   price: "$799/mo", queries: "500,000 queries", rate: "1,000 req/min", planKey: "scale" as PlanKey },
+};
+
+export default function DeveloperDashboardPage() {
+  const searchParams = useSearchParams();
+  const sessionId = searchParams.get("session_id");
+
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [data, setData] = useState<MeData | null>(null);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [newKeyModal, setNewKeyModal] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchMe = useCallback(async () => {
+    setDataLoading(true);
+    try {
+      const res = await fetch("/api/developers/me");
+      if (res.ok) {
+        const d: MeData = await res.json();
+        setData(d);
+        if (d.apiKey?.plainKeyTemp) setNewKeyModal(true);
+      }
+    } finally {
+      setDataLoading(false);
+    }
+  }, []);
+
+  // Poll after checkout until the key appears (webhook is async)
+  const pollForKey = useCallback(() => {
+    let attempts = 0;
+    const poll = async () => {
+      attempts++;
+      const res = await fetch("/api/developers/me");
+      if (res.ok) {
+        const d: MeData = await res.json();
+        setData(d);
+        if (d.apiKey?.plainKeyTemp) {
+          setNewKeyModal(true);
+          return;
+        }
+      }
+      if (attempts < 8) {
+        pollingRef.current = setTimeout(poll, 2500);
+      }
+    };
+    pollingRef.current = setTimeout(poll, 2000);
+  }, []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      setAuthLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (firebaseUser) {
+      if (sessionId) {
+        // Fresh from checkout — start polling for the key
+        fetchMe();
+        pollForKey();
+      } else {
+        fetchMe();
+      }
+    }
+    return () => {
+      if (pollingRef.current) clearTimeout(pollingRef.current);
+    };
+  }, [firebaseUser, sessionId, fetchMe, pollForKey]);
+
+  async function handleSignOut() {
+    await signOut();
+    setFirebaseUser(null);
+    setData(null);
+  }
+
+  async function dismissNewKeyModal() {
+    setNewKeyModal(false);
+    await fetch("/api/developers/key-revealed", { method: "POST" });
+    setData((prev) => prev ? { ...prev, apiKey: prev.apiKey ? { ...prev.apiKey, plainKeyTemp: null } : null } : prev);
+  }
+
+  async function openBillingPortal() {
+    if (!firebaseUser) return;
+    setBillingLoading(true);
+    try {
+      const res = await fetch("/api/developers/billing-portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: firebaseUser.uid }),
+      });
+      const { url, error } = await res.json();
+      if (url) window.location.href = url;
+      else alert(error ?? "Could not open billing portal.");
+    } finally {
+      setBillingLoading(false);
+    }
+  }
+
+  async function startCheckout(plan: PlanKey) {
+    if (!firebaseUser) return;
+    setCheckoutLoading(plan);
+    try {
+      const res = await fetch("/api/developers/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: firebaseUser.uid, email: firebaseUser.email, plan }),
+      });
+      const { url, error } = await res.json();
+      if (url) window.location.href = url;
+      else alert(error ?? "Could not start checkout.");
+    } finally {
+      setCheckoutLoading(null);
+    }
+  }
+
+  function copyKey(key: string) {
+    navigator.clipboard.writeText(key);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  if (authLoading) return <CenteredSpinner />;
+  if (!firebaseUser) return <SignUpView onAuth={setFirebaseUser} />;
+  if (dataLoading && !data) return <CenteredSpinner />;
+
+  const usagePct = data ? Math.min(100, Math.round((data.usage.used / (data.usage.limit || 1)) * 100)) : 0;
+  const currentPlanKey = data?.user.plan ?? null;
+  const maskedKey = "lp_live_" + "•".repeat(24);
+
+  return (
+    <>
+      <style>{`
+        .db-wrap { max-width: 960px; margin: 0 auto; padding: 40px 32px 80px; }
+        .db-success-banner { background: #dcfce7; border: 1px solid #86efac; border-radius: 10px; padding: 14px 20px; margin-bottom: 24px; display: flex; align-items: center; gap: 10px; font-size: 14px; color: #166534; font-weight: 600; }
+        .db-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 36px; }
+        .db-welcome { font-size: 22px; font-weight: 800; color: #111827; letter-spacing: -0.4px; }
+        .db-welcome span { color: #6b7280; font-weight: 500; font-size: 14px; margin-left: 8px; }
+        .db-plan-badge { background: #e6f2ff; color: #0052cc; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; }
+        .db-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .db-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 28px; }
+        .db-card-full { grid-column: 1 / -1; }
+        .db-card-label { font-size: 11px; font-weight: 700; color: #9ca3af; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 16px; }
+        .db-key-row { display: flex; align-items: center; gap: 10px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 9px; padding: 12px 14px; }
+        .db-key-text { flex: 1; font-family: "JetBrains Mono", monospace; font-size: 13px; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .db-key-btn { padding: 6px 14px; border-radius: 7px; font-size: 12px; font-weight: 600; border: 1px solid #e5e7eb; background: #fff; color: #374151; cursor: pointer; transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
+        .db-key-btn:hover { background: #f3f4f6; }
+        .db-key-btn.primary { background: #0052cc; color: #fff; border-color: #0052cc; }
+        .db-key-btn.primary:hover { background: #003a99; }
+        .db-key-btn.success { background: #dcfce7; color: #166534; border-color: #86efac; }
+        .db-key-warn { font-size: 12px; color: #9ca3af; margin-top: 10px; }
+        .db-no-key { text-align: center; padding: 32px; }
+        .db-no-key p { color: #6b7280; font-size: 14px; margin-bottom: 20px; }
+
+        .db-usage-nums { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+        .db-usage-used { font-size: 28px; font-weight: 900; color: #111827; letter-spacing: -0.5px; }
+        .db-usage-limit { font-size: 14px; color: #9ca3af; }
+        .db-bar-track { background: #f3f4f6; border-radius: 99px; height: 10px; overflow: hidden; margin-bottom: 10px; }
+        .db-bar-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #0052cc, #3b82f6); transition: width 0.6s ease; }
+        .db-bar-fill.warn { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+        .db-usage-meta { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; }
+
+        .db-billing-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid #f3f4f6; }
+        .db-billing-row:last-child { border-bottom: none; padding-bottom: 0; }
+        .db-billing-label { font-size: 13px; color: #6b7280; }
+        .db-billing-value { font-size: 13px; font-weight: 600; color: #111827; }
+        .db-billing-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #166534; background: #dcfce7; padding: 3px 9px; border-radius: 20px; }
+        .db-billing-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #16a34a; display: inline-block; }
+        .db-billing-none { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #92400e; background: #fef3c7; padding: 3px 9px; border-radius: 20px; }
+        .db-manage-btn { display: flex; align-items: center; gap: 8px; padding: 11px 20px; background: #fff; border: 1.5px solid #0052cc; color: #0052cc; border-radius: 9px; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.15s; text-decoration: none; margin-top: 20px; justify-content: center; }
+        .db-manage-btn:hover { background: #f0f7ff; }
+        .db-manage-btn:disabled { opacity: 0.6; cursor: default; }
+
+        .db-plans-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+        .db-plan { border: 1.5px solid #e5e7eb; border-radius: 12px; padding: 20px; position: relative; transition: all 0.15s; }
+        .db-plan.current { border-color: #0052cc; background: #f0f7ff; }
+        .db-plan-current-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: #0052cc; color: #fff; font-size: 10px; font-weight: 700; padding: 2px 10px; border-radius: 20px; white-space: nowrap; }
+        .db-plan-name { font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 2px; }
+        .db-plan-price { font-size: 20px; font-weight: 900; color: #111827; letter-spacing: -0.5px; margin-bottom: 6px; }
+        .db-plan-queries { font-size: 12px; color: #6b7280; margin-bottom: 2px; }
+        .db-plan-rate { font-size: 11px; color: #9ca3af; }
+        .db-plan-btn { display: block; margin-top: 14px; padding: 8px; text-align: center; border-radius: 7px; font-size: 12px; font-weight: 600; text-decoration: none; cursor: pointer; border: none; transition: all 0.15s; width: 100%; }
+        .db-plan-btn-outline { background: #fff; color: #0052cc; border: 1px solid #0052cc; }
+        .db-plan-btn-outline:hover { background: #f0f7ff; }
+        .db-plan-btn-disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
+        .db-plan-btn:disabled { opacity: 0.6; cursor: default; }
+
+        .db-logout { font-size: 13px; color: #9ca3af; cursor: pointer; background: none; border: none; font-family: inherit; }
+        .db-logout:hover { color: #ef4444; }
+
+        /* One-time key modal */
+        .key-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+        .key-modal { background: #fff; border-radius: 16px; padding: 36px; max-width: 540px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
+        .key-modal-icon { width: 48px; height: 48px; background: #dcfce7; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+        .key-modal-title { font-size: 20px; font-weight: 800; color: #111827; margin: 0 0 6px; }
+        .key-modal-sub { font-size: 14px; color: #6b7280; margin: 0 0 24px; line-height: 1.5; }
+        .key-modal-warn { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #92400e; margin-bottom: 20px; display: flex; gap: 8px; }
+        .key-modal-key-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 9px; padding: 14px 16px; font-family: "JetBrains Mono", monospace; font-size: 13px; color: #111827; word-break: break-all; margin-bottom: 16px; }
+        .key-modal-actions { display: flex; gap: 12px; }
+        .key-modal-copy { flex: 1; padding: 12px; background: #0052cc; color: #fff; border: none; border-radius: 9px; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+        .key-modal-copy:hover { background: #003a99; }
+        .key-modal-copy.copied { background: #16a34a; }
+        .key-modal-done { padding: 12px 20px; background: #fff; color: #374151; border: 1px solid #e5e7eb; border-radius: 9px; font-weight: 600; font-size: 14px; cursor: pointer; }
+        .key-modal-done:hover { background: #f3f4f6; }
+
+        @media (max-width: 768px) {
+          .db-grid { grid-template-columns: 1fr; }
+          .db-plans-grid { grid-template-columns: 1fr; }
+          .db-wrap { padding: 24px 16px 60px; }
+          .db-card-full { grid-column: 1; }
+        }
+      `}</style>
+
+      {/* One-time key reveal modal */}
+      {newKeyModal && data?.apiKey?.plainKeyTemp && (
+        <div className="key-modal-overlay">
+          <div className="key-modal">
+            <div className="key-modal-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </div>
+            <div className="key-modal-title">Your API key is ready</div>
+            <div className="key-modal-sub">Copy this key and store it safely. For security reasons, it will only be shown once.</div>
+            <div className="key-modal-warn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{flexShrink:0,marginTop:1}}>
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              Never share this key or expose it in client-side code. Pass it as the <strong>x-api-key</strong> header in server-to-server requests only.
+            </div>
+            <div className="key-modal-key-box">{data.apiKey.plainKeyTemp}</div>
+            <div className="key-modal-actions">
+              <button
+                className={`key-modal-copy${copied ? " copied" : ""}`}
+                onClick={() => copyKey(data.apiKey!.plainKeyTemp!)}
+              >
+                {copied ? "Copied!" : "Copy API key"}
+              </button>
+              <button className="key-modal-done" onClick={dismissNewKeyModal}>
+                I've saved it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="db-wrap">
+        {sessionId && !newKeyModal && (
+          <div className="db-success-banner">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            {data?.apiKey ? "Payment successful! Your API key is active." : "Payment successful! Your API key is being generated…"}
+          </div>
+        )}
+
+        <div className="db-topbar">
+          <div>
+            <div className="db-welcome">
+              {data?.user.name || data?.user.email?.split("@")[0] || "Developer"}
+              <span>{data?.user.email || firebaseUser.email}</span>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {currentPlanKey && (
+              <span className="db-plan-badge">{data?.user.planName} plan</span>
+            )}
+            <button className="db-logout" onClick={handleSignOut}>Sign out</button>
+          </div>
+        </div>
+
+        <div className="db-grid">
+          {/* API Key */}
+          <div className="db-card db-card-full">
+            <div className="db-card-label">Your API Key</div>
+            {data?.apiKey ? (
+              <>
+                <div className="db-key-row">
+                  <span className="db-key-text">{maskedKey}</span>
+                  <span style={{ fontSize: 12, color: "#9ca3af", flexShrink: 0 }}>Shown once on activation</span>
+                </div>
+                <div className="db-key-warn">
+                  Your key was displayed once when your subscription activated. Pass it as{" "}
+                  <code style={{ background: "#f3f4f6", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>x-api-key</code>{" "}
+                  in every server-to-server request. If you lost it, contact support to regenerate.
+                </div>
+              </>
+            ) : (
+              <div className="db-no-key">
+                <p>You don't have an API key yet. Subscribe to a plan to get one.</p>
+                <button
+                  className="db-manage-btn"
+                  style={{ maxWidth: 220, margin: "0 auto" }}
+                  onClick={() => startCheckout("starter")}
+                  disabled={!!checkoutLoading}
+                >
+                  {checkoutLoading ? "Redirecting…" : "Subscribe to Starter — $49/mo"}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Usage */}
+          <div className="db-card">
+            <div className="db-card-label">Usage this month</div>
+            {data ? (
+              <>
+                <div className="db-usage-nums">
+                  <div className="db-usage-used">{data.usage.used.toLocaleString()}</div>
+                  <div className="db-usage-limit">/ {data.usage.limit.toLocaleString()} queries</div>
+                </div>
+                <div className="db-bar-track">
+                  <div className={`db-bar-fill${usagePct > 80 ? " warn" : ""}`} style={{ width: `${usagePct}%` }} />
+                </div>
+                <div className="db-usage-meta">
+                  <span style={{ fontWeight: 700, color: usagePct > 80 ? "#ef4444" : "#0052cc" }}>{usagePct}% used</span>
+                  <span>Resets {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                </div>
+              </>
+            ) : <div style={{ color: "#9ca3af", fontSize: 14 }}>No active plan</div>}
+          </div>
+
+          {/* Billing */}
+          <div className="db-card">
+            <div className="db-card-label">Billing</div>
+            <div className="db-billing-row">
+              <span className="db-billing-label">Status</span>
+              {currentPlanKey
+                ? <span className="db-billing-status">Active</span>
+                : <span className="db-billing-none">No subscription</span>}
+            </div>
+            <div className="db-billing-row">
+              <span className="db-billing-label">Plan</span>
+              <span className="db-billing-value">{data?.user.planName ?? "—"}</span>
+            </div>
+            {currentPlanKey && (
+              <button
+                className="db-manage-btn"
+                onClick={openBillingPortal}
+                disabled={billingLoading}
+                style={{ border: "none" }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M21 4H3a2 2 0 00-2 2v13a2 2 0 002 2h18a2 2 0 002-2V6a2 2 0 00-2-2z"/>
+                  <path d="M1 10h22"/>
+                </svg>
+                {billingLoading ? "Opening…" : "Manage billing & invoices"}
+              </button>
+            )}
+          </div>
+
+          {/* Plan */}
+          <div className="db-card db-card-full">
+            <div className="db-card-label">Plan</div>
+            <div className="db-plans-grid">
+              {Object.values(PLAN_DETAILS).map((plan) => {
+                const isCurrent = currentPlanKey === plan.planKey;
+                return (
+                  <div key={plan.planKey} className={`db-plan${isCurrent ? " current" : ""}`}>
+                    {isCurrent && <div className="db-plan-current-badge">Current plan</div>}
+                    <div className="db-plan-name">{plan.label}</div>
+                    <div className="db-plan-price">{plan.price}</div>
+                    <div className="db-plan-queries">{plan.queries}/mo</div>
+                    <div className="db-plan-rate">{plan.rate}</div>
+                    <button
+                      className={`db-plan-btn ${isCurrent ? "db-plan-btn-disabled" : "db-plan-btn-outline"}`}
+                      disabled={isCurrent || !!checkoutLoading}
+                      onClick={() => !isCurrent && startCheckout(plan.planKey)}
+                    >
+                      {isCurrent ? "Current" : checkoutLoading === plan.planKey ? "Redirecting…" : currentPlanKey ? "Switch plan" : "Get started"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CenteredSpinner() {
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 300 }}>
+      <div style={{ width: 32, height: 32, border: "3px solid #e5e7eb", borderTopColor: "#0052cc", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+function SignUpView({ onAuth }: { onAuth: (user: User) => void }) {
+  const [mode, setMode] = useState<"signup" | "login">("signup");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleEmailSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      let user;
+      if (mode === "signup") {
+        const namePart = email.split("@")[0];
+        user = await signUpWithEmail(namePart, "", email, password);
+      } else {
+        user = await signInWithEmail(email, password);
+      }
+      onAuth(user);
+    } catch (err) {
+      if (isFirebaseError(err)) setError(getAuthErrorMessage(err.code));
+      else setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogle() {
+    setError("");
+    setLoading(true);
+    try {
+      const { user } = await startGoogleSignIn();
+      onAuth(user);
+    } catch (err) {
+      if (isFirebaseError(err)) setError(getAuthErrorMessage(err.code));
+      else setError("Google sign-in failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <style>{`
+        .signup-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 900px; margin: 40px auto 40px; padding: 0 32px; }
+        .signup-step { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; text-align: center; }
+        .signup-step-num { width: 36px; height: 36px; border-radius: 50%; background: #e6f2ff; color: #0052cc; font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; }
+        .signup-step h3 { font-size: 14px; font-weight: 700; color: #111827; margin: 0 0 6px; }
+        .signup-step p { font-size: 12px; color: #6b7280; margin: 0; line-height: 1.5; }
+        .signup-box { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 40px; max-width: 460px; margin: 0 auto 80px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+        .signup-title { font-size: 20px; font-weight: 800; color: #111827; margin: 0 0 6px; text-align: center; }
+        .signup-sub { font-size: 13px; color: #6b7280; text-align: center; margin: 0 0 28px; }
+        .signup-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
+        .signup-divider-line { flex: 1; border-top: 1px solid #e5e7eb; }
+        .signup-divider-text { font-size: 12px; color: #9ca3af; }
+        .signup-input { width: 100%; padding: 11px 14px; border: 1px solid #e5e7eb; border-radius: 9px; font-size: 14px; outline: none; font-family: inherit; box-sizing: border-box; color: #111827; }
+        .signup-input:focus { border-color: #0052cc; box-shadow: 0 0 0 3px rgba(0,82,204,0.1); }
+        .signup-label { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; display: block; }
+        .signup-field { margin-bottom: 16px; }
+        .signup-btn { width: 100%; padding: 12px; background: #0052cc; color: #fff; border: none; border-radius: 9px; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+        .signup-btn:hover { background: #003a99; }
+        .signup-btn:disabled { opacity: 0.6; cursor: default; }
+        .signup-btn-google { width: 100%; padding: 11px; background: #fff; color: #374151; border: 1px solid #e5e7eb; border-radius: 9px; font-weight: 600; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.15s; }
+        .signup-btn-google:hover { background: #f9fafb; }
+        .signup-btn-google:disabled { opacity: 0.6; cursor: default; }
+        .signup-error { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #dc2626; margin-bottom: 16px; }
+        .signup-toggle { font-size: 13px; color: #9ca3af; text-align: center; margin-top: 16px; }
+        .signup-toggle a { color: #0052cc; font-weight: 600; cursor: pointer; text-decoration: none; }
+        @media (max-width: 768px) {
+          .signup-steps { grid-template-columns: 1fr; padding: 0 16px; }
+        }
+      `}</style>
+
+      <div className="signup-steps">
+        {[
+          { num: "1", title: "Create your account", body: "Sign up with email or Google. Free to start." },
+          { num: "2", title: "Choose a plan", body: "Pick the tier that fits your usage. Upgrade anytime." },
+          { num: "3", title: "Get your API key", body: "Copy your key and start querying immediately." },
+        ].map((s) => (
+          <div key={s.num} className="signup-step">
+            <div className="signup-step-num">{s.num}</div>
+            <h3>{s.title}</h3>
+            <p>{s.body}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="signup-box">
+        <div className="signup-title">{mode === "signup" ? "Get your API key" : "Welcome back"}</div>
+        <div className="signup-sub">
+          {mode === "signup" ? "Create a developer account to get started." : "Sign in to your developer account."}
+        </div>
+
+        <button className="signup-btn-google" onClick={handleGoogle} disabled={loading}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          {loading ? "Signing in…" : "Continue with Google"}
+        </button>
+
+        <div className="signup-divider">
+          <div className="signup-divider-line" />
+          <span className="signup-divider-text">or</span>
+          <div className="signup-divider-line" />
+        </div>
+
+        {error && <div className="signup-error">{error}</div>}
+
+        <form onSubmit={handleEmailSubmit}>
+          <div className="signup-field">
+            <label className="signup-label">Email address</label>
+            <input
+              className="signup-input"
+              type="email"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+          <div className="signup-field">
+            <label className="signup-label">Password</label>
+            <input
+              className="signup-input"
+              type="password"
+              placeholder="Min 6 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          <button className="signup-btn" type="submit" disabled={loading}>
+            {loading ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+          </button>
+        </form>
+
+        <div className="signup-toggle">
+          {mode === "signup" ? (
+            <>Already have an account? <a onClick={() => setMode("login")}>Sign in</a></>
+          ) : (
+            <>New here? <a onClick={() => setMode("signup")}>Create account</a></>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}

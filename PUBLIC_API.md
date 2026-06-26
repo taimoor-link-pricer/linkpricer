@@ -184,9 +184,9 @@ To validate with Karolis before build:
 | Plan | Monthly | Included queries | Overage | Rate limit |
 |---|---|---|---|---|
 | Free trial | $0 | 100 (one-time) | n/a | 5 req/min |
-| Starter | $49 | 10,000 | $0.005 | 60 req/min |
-| Growth | $199 | 100,000 | $0.003 | 300 req/min |
-| Scale | $799 | 500,000 | $0.0015 | 1000 req/min |
+| Starter | $10 | 10,000 | $0.005 | 60 req/min |
+| Growth | $25 | 100,000 | $0.003 | 300 req/min |
+| Scale | $50 | 500,000 | $0.0015 | 1000 req/min |
 | Enterprise | Custom | Custom | Custom | Custom + SLA |
 
 **Cost-per-query math (rough):**

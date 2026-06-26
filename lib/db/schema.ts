@@ -807,6 +807,9 @@ export const users = pgTable("users", {
 	status: varchar().default('live').notNull(),
 	vendorName: varchar("vendor_name"),
 	companyId: varchar("company_id"),
+	stripeCustomerId: varchar("stripe_customer_id"),
+	stripeSubscriptionId: varchar("stripe_subscription_id"),
+	stripePlan: varchar("stripe_plan"),
 }, (table) => [
 	foreignKey({
 			columns: [table.companyId],
