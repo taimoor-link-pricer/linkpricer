@@ -347,7 +347,7 @@ function DashboardContent() {
                   onClick={() => startCheckout("starter")}
                   disabled={!!checkoutLoading}
                 >
-                  {checkoutLoading ? "Redirecting…" : "Subscribe to Starter — $49/mo"}
+                  {checkoutLoading ? "Redirecting…" : "Subscribe to Starter — $10/mo"}
                 </button>
               </div>
             )}
