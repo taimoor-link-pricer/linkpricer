@@ -10,9 +10,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 });
 
 const PLANS = [
-  { key: "starter", name: "Starter",  amount: 4900,  quota: "10,000 queries/mo"  },
-  { key: "growth",  name: "Growth",   amount: 19900, quota: "100,000 queries/mo" },
-  { key: "scale",   name: "Scale",    amount: 79900, quota: "500,000 queries/mo" },
+  { key: "starter", name: "Starter", amount: 1000, quota: "1,000 queries/mo"  },
+  { key: "growth",  name: "Growth",  amount: 2000, quota: "2,500 queries/mo"  },
+  { key: "scale",   name: "Scale",   amount: 5000, quota: "10,000 queries/mo" },
 ];
 
 async function main() {

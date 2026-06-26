@@ -22,9 +22,9 @@ const ERROR_CODES = [
 ];
 
 const RATE_TIERS = [
-  { tier: "Starter", monthly: "10,000", perMin: "60", overage: "$0.006 / query" },
-  { tier: "Growth", monthly: "100,000", perMin: "300", overage: "$0.004 / query" },
-  { tier: "Scale", monthly: "500,000", perMin: "1,000", overage: "$0.002 / query" },
+  { tier: "Starter", monthly: "1,000",  perMin: "10", overage: "$0.012 / query" },
+  { tier: "Growth",  monthly: "2,500",  perMin: "20", overage: "$0.010 / query" },
+  { tier: "Scale",   monthly: "10,000", perMin: "60", overage: "$0.007 / query" },
 ];
 
 const RESPONSE_EXAMPLE = `{

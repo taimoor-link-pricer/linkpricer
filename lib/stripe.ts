@@ -16,23 +16,23 @@ export const stripe = new Proxy({} as Stripe, {
 export const PLANS = {
   starter: {
     name: "Starter",
-    priceUsd: 49,
-    monthlyQuota: 10_000,
-    perMinuteLimit: 60,
+    priceUsd: 10,
+    monthlyQuota: 1_000,
+    perMinuteLimit: 10,
     priceId: process.env.STRIPE_PRICE_STARTER ?? "",
   },
   growth: {
     name: "Growth",
-    priceUsd: 199,
-    monthlyQuota: 100_000,
-    perMinuteLimit: 300,
+    priceUsd: 20,
+    monthlyQuota: 2_500,
+    perMinuteLimit: 20,
     priceId: process.env.STRIPE_PRICE_GROWTH ?? "",
   },
   scale: {
     name: "Scale",
-    priceUsd: 799,
-    monthlyQuota: 500_000,
-    perMinuteLimit: 1_000,
+    priceUsd: 50,
+    monthlyQuota: 10_000,
+    perMinuteLimit: 60,
     priceId: process.env.STRIPE_PRICE_SCALE ?? "",
   },
 } as const;
