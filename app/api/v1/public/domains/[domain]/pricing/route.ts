@@ -243,19 +243,27 @@ export async function GET(
       return jsonError("domain_not_found", "No data found for this domain.", 404);
     }
 
+    const allPricing = {
+      standard:      toPrice(pr?.standard_lowest),
+      gambling:      toPrice(pr?.gambling_lowest),
+      adult:         toPrice(pr?.adult_lowest),
+      cbd:           toPrice(pr?.cbd_lowest),
+      loan:          toPrice(pr?.loan_lowest),
+      dating:        toPrice(pr?.dating_lowest),
+      crypto:        toPrice(pr?.crypto_lowest),
+      trading_forex: toPrice(pr?.forex_lowest),
+    };
+
+    const pricing = Object.fromEntries(
+      Object.entries(allPricing)
+        .filter(([, v]) => v !== null)
+        .map(([k, v]) => [k, { lowest_price: v, currency: "USD" }])
+    );
+
     return NextResponse.json({
       domain,
       found: pr != null,
-      pricing: {
-        standard:      { lowest_price: toPrice(pr?.standard_lowest),  currency: "USD" },
-        gambling:      { lowest_price: toPrice(pr?.gambling_lowest),   currency: "USD" },
-        adult:         { lowest_price: toPrice(pr?.adult_lowest),      currency: "USD" },
-        cbd:           { lowest_price: toPrice(pr?.cbd_lowest),        currency: "USD" },
-        loan:          { lowest_price: toPrice(pr?.loan_lowest),       currency: "USD" },
-        dating:        { lowest_price: toPrice(pr?.dating_lowest),     currency: "USD" },
-        crypto:        { lowest_price: toPrice(pr?.crypto_lowest),     currency: "USD" },
-        trading_forex: { lowest_price: toPrice(pr?.forex_lowest),      currency: "USD" },
-      },
+      pricing,
       metrics: {
         domain_rating:   mr?.domain_rating != null ? Number(mr.domain_rating) : null,
         organic_traffic: mr?.org_traffic != null ? Number(mr.org_traffic) : null,
