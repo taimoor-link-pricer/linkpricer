@@ -22,9 +22,9 @@ const ERROR_CODES = [
 ];
 
 const RATE_TIERS = [
-  { tier: "Starter", monthly: "1,000",  perMin: "10", overage: "$0.012 / query" },
-  { tier: "Growth",  monthly: "2,500",  perMin: "20", overage: "$0.010 / query" },
-  { tier: "Scale",   monthly: "10,000", perMin: "60", overage: "$0.007 / query" },
+  { tier: "Starter", price: "$10/mo", monthly: "1,000",  perMin: "10" },
+  { tier: "Growth",  price: "$20/mo", monthly: "2,500",  perMin: "20" },
+  { tier: "Scale",   price: "$50/mo", monthly: "10,000", perMin: "60" },
 ];
 
 const RESPONSE_EXAMPLE = `{
@@ -33,9 +33,7 @@ const RESPONSE_EXAMPLE = `{
   "pricing": {
     "standard": { "lowest_price": 150.00, "currency": "USD" },
     "gambling": { "lowest_price": 350.00, "currency": "USD" },
-    "adult":    { "lowest_price": null,   "currency": "USD" },
-    "cbd":      { "lowest_price": null,   "currency": "USD" },
-    "loan":     { "lowest_price": null,   "currency": "USD" }
+    "crypto":   { "lowest_price": 480.00, "currency": "USD" }
   },
   "metrics": {
     "domain_rating":   45,
@@ -320,21 +318,21 @@ export default function DocsPage() {
             </p>
             <table className="docs-table">
               <thead>
-                <tr><th>Plan</th><th>Monthly quota</th><th>Per-minute limit</th><th>Overage</th></tr>
+                <tr><th>Plan</th><th>Price</th><th>Monthly quota</th><th>Per-minute limit</th></tr>
               </thead>
               <tbody>
                 {RATE_TIERS.map((r) => (
                   <tr key={r.tier}>
                     <td style={{ fontWeight: 600 }}>{r.tier}</td>
-                    <td>{r.monthly}</td>
+                    <td>{r.price}</td>
+                    <td>{r.monthly} queries</td>
                     <td>{r.perMin} req/min</td>
-                    <td style={{ color: "#0052cc", fontWeight: 600 }}>{r.overage}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div className="docs-callout">
-              Monthly quotas reset on the 1st of each calendar month (UTC). Overages are billed automatically via Stripe at the end of the month.
+              Monthly quotas reset on the 1st of each calendar month (UTC). Requests beyond your monthly quota return a <code className="docs-inline-code">429</code> until the next reset.
             </div>
           </section>
 

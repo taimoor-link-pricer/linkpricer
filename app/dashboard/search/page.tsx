@@ -41,7 +41,11 @@ function priceFmt(usd: number | null, cur: Currency): string {
 }
 
 function withFee(p: number): number {
-  return Math.round(p * 1.15);
+  // Rounding to a whole currency unit can erase the 15% margin entirely on cheap
+  // prices (e.g. 1.21 * 1.15 = 1.39, which rounds down to 1 — below source price).
+  // Math.floor(p) + 1 guarantees at least one whole unit of real margin in that
+  // case, while leaving normal-priced offers unchanged.
+  return Math.max(Math.round(p * 1.15), Math.floor(p) + 1);
 }
 
 function countryFlag(code: string): string {
@@ -168,7 +172,7 @@ function ExpandedPanel({
   }
 
   return (
-    <div style={{ background: "#f8f9fc", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, padding: "20px 24px" }}>
+    <div data-tour="offers" style={{ background: "#f8f9fc", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, padding: "20px 24px" }}>
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -619,17 +623,27 @@ function ResultsTable({
   notFound,
   currency,
   onAddToCart,
+  forceExpandDomain,
 }: {
   results: Domain[];
   notFound: string[];
   currency: Currency;
   onAddToCart: (item: CartItem) => void;
+  forceExpandDomain?: string;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterOpen, setFilterOpen] = useState(false);
+
+  // Onboarding tour step 3 needs a row already expanded so it has something
+  // to spotlight ([data-tour="offers"] only exists once a row is open).
+  useEffect(() => {
+    if (forceExpandDomain) {
+      setExpanded((prev) => (prev.has(forceExpandDomain) ? prev : new Set(prev).add(forceExpandDomain)));
+    }
+  }, [forceExpandDomain]);
 
   function toggleExpand(domain: string) {
     setExpanded((prev) => {
@@ -1394,6 +1408,136 @@ function ProfileMenu() {
   );
 }
 
+// ─── Onboarding tour (pinned tooltip + spotlight) ──────────────────────────────
+// Ported from v1-interactive/v1-app.jsx's `Tour` component — a spotlight
+// overlay that highlights the real UI element for each step (via a
+// `data-tour="..."` selector), auto-scrolls it into view, and drives a
+// 3-step walkthrough with canned illustrative data so step 3 always has
+// something to show even if the user hasn't run a real search yet.
+type TourStep = {
+  selector: string;
+  title: string;
+  body: string;
+  onEnter?: () => void;
+};
+
+function Tour({
+  steps,
+  stepIndex,
+  setStepIndex,
+  onClose,
+  onFinish,
+}: {
+  steps: TourStep[];
+  stepIndex: number;
+  setStepIndex: (i: number) => void;
+  onClose: () => void;
+  onFinish: () => void;
+}) {
+  const step = steps[stepIndex];
+  const [rect, setRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+
+  useEffect(() => { step?.onEnter?.(); }, [stepIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let raf: number;
+    const measure = () => {
+      const el = step && document.querySelector(step.selector);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+      }
+      raf = requestAnimationFrame(measure);
+    };
+    measure();
+    return () => cancelAnimationFrame(raf);
+  }, [stepIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const el = step && document.querySelector(step.selector);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        const y = window.scrollY + r.top - 240;
+        window.scrollTo(0, Math.max(0, y));
+      }
+    }, 130);
+    return () => clearTimeout(t);
+  }, [stepIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const last = stepIndex === steps.length - 1;
+  const pad = 8;
+  const hole = rect
+    ? { top: rect.top - pad, left: rect.left - pad, width: rect.width + pad * 2, height: rect.height + pad * 2 }
+    : null;
+
+  const btnPrimary: React.CSSProperties = { padding: "7px 14px", background: C.accent, color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 };
+  const btnGhost: React.CSSProperties = { padding: "7px 14px", background: "transparent", color: C.ink2, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 3000 }}>
+      <div style={{ position: "absolute", inset: 0 }} onClick={(e) => e.stopPropagation()} />
+      {hole && (
+        <div
+          style={{
+            position: "fixed", top: hole.top, left: hole.left, width: hole.width, height: hole.height,
+            borderRadius: 12, boxShadow: "0 0 0 9999px rgba(15,22,32,0.60)", border: `2px solid ${C.accent}`,
+            pointerEvents: "none", transition: "top 0.15s, left 0.15s, width 0.15s, height 0.15s",
+          }}
+        />
+      )}
+      {rect && (
+        <div style={{ position: "fixed", top: 22, left: "50%", transform: "translateX(-50%)", zIndex: 3002, background: "#fff", borderRadius: 14, boxShadow: "0 12px 32px rgba(15,22,32,0.22)", border: `1px solid ${C.line}`, padding: "16px 18px", width: 340 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: C.accent, whiteSpace: "nowrap" }}>
+              Step {stepIndex + 1} of {steps.length}
+            </div>
+            <button onClick={onClose} aria-label="Close tour" style={{ border: "none", background: "transparent", cursor: "pointer", color: C.mute, padding: 0, fontSize: 16, lineHeight: 1 }}>×</button>
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.ink, marginBottom: 6 }}>{step.title}</div>
+          <div style={{ fontSize: 13, color: C.ink2, lineHeight: 1.55, marginBottom: 16 }}>{step.body}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              {steps.map((_, i) => (
+                <div key={i} style={{ width: 7, height: 7, borderRadius: 999, background: i === stepIndex ? C.accent : C.mute2 }} />
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {stepIndex > 0 && <button onClick={() => setStepIndex(stepIndex - 1)} style={btnGhost}>Back</button>}
+              {!last
+                ? <button onClick={() => setStepIndex(stepIndex + 1)} style={btnPrimary}>Next</button>
+                : <button onClick={onFinish} style={btnPrimary}>✓ Got it</button>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Canned illustrative row so step 3 ("Compare & order") always has something
+// to spotlight, even if the user hasn't run a real search yet.
+const TOUR_DEMO_ROW: Domain = {
+  domain: "forbes.com",
+  country: "US",
+  lang: "EN",
+  category: "Business / Finance",
+  dr: 94,
+  drTrend: "up",
+  traffic: 71_000_000,
+  keywords: 8_400_000,
+  refDomains: 1_800_000,
+  grade: "A+",
+  score: 92,
+  bestPrice: 1200,
+  yourPrice: null,
+  offers: [
+    { name: "Vendor: John D.", type: "Vendor", updated: "04-05-2026 11:00", minPrice: 1200, maxPrice: 1200, quality: 3, delivery: 14, tat: 7, link: "Dofollow", example: null },
+    { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1300, maxPrice: 1450, quality: 5, delivery: 10, tat: 5, link: "Dofollow", example: null },
+    { name: "Getlinks", type: "DB", updated: "05-05-2026 09:12", minPrice: 1395, maxPrice: 1395, quality: 4, delivery: 7, tat: 4, link: "Dofollow", example: null },
+  ],
+};
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 function SearchPageInner() {
   const [pasteValue, setPasteValue] = useState("");
@@ -1408,6 +1552,14 @@ function SearchPageInner() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [analyzeHover, setAnalyzeHover] = useState(false);
+
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+  const [tourInjectedResults, setTourInjectedResults] = useState(false);
+  const [tourSeen, setTourSeen] = useState(() => {
+    try { return typeof window !== "undefined" && window.localStorage.getItem("lp_analyze_tour_seen") === "1"; }
+    catch { return false; }
+  });
 
   const RATES: Record<Currency, number> = { USD: 1, EUR: 0.92, GBP: 0.79 };
 
@@ -1486,12 +1638,61 @@ function SearchPageInner() {
 
   const nicheLabel = NICHES.find((n) => n.id === niche)?.label ?? "General";
 
+  function startTour() {
+    setTourStep(0);
+    setTourActive(true);
+  }
+  function endTour() {
+    setTourActive(false);
+    try { window.localStorage.setItem("lp_analyze_tour_seen", "1"); } catch { /* noop */ }
+    setTourSeen(true);
+    if (tourInjectedResults) {
+      setResults(null);
+      setNotFound([]);
+      setTourInjectedResults(false);
+    }
+  }
+  const finishTour = endTour;
+
+  const tourSteps: TourStep[] = [
+    {
+      selector: '[data-tour="paste"]',
+      title: "1. Add your domains",
+      body: 'Add the domains you want to research — up to 200, one per line. For example, forbes.com. Paste a whole list, or use the quick-add chips below the box.',
+      onEnter: () => {
+        setPasteValue("forbes.com\ntechcrunch.com\nhealthline.com");
+        if (tourInjectedResults) { setResults(null); setNotFound([]); setTourInjectedResults(false); }
+      },
+    },
+    {
+      selector: '[data-tour="analyze"]',
+      title: "2. Click Analyze",
+      body: "Hit Analyze and we'll pull live prices and conditions from every marketplace that stocks your domains.",
+    },
+    {
+      selector: '[data-tour="offers"]',
+      title: "3. Compare & order in one place",
+      body: "Expand any domain to compare every marketplace side by side — price, delivery and link type. Found the best deal? Place the order right here in Linkpricer and we handle the direct connection with every supplier for you. No chasing, no back-and-forth — just the best price.",
+      onEnter: () => {
+        if (results === null) {
+          setResults([TOUR_DEMO_ROW]);
+          setNotFound([]);
+          setTourInjectedResults(true);
+        }
+      },
+    },
+  ];
+
   return (
     <>
       <style>{`
         @keyframes lp-spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
       `}</style>
+
+      {tourActive && (
+        <Tour steps={tourSteps} stepIndex={tourStep} setStepIndex={setTourStep} onClose={endTour} onFinish={finishTour} />
+      )}
 
       {cartOpen && cartItems.length > 0 && (
         <CartPopup
@@ -1524,30 +1725,25 @@ function SearchPageInner() {
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
-            <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / domain analysis</span>
+            <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / analyze</span>
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {([
               { label: "Analyze", href: null },
-              { label: "Lists", href: "/dashboard/favorites" },
+              { label: "Related Sites", href: "/dashboard/related-sites" },
+              { label: "Favorites", href: "/dashboard/favorites" },
               { label: "Orders", href: "/dashboard/orders" },
-              { label: "Vendors", href: null },
-              { label: "Reports", href: null },
             ] as { label: string; href: string | null }[]).map(({ label, href }) =>
               href ? (
                 <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: C.mute, background: "transparent", textDecoration: "none" }}>
                   {label}
                 </Link>
               ) : (
-                <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "default", color: label === "Analyze" ? C.ink : C.mute, background: label === "Analyze" ? "#eef0f4" : "transparent" }}>
+                <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "default", color: C.ink }}>
                   {label}
                 </span>
               )
             )}
-            <span style={{ width: 1, height: 20, background: C.line, margin: "0 10px" }} />
-            <button style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 13px", border: `1.5px solid ${C.line}`, borderRadius: 8, background: "rgba(15,22,32,0.04)", fontSize: 12.5, fontWeight: 700, color: C.ink2, cursor: "pointer" }}>
-              🔍 Search
-            </button>
             <ProfileMenu />
           </nav>
         </header>
@@ -1623,6 +1819,21 @@ function SearchPageInner() {
             </div>
             <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
               <button
+                onClick={startTour}
+                style={{
+                  padding: "7px 14px",
+                  border: `1px solid ${C.line}`,
+                  borderRadius: 8,
+                  background: "#fff",
+                  color: C.ink2,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                + How to use
+              </button>
+              <button
                 style={{
                   padding: "7px 14px",
                   border: `1px solid ${C.line}`,
@@ -1664,6 +1875,7 @@ function SearchPageInner() {
           >
             {/* Paste area */}
             <div
+              data-tour="paste"
               style={{
                 background: "#fff",
                 border: `1px solid ${C.line}`,
@@ -1700,7 +1912,7 @@ function SearchPageInner() {
                       fontWeight: 700,
                     }}
                   >
-                    {domainCount}/{MAX_DOMAINS} domains
+                    {domainCount} /{MAX_DOMAINS} domains
                   </span>
                   {domainCount > MAX_DOMAINS && (
                     <span style={{ background: "#fee2e2", color: C.bad, borderRadius: 99, padding: "2px 9px", fontSize: 11, fontWeight: 700 }}>
@@ -1853,6 +2065,7 @@ function SearchPageInner() {
 
               {/* Analyze button */}
               <button
+                data-tour="analyze"
                 disabled={domainCount === 0 || analyzing}
                 onMouseEnter={() => setAnalyzeHover(true)}
                 onMouseLeave={() => setAnalyzeHover(false)}
@@ -1924,6 +2137,7 @@ function SearchPageInner() {
             notFound={notFound}
             currency={currency}
             onAddToCart={handleAddToCart}
+            forceExpandDomain={tourActive && tourStep === 2 ? TOUR_DEMO_ROW.domain : undefined}
           />
         )}
 

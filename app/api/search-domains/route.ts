@@ -56,7 +56,11 @@ export async function GET(req: NextRequest) {
       const traffic = r.traffic != null ? Number(r.traffic) : null;
       const grade = computeGrade(dr, traffic);
       const bestPrice = r.best_price != null ? Number(r.best_price) : null;
-      const ourPrice = bestPrice != null ? Math.round(bestPrice * 1.15) : null;
+      // Rounding to a whole currency unit can erase the 15% margin entirely on
+      // cheap prices (e.g. 1.21 * 1.15 = 1.39, rounds down to 1 — below source
+      // price). Math.floor(price) + 1 guarantees at least one whole unit of real
+      // margin in that case, while leaving normal-priced offers unchanged.
+      const ourPrice = bestPrice != null ? Math.max(Math.round(bestPrice * 1.15), Math.floor(bestPrice) + 1) : null;
 
       return {
         id: `D${i}`,

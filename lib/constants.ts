@@ -8,6 +8,8 @@ export const SOCIAL_PROOF_LABEL = "SEO Strategists";
 
 export const ROUTES = {
   home: "/",
+  about: "/about",
+  contact: "/contact",
   login: "/login",
   signup: "/signup",
   forgotPassword: "/forgot-password",

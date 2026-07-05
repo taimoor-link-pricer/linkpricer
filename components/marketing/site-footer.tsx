@@ -1,84 +1,63 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { ROUTES } from "@/lib/constants";
 
-const FOOTER_COLS = [
-  {
-    heading: "Linkpricer",
-    links: [
-      { label: "Home", href: "/" },
-      { label: "App", href: "/dashboard" },
-      { label: "About", href: "/about" },
-    ],
-  },
-  {
-    heading: "Product",
-    links: [
-      { label: "Marketplaces", href: "/marketplaces" },
-      { label: "Blog", href: "/blog" },
-      { label: "API Docs", href: "/api-docs" },
-    ],
-  },
-  {
-    heading: "Company",
-    links: [
-      { label: "About", href: "/about" },
-      { label: "Contact", href: "/contact" },
-    ],
-  },
-  {
-    heading: "Legal",
-    links: [
-      { label: "Privacy Policy", href: "/privacy" },
-      { label: "Terms of Service", href: "/terms" },
-      { label: "DPA", href: "/dpa" },
-    ],
-  },
-  {
-    heading: "Support",
-    links: [
-      { label: "Help center", href: "/help" },
-      { label: "Contact us", href: "/contact" },
-    ],
-  },
-];
+const col: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 0 };
+const h5: React.CSSProperties = { margin: "0 0 14px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "var(--lp-mute)" };
+const lnk: React.CSSProperties = { textDecoration: "none", color: "var(--lp-ink-3)", fontSize: 14, padding: "5px 0" };
 
 export function SiteFooter() {
+  const pathname = usePathname();
+
+  // Next.js only auto-scrolls when the URL hash actually changes, so a second
+  // click to the same section (after scrolling away) would otherwise no-op.
+  // Scroll manually whenever we're already on the homepage.
+  const scrollToSection = (id: string) => (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (pathname !== ROUTES.home) return;
+    e.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.history.replaceState(null, "", `#${id}`);
+  };
+
   return (
     <>
       <style>{`
-        .footer-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 40px; margin-bottom: 40px; }
-        .footer-root { padding: 56px 40px 24px; }
-        @media (max-width: 1024px) {
-          .footer-grid { grid-template-columns: repeat(3, 1fr); gap: 28px; }
-        }
-        @media (max-width: 640px) {
-          .footer-root { padding: 40px 16px 20px; }
-          .footer-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
+        .lp-foot-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 32px; }
+        @media (max-width: 760px) {
+          .lp-foot-grid { grid-template-columns: 1fr 1fr !important; gap: 28px !important; }
         }
       `}</style>
-      <footer className="footer-root" style={{ background: "#1a202c", color: "#9ca3af", borderTop: "1px solid #e8eaed" }}>
-        <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-          <div className="footer-grid">
-            {FOOTER_COLS.map((col) => (
-              <div key={col.heading}>
-                <h4 style={{ color: "#ffffff", fontSize: 13, fontWeight: 700, margin: "0 0 12px" }}>{col.heading}</h4>
-                {col.links.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    style={{ display: "block", margin: "9px 0", textDecoration: "none", color: "#9ca3af", fontSize: 13, transition: "color 0.2s" }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = "#ffffff"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = "#9ca3af"; }}
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-              </div>
-            ))}
+      <footer style={{ borderTop: "1px solid var(--lp-line)", marginTop: 80, background: "var(--lp-bg-3)" }}>
+        <div className="lp-foot-grid" style={{ maxWidth: 1180, margin: "0 auto", padding: "48px 24px 36px" }}>
+          <div>
+            <span style={{ display: "block", fontWeight: 800, color: "#000", fontSize: 19, letterSpacing: -0.4, marginBottom: 12 }}>Linkpricer</span>
+            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: "var(--lp-mute)", maxWidth: 260 }}>Every backlink marketplace in one search. Compare prices, see the best deal, and order directly.</p>
           </div>
-          <div style={{ borderTop: "1px solid #374151", paddingTop: 20, textAlign: "center", fontSize: 12 }}>
-            <p style={{ margin: 0 }}>© 2026 Linkpricer. All rights reserved.</p>
+          <div style={col}>
+            <h5 style={h5}>Product</h5>
+            <Link href={`${ROUTES.home}#domain-analysis`} style={lnk} onClick={scrollToSection("domain-analysis")}>Domain analysis</Link>
+            <Link href={`${ROUTES.home}#related-sites`} style={lnk} onClick={scrollToSection("related-sites")}>Related sites</Link>
+            <Link href={`${ROUTES.home}#top`} style={lnk}>Pricing</Link>
+          </div>
+          <div style={col}>
+            <h5 style={h5}>Resources</h5>
+            <Link href="/docs" style={lnk}>Docs</Link>
+            <Link href="/blog" style={lnk}>Blog</Link>
+            <Link href="/blog?type=guides" style={lnk}>Guides</Link>
+          </div>
+          <div style={col}>
+            <h5 style={h5}>Company</h5>
+            <Link href={ROUTES.about} style={lnk}>About</Link>
+            <Link href={ROUTES.contact} style={lnk}>Contact</Link>
+            <Link href={ROUTES.login} style={lnk}>Log in</Link>
+          </div>
+        </div>
+        <div style={{ borderTop: "1px solid var(--lp-line)" }}>
+          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap", fontSize: 13, color: "var(--lp-mute)" }}>
+            <span>© 2026 Linkpricer, UAB. All rights reserved.</span>
+            <span>Reg. No. 306947938 · Kaunas, Lithuania</span>
           </div>
         </div>
       </footer>

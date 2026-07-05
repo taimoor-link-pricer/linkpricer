@@ -27,49 +27,115 @@ interface FormData {
   currentMethod: Method[];
 }
 
-const USER_TYPE_BENEFITS: Record<string, { title: string; text: string }> = {
-  "SEO agency": {
-    title: "Built for agencies",
-    text: "Agencies save up to 46% on link costs by comparing prices across 20+ websites in one place. Run more client campaigns in less time with bulk price comparison and exportable reports.",
-  },
-  "Freelancer": {
-    title: "Compete with the big players",
-    text: "Freelancers using Linkpricer manage 6× larger budgets while saving up to 68% compared to buying direct. Search once, compare everything, order in one place — and look professional to clients.",
-  },
-  "In-house marketer": {
-    title: "Justify every euro to finance",
-    text: "In-house teams report 42% lower cost per backlink and get clean reports for budget reviews. Replace multiple vendor logins with a single dashboard — every link, supplier, and invoice in one place.",
-  },
-  "Brand owner": {
-    title: "Built for non-SEO specialists",
-    text: "Brand owners save 52% on average by seeing every backlink option in one place. All the prices, all the website data — laid out clearly so you can decide what's worth buying for your brand.",
-  },
-  "Other": {
-    title: "Adaptable for any use case",
-    text: "Whatever your role, Linkpricer adapts. Our users typically save 40–65% on link spend and cut sourcing time significantly. Tell us your use case and we'll show you exactly how we can help.",
-  },
+interface Benefit { badge: string; title: string; text: string }
+
+// Verbatim from the design handoff (onboarding-modal.html `benefits.user_type`).
+// Each role has 2–3 angles; one is picked at random when the user selects that role,
+// matching the source's getRandomBenefit() behaviour.
+const USER_TYPE_BENEFITS: Record<string, Benefit[]> = {
+  "SEO agency": [
+    {
+      badge: "Option A",
+      title: "Savings focus",
+      text: "Built for agencies like yours. Agencies save up to 46% on link costs by comparing prices across 20+ websites in one place. Use our relevance filter to quickly find high-quality sites that match each client's industry.",
+    },
+    {
+      badge: "Option B",
+      title: "Scale focus",
+      text: "Run more client campaigns in less time. Source backlinks for all your clients from one dashboard. Includes shared team access, bulk price comparison, and exportable reports for client reviews.",
+    },
+    {
+      badge: "Option C",
+      title: "Margin focus",
+      text: "Protect your margins. Stop overpaying when buying through middlemen. See the real price of every link so you can charge clients fairly and keep more profit per project.",
+    },
+  ],
+  "Freelancer": [
+    {
+      badge: "Option A",
+      title: "Budget focus",
+      text: "Compete with bigger players. Freelancers using Linkpricer manage 6× larger budgets while saving up to 68% compared to buying direct. Win bigger clients without the agency overhead.",
+    },
+    {
+      badge: "Option B",
+      title: "Time focus",
+      text: "Get hours back every week. No more switching between 15 different websites and price lists. Search once, compare everything, order in one place.",
+    },
+    {
+      badge: "Option C",
+      title: "Client-trust focus",
+      text: "Look professional to your clients. Export clean comparison reports that show exactly why you chose each website. Clients see the value you bring, not just the invoice.",
+    },
+  ],
+  "In-house marketer": [
+    {
+      badge: "Option A",
+      title: "Budget-justification focus",
+      text: "Justify every euro to your finance team. In-house teams report 42% lower costs per backlink and get clean reports for budget reviews. Defend your spending with real data.",
+    },
+    {
+      badge: "Option B",
+      title: "Efficiency focus",
+      text: "One tool instead of five. Replace multiple vendor logins with a single dashboard. Track every link, every supplier, every invoice in one place.",
+    },
+    {
+      badge: "Option C",
+      title: "Quality focus",
+      text: "Stop guessing about link quality. Filter by real traffic, industry relevance, and verified data — not just surface-level scores that can mislead.",
+    },
+  ],
+  "Brand owner": [
+    {
+      badge: "Option A",
+      title: "Simplicity focus",
+      text: "Built for people who aren't SEO specialists. Brand owners save 52% on average by seeing every backlink option in one place. All the prices, all the website data laid out clearly so you can decide what's worth buying for your brand.",
+    },
+    {
+      badge: "Option B",
+      title: "Visibility focus",
+      text: "See everything in one place. Instead of checking dozens of websites, get all the prices and metrics on a single screen. You stay in control of what to buy — we just make sure you have the full picture before you spend.",
+    },
+    {
+      badge: "Option C",
+      title: "Confidence focus",
+      text: "Buy with full information, not guesswork. Every backlink option shown with its real price and key data points. No pressure, no recommendations — just everything you need to make your own call.",
+    },
+  ],
+  "Other": [
+    {
+      badge: "For Everyone",
+      title: "Adaptable solutions",
+      text: "Whatever your role, Linkpricer adapts. Whether you're a consultant, a platform, or running something different — our users typically save 40 to 65% on link spend and cut sourcing time significantly. Tell us your use case and we'll show you exactly how we can help.",
+    },
+  ],
 };
 
+function pickRandomBenefit(userType: string): Benefit | null {
+  const options = USER_TYPE_BENEFITS[userType];
+  if (!options || options.length === 0) return null;
+  return options[Math.floor(Math.random() * options.length)];
+}
+
 const BUDGET_INSIGHTS: Record<string, string> = {
-  "Under €1,000": "Every euro matters at this stage. Users in this range save an average of €340/month by avoiding overpriced sources — roughly 3–4 extra links per month for the same budget.",
-  "€1,000–€5,000": "Mid-budget users save €1,200–€2,400/month on average. That's a full extra campaign's worth of backlinks at no additional cost.",
-  "€5,000–€20,000": "Power users at this level save €8,000+/month by comparing prices across all major sources. Bulk discounts and priority support included.",
-  "€20,000+": "Enterprise-level savings: €15,000–€40,000/month with custom data access, a dedicated account manager, and priority support. Let's talk about an enterprise plan tailored to your volume.",
+  "Under €1,000": "Every euro matters at this stage. Users in this range save an average of €340 per month by avoiding overpriced sources. That's roughly 3–4 extra links per month for the same budget.",
+  "€1,000–€5,000": "The sweet spot for growth. Mid-budget users save €1,200–€2,400 per month on average. That's a full extra campaign's worth of backlinks at no additional cost.",
+  "€5,000–€20,000": "Serious budgets deserve serious tools. Power users at this level save €8,000+ per month by comparing prices across all major sources. Bulk discounts and priority support included.",
+  "€20,000+": "Enterprise-level savings. Top-tier users save €15,000–€40,000 per month with custom data access, a dedicated account manager, and priority support. Let's talk about an enterprise plan tailored to your volume.",
 };
 
 const PRIORITY_INSIGHTS: Record<string, string> = {
-  "Price": "Compare the same website across 60+ sources in seconds. The average price difference for the same backlink is 38% — you'll always know you're not overpaying.",
-  "Website quality": "Every website is checked for real visitor traffic, industry fit, and trustworthiness. No surprises where a site looks strong on paper but delivers nothing.",
-  "Niche relevance": "We match every website to your exact industry by analysing actual content — not just category labels. Find the one perfect site, not a hundred maybes.",
+  "Price": "Pricing is our specialty. Compare the same website across 60+ sources in seconds. The average price difference for the same backlink is 38% — so you'll always know you're not overpaying.",
+  "Website quality": "Quality, verified. Every website is checked for real visitor traffic, industry fit, and overall trustworthiness. No more surprises where a site looks strong on paper but delivers nothing.",
+  "Niche relevance": "Relevance done right. We match every website to your exact industry by analysing the actual content — not just category labels. Find the one perfect site, not a hundred maybes.",
   "Speed": "From hours to seconds. Find, compare, and order in one flow. Users report sourcing backlinks 10× faster than reaching out manually.",
-  "Transparency": "See the real price, any added fees, and the original publisher cost upfront — all in one view. The first fully transparent pricing layer for the link-buying industry.",
+  "Transparency": "No hidden costs. See the real price, any added fees, and the original publisher cost upfront — all in one view. The first fully transparent pricing layer for the link-buying industry.",
 };
 
 const METHOD_INSIGHTS: Record<string, string> = {
-  "Manually contacting sites": "Skip the inbox grind. Reaching out manually takes 40+ hours/month on average. Linkpricer users do the same volume in under 4 hours — and pay 30% less.",
-  "Using marketplaces": "Why log into 8 different websites when you can see them side by side on one screen? Same sites, real prices, instant comparison.",
-  "Through agencies": "Agencies typically mark up backlinks 2–3× the original price. Linkpricer gives you direct pricing while keeping the quality control you'd expect from an agency.",
-  "Mixed methods": "Stop juggling spreadsheets, emails, and supplier portals. Linkpricer becomes your single source of truth for every backlink, no matter where it came from.",
+  "Manually contacting sites": "Skip the inbox grind. Reaching out manually takes 40+ hours a month on average. Linkpricer users do the same volume in under 4 hours — and pay 30% less.",
+  "Using marketplaces": "Compare them all at once. Why log into 8 different websites when you can see them side by side on one screen? Same sites, real prices, instant comparison.",
+  "Through agencies": "Cut the middleman markup. Agencies typically mark up backlinks 2–3× the original price. Linkpricer gives you direct pricing while keeping the quality control you'd expect from an agency.",
+  "Mixed methods": "Bring it all together. Stop juggling spreadsheets, emails, and supplier portals. Linkpricer becomes your single source of truth for every backlink, no matter where it came from.",
 };
 
 const TOTAL_STEPS = 5;
@@ -289,7 +355,17 @@ function StepTitle({ title, subtitle, question }: { title: string; subtitle: str
 }
 
 function Step1({ data, update }: { data: FormData; update: (p: Partial<FormData>) => void }) {
-  const benefit = data.userType ? USER_TYPE_BENEFITS[data.userType] : null;
+  // The source design re-randomises which benefit angle shows every time the
+  // user (re)selects a role — keep a local pick that updates on selection.
+  const [benefit, setBenefit] = useState<Benefit | null>(() =>
+    data.userType ? pickRandomBenefit(data.userType) : null
+  );
+
+  function selectUserType(opt: UserType) {
+    update({ userType: opt, userTypeOther: opt !== "Other" ? "" : data.userTypeOther });
+    setBenefit(pickRandomBenefit(opt));
+  }
+
   return (
     <>
       <StepTitle title="Welcome to Linkpricer! 👋" subtitle="Let's personalise your experience" question="What best describes you?" />
@@ -299,7 +375,7 @@ function Step1({ data, update }: { data: FormData; update: (p: Partial<FormData>
             key={opt}
             label={opt}
             checked={data.userType === opt}
-            onChange={() => update({ userType: opt, userTypeOther: opt !== "Other" ? "" : data.userTypeOther })}
+            onChange={() => selectUserType(opt)}
           />
         ))}
       </div>
@@ -322,6 +398,13 @@ function Step1({ data, update }: { data: FormData; update: (p: Partial<FormData>
           background: "linear-gradient(135deg, #f0f7ff 0%, #e6f2ff 100%)",
           border: "1px solid #0052cc",
         }}>
+          <span style={{
+            display: "inline-block", background: "#0052cc", color: "#fff",
+            padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+            marginBottom: 10, letterSpacing: 0.5, textTransform: "uppercase",
+          }}>
+            {benefit.badge}
+          </span>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#0052cc", marginBottom: 6 }}>{benefit.title}</div>
           <p style={{ margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.6 }}>{benefit.text}</p>
         </div>
@@ -378,7 +461,7 @@ function Step3({ data, update }: { data: FormData; update: (p: Partial<FormData>
         <div style={{ fontSize: 11, fontWeight: 700, color: "#0052cc", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>
           💡 You&apos;re in good company
         </div>
-        78% of our users described a similar challenge in their first week. Whatever your pain point — unclear pricing, hard-to-verify quality, or managing too many suppliers — Linkpricer was built to solve exactly this.
+        You&apos;re not alone. 78% of our users described a similar challenge in their first week. Whatever your pain point — unclear pricing, hard-to-verify quality, or managing too many suppliers — Linkpricer was built to solve exactly this.
       </div>
     </>
   );

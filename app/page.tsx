@@ -3,8 +3,8 @@ import { MarketingLayout } from "@/components/marketing/marketing-layout";
 import { HeroSection } from "@/components/marketing/hero-section";
 
 export const metadata: Metadata = {
-  title: "Linkpricer — Bulk-compare backlink prices. Order directly.",
-  description: "Upload up to 200 domains and compare guest post prices across 60+ marketplaces instantly.",
+  title: "Linkpricer · Compare backlink prices, buy the best deal",
+  description: "LinkPricer brings every backlink marketplace into one search — compare prices side by side, see the single best deal, and order directly, with low fees.",
 };
 
 export default function HomePage() {

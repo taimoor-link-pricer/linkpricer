@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ROUTES } from "@/lib/constants";
+import { btn } from "@/components/design-v1/primitives";
 
 export function SiteHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -10,59 +11,61 @@ export function SiteHeader() {
   return (
     <>
       <style>{`
-        .site-header { padding: 0 40px; }
-        .site-nav { display: flex; }
-        .site-header-actions { display: flex; }
-        .site-hamburger { display: none; }
-        .mobile-nav { display: none; }
+        .lp-nav { padding: 0 24px; }
+        .lp-nav-links { display: flex; }
+        .lp-nav-cta { display: flex; }
+        .lp-nav-hamburger { display: none; }
+        .lp-mobile-nav { display: none; }
         @media (max-width: 768px) {
-          .site-header { padding: 0 16px; }
-          .site-nav { display: none; }
-          .site-header-actions { display: none; }
-          .site-hamburger { display: flex; }
-          .mobile-nav { display: flex; }
+          .lp-nav { padding: 0 16px; }
+          .lp-nav-links { display: none; }
+          .lp-nav-cta { display: none; }
+          .lp-nav-hamburger { display: flex; }
+          .lp-mobile-nav { display: flex; }
         }
       `}</style>
-      <header style={{ background: "#ffffff", borderBottom: "1px solid #e8eaed", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 1000, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }} className="site-header">
-        <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: "-0.5px", color: "#000000" }}>Linkpricer</div>
+      <header
+        className="lp-nav"
+        style={{
+          position: "sticky", top: 0, zIndex: 50,
+          background: "rgba(255,255,255,0.85)", backdropFilter: "blur(10px)",
+          borderBottom: "1px solid var(--lp-line)",
+          height: 64, display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}
+      >
+        <Link href={ROUTES.home} style={{ display: "inline-flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+          <span style={{ fontWeight: 800, fontSize: 19, letterSpacing: -0.4, color: "#000" }}>Linkpricer</span>
+        </Link>
 
-        <nav className="site-nav" style={{ gap: 32, alignItems: "center" }}>
-          <Link href="#marketplaces" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>Marketplaces</Link>
-          <Link href="#blog" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>Blog</Link>
-          <Link href="#about" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>About</Link>
-          <Link href="#api" style={{ color: "#6b7280", fontSize: 14, fontWeight: 500, textDecoration: "none" }}>API</Link>
+        <nav className="lp-nav-links" style={{ alignItems: "center", gap: 10 }}>
+          <Link href="/docs" style={{ ...btn("ghost"), border: "none", color: "var(--lp-ink-2)", fontWeight: 600, textDecoration: "none", boxSizing: "border-box" }}>Docs</Link>
+          <Link href="/blog" style={{ ...btn("ghost"), border: "none", color: "var(--lp-ink-2)", fontWeight: 600, textDecoration: "none", boxSizing: "border-box" }}>Blog</Link>
+          <Link href={ROUTES.login} style={{ ...btn("ghost"), border: "none", color: "var(--lp-ink-2)", fontWeight: 600, textDecoration: "none", boxSizing: "border-box" }}>Log in</Link>
+          <Link href={ROUTES.signup} style={{ ...btn("primary"), textDecoration: "none", boxSizing: "border-box" }}>Sign up</Link>
         </nav>
 
-        <div className="site-header-actions" style={{ gap: 10, alignItems: "center" }}>
-          <Link href={ROUTES.login} style={{ padding: "8px 16px", fontSize: 13, fontWeight: 600, color: "#0052cc", background: "#ffffff", border: "1px solid #0052cc", borderRadius: 8, textDecoration: "none" }}>
-            Log in
-          </Link>
-          <Link href={ROUTES.signup} style={{ padding: "8px 16px", fontSize: 13, fontWeight: 600, color: "#ffffff", background: "#0052cc", borderRadius: 8, textDecoration: "none" }}>
-            Start free
-          </Link>
-        </div>
-
         <button
-          className="site-hamburger"
+          className="lp-nav-hamburger"
           onClick={() => setMenuOpen((o) => !o)}
-          style={{ alignItems: "center", justifyContent: "center", width: 36, height: 36, background: "none", border: "1px solid #e8eaed", borderRadius: 8, cursor: "pointer", flexDirection: "column", gap: 4, padding: 0 }}
+          aria-label="Toggle menu"
+          style={{ alignItems: "center", justifyContent: "center", width: 36, height: 36, background: "none", border: "1px solid var(--lp-line)", borderRadius: 8, cursor: "pointer", flexDirection: "column", gap: 4, padding: 0 }}
         >
-          <span style={{ display: "block", width: 16, height: 2, background: menuOpen ? "transparent" : "#374151", transition: "all 0.2s" }} />
-          <span style={{ display: "block", width: 16, height: 2, background: "#374151", transform: menuOpen ? "rotate(45deg) translate(3px, -3px)" : "none", transition: "all 0.2s" }} />
-          <span style={{ display: "block", width: 16, height: 2, background: "#374151", transform: menuOpen ? "rotate(-45deg) translate(3px, 3px)" : "none", transition: "all 0.2s" }} />
+          <span style={{ display: "block", width: 16, height: 2, background: menuOpen ? "transparent" : "var(--lp-ink-3)", transition: "all 0.2s" }} />
+          <span style={{ display: "block", width: 16, height: 2, background: "var(--lp-ink-3)", transform: menuOpen ? "rotate(45deg) translate(3px, -3px)" : "none", transition: "all 0.2s" }} />
+          <span style={{ display: "block", width: 16, height: 2, background: "var(--lp-ink-3)", transform: menuOpen ? "rotate(-45deg) translate(3px, 3px)" : "none", transition: "all 0.2s" }} />
         </button>
       </header>
 
       {menuOpen && (
-        <div className="mobile-nav" style={{ flexDirection: "column", background: "#ffffff", borderBottom: "1px solid #e8eaed", padding: "16px", gap: 0, zIndex: 999, position: "sticky", top: 56 }}>
-          {["Marketplaces", "Blog", "About", "API"].map((label) => (
-            <Link key={label} href="#" onClick={() => setMenuOpen(false)} style={{ display: "block", padding: "12px 0", fontSize: 15, fontWeight: 500, color: "#374151", textDecoration: "none", borderBottom: "1px solid #f0f2f5" }}>
-              {label}
+        <div className="lp-mobile-nav" style={{ flexDirection: "column", background: "#fff", borderBottom: "1px solid var(--lp-line)", padding: 16, gap: 0, zIndex: 49, position: "sticky", top: 64 }}>
+          {[{ label: "Docs", href: "/docs" }, { label: "Blog", href: "/blog" }].map((l) => (
+            <Link key={l.href} href={l.href} onClick={() => setMenuOpen(false)} style={{ display: "block", padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>
+              {l.label}
             </Link>
           ))}
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-            <Link href={ROUTES.login} style={{ flex: 1, textAlign: "center", padding: "10px", fontSize: 14, fontWeight: 600, color: "#0052cc", border: "1px solid #0052cc", borderRadius: 8, textDecoration: "none" }}>Log in</Link>
-            <Link href={ROUTES.signup} style={{ flex: 1, textAlign: "center", padding: "10px", fontSize: 14, fontWeight: 600, color: "#ffffff", background: "#0052cc", borderRadius: 8, textDecoration: "none" }}>Start free</Link>
+            <Link href={ROUTES.login} onClick={() => setMenuOpen(false)} style={{ flex: 1, textAlign: "center", ...btn("ghost"), justifyContent: "center", textDecoration: "none", boxSizing: "border-box" }}>Log in</Link>
+            <Link href={ROUTES.signup} onClick={() => setMenuOpen(false)} style={{ flex: 1, textAlign: "center", ...btn("primary"), justifyContent: "center", textDecoration: "none", boxSizing: "border-box" }}>Sign up</Link>
           </div>
         </div>
       )}

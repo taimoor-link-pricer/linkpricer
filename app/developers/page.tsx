@@ -43,11 +43,9 @@ const EXAMPLE_RESPONSE = `{
   "domain": "techblog.com",
   "found": true,
   "pricing": {
-    "standard":  { "lowest_price": 150.00, "currency": "USD" },
-    "gambling":  { "lowest_price": 350.00, "currency": "USD" },
-    "adult":     { "lowest_price": null,   "currency": "USD" },
-    "cbd":       { "lowest_price": null,   "currency": "USD" },
-    "loan":      { "lowest_price": null,   "currency": "USD" }
+    "standard": { "lowest_price": 150.00, "currency": "USD" },
+    "gambling": { "lowest_price": 350.00, "currency": "USD" },
+    "crypto":   { "lowest_price": 480.00, "currency": "USD" }
   },
   "metrics": {
     "domain_rating":   45,

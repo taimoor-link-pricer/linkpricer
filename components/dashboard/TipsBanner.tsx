@@ -87,7 +87,7 @@ export function TipsBanner() {
         fontSize: 12,
         letterSpacing: 0.2,
       }}>
-        💡 Tips
+        Linkpricer · Tips
       </div>
 
       {/* Scrolling track */}

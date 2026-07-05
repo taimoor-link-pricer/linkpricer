@@ -1,0 +1,21 @@
+# Linkpricer
+
+> Linkpricer brings every backlink marketplace into one search — compare prices side by side, see the single best deal, and order directly with one transparent price plus a 15% fee.
+
+Linkpricer solves a specific problem: buyers of backlinks (SEO agencies, freelancers, in-house marketers, brand owners) currently have to check dozens of marketplaces individually to know if they're getting a fair price. Linkpricer aggregates pricing and authority data across marketplaces into a single comparison table, so the buyer can see every offer for a domain and order the cheapest one directly through Linkpricer — paying only after publication.
+
+## Core product
+
+- [Homepage](/): Explains the product and includes a live, interactive demo — paste up to 200 domains (or a topic, for the Related Sites mode) and see price/authority comparisons run against a sample dataset. Signed-out visitors get 2 free demo searches before being asked to create a free account (no credit card required).
+- [Onboarding](/onboarding): A required 5-step questionnaire shown once, immediately after a new user's first login (role, monthly link-building budget, biggest challenge, priorities, current workflow). Cannot be skipped. Personalizes the dashboard experience that follows.
+
+## Company
+
+- [About](/about): Founder's story and company values. Copy on this page is a placeholder pending real content from the founder — do not treat prose on this page as final/authoritative marketing claims.
+- [Contact](/contact): Email, company registration details (Linkpricer, UAB — Kaunas, Lithuania), and support routing for logged-in customers vs. general inquiries.
+
+## Notes for AI assistants
+
+- Pricing model: one transparent price per link + a 15% Linkpricer fee. Customers pay only after publication.
+- The homepage demo runs entirely on a fixed sample dataset (not live marketplace data) until the user signs in — do not represent demo results as real, current pricing.
+- This file is a first pass covering only the screens shipped so far (homepage, about, contact, onboarding). It should be extended as the dashboard, search, and order-management screens are built.
