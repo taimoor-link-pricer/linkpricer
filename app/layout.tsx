@@ -11,6 +11,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://linkpricer.com"),
   title: {
     default: "Linkpricer",
     template: "%s | Linkpricer",

@@ -12,6 +12,8 @@
 // Stripe/company-details gating in front of "Pay Now" (he was explicit that
 // sequencing there is still undecided — "you figure out what's best").
 import { useEffect, useRef, useState } from "react";
+import { getOrderMetaExt } from "@/lib/orders/metadata";
+import type { ClientOrderAction } from "@/lib/orders/types";
 
 const C = {
   ink: "#0f1620", ink2: "#374151", ink3: "#6b7280", mute: "#9ca3af", mute2: "#d1d5db",
@@ -42,18 +44,42 @@ interface Order {
   draftUrl?: string; articleUrl?: string; daysLive?: number; notes?: string | null; placedAt?: string;
 }
 
-const SAMPLE_ORDERS: Order[] = [
-  { id: "ORD-2024-0934", domain: "mashable.com", marketplace: "Ziff Davis", status: "confirming_with_marketplace", title: "How AI Agents Are Reshaping SaaS Onboarding", targetUrl: "https://saas-brand.com/ai-onboarding", anchorText: "AI onboarding tools", price: 290, wordCount: 1000, placedAt: "Today, 9:42 AM" },
-  { id: "ORD-2024-0750", domain: "forbes.com", marketplace: "Forbes Network", status: "price_increase_requested", title: "Emerging Blockchain Technologies", targetUrl: "https://crypto-startup.com/blockchain", anchorText: "blockchain technology", draftUrl: "https://draft.forbes.com/articles/blockchain-draft-12345", price: 300, newPrice: 450, wordCount: 1200, notes: "Webmaster is asking to increase price to €450 for premium homepage placement" },
-  { id: "ORD-2024-0847", domain: "techcrunch.com", marketplace: "Direct", status: "approval_required", title: "Finnish gamblers are getting used to crypto casinos", targetUrl: "https://ecommerce-brand.com/crypto-solutions", anchorText: "crypto casinos", draftUrl: "https://draft.techcrunch.com/articles/crypto-casino-draft-67890", price: 350, wordCount: 750, notes: "Publisher changed conditions to require 'Sponsored' label" },
-  { id: "ORD-2024-0815", domain: "entrepreneur.com", marketplace: "Entrepreneur Media", status: "published", title: "How to Scale Your E-Commerce Business", targetUrl: "https://ecommerce-brand.com/scaling-guide", anchorText: "e-commerce scaling", price: 250, wordCount: 1100, articleUrl: "https://entrepreneur.com/article/business-growth-2024", daysLive: 21 },
-  { id: "ORD-2024-0795", domain: "theverge.com", marketplace: "The Verge Network", status: "complete", title: "AI Innovation in Consumer Technology", targetUrl: "https://tech-agency.com/ai-solutions", anchorText: "AI technology innovations", price: 320, wordCount: 1400, articleUrl: "https://theverge.com/tech-innovation-2024", daysLive: 44 },
-  { id: "ORD-2024-0802", domain: "wired.com", marketplace: "Condé Nast", status: "article_review", title: "The Rise of Quantum Computing", targetUrl: "https://quantum-startup.com/solutions", anchorText: "quantum computing", draftUrl: "https://draft.wired.com/quantum-2024", price: 400, wordCount: 1800 },
-  { id: "ORD-2024-0888", domain: "medium.com", marketplace: "Direct", status: "payment_pending", title: "Web3 Development Guide", targetUrl: "https://web3-platform.com/dev-guide", anchorText: "web3 development", price: 150, wordCount: 900 },
-  { id: "ORD-2024-0703", domain: "fastcompany.com", marketplace: "Fast Company", status: "approved", title: "Future of Remote Work", targetUrl: "https://hr-software.com/remote", anchorText: "remote work solutions", price: 350, wordCount: 1300 },
-  { id: "ORD-2024-0921", domain: "forbes.com", marketplace: "Forbes Network", status: "cancelled", title: "Blockchain Security", targetUrl: "https://security-company.com", anchorText: "blockchain security", price: 400, wordCount: 1600 },
-  { id: "ORD-2024-0656", domain: "businessinsider.com", marketplace: "Business Insider", status: "waiting_for_publication", title: "Future of Digital Marketing", targetUrl: "https://marketing-agency.com/digital-future", anchorText: "digital marketing strategy", draftUrl: "https://draft.businessinsider.com/marketing-2024", price: 400, wordCount: 1600 },
-];
+// Raw shape returned by GET /api/orders (a row of the `orders` table).
+type ApiOrder = {
+  id: string;
+  status: string;
+  snapshotDomain: string | null;
+  snapshotMarketplaceName: string | null;
+  articleTitle: string | null;
+  targetUrl: string;
+  anchorText: string | null;
+  totalAmount: string;
+  wordCount: number | null;
+  liveUrl: string | null;
+  reviewNotes: string | null;
+  createdAt: string | null;
+  snapshotOfferMetadata: unknown;
+};
+
+function mapApiOrder(row: ApiOrder): Order {
+  const ext = getOrderMetaExt(row.snapshotOfferMetadata);
+  return {
+    id: row.id,
+    domain: row.snapshotDomain ?? "—",
+    marketplace: row.snapshotMarketplaceName ?? "—",
+    status: (row.status as OrderStatus) in STATUS_CONFIG ? (row.status as OrderStatus) : "confirming_with_marketplace",
+    title: row.articleTitle ?? "Custom Article",
+    targetUrl: row.targetUrl,
+    anchorText: row.anchorText ?? "",
+    price: parseFloat(row.totalAmount),
+    newPrice: ext.pendingPriceAmount ?? undefined,
+    wordCount: row.wordCount ?? 0,
+    draftUrl: ext.draftUrl ?? undefined,
+    articleUrl: row.liveUrl ?? undefined,
+    notes: row.reviewNotes ?? ext.pendingPriceReason ?? null,
+    placedAt: row.createdAt ?? undefined,
+  };
+}
 
 function fmtPrice(n?: number) {
   if (n == null) return "—";
@@ -245,24 +271,38 @@ function LinkMonitoringModal({ order, onClose }: { order: Order; onClose: () => 
 }
 
 function OrderCard({
-  order, onStatusChange, isTourCard, forceExpanded, showTourHint, onStartTour,
+  order, onAction, isTourCard, forceExpanded, showTourHint, onStartTour,
 }: {
-  order: Order; onStatusChange: (id: string, status: OrderStatus, updated?: Order) => void;
+  order: Order; onAction: (id: string, action: ClientOrderAction) => Promise<void>;
   isTourCard: boolean; forceExpanded: boolean | null; showTourHint: boolean; onStartTour: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [linkMonitoringOpen, setLinkMonitoringOpen] = useState(false);
+  const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const config = STATUS_CONFIG[order.status];
 
   useEffect(() => { if (forceExpanded != null) setExpanded(forceExpanded); }, [forceExpanded]);
 
   const tourAttr = (name: string) => (isTourCard ? { "data-tour": name } : {});
 
-  const handleApprove = () => { onStatusChange(order.id, "waiting_for_publication"); setExpanded(false); };
-  const handleApprovePriceIncrease = () => { onStatusChange(order.id, "waiting_for_publication", { ...order, price: order.newPrice ?? order.price, status: "waiting_for_publication" }); setExpanded(false); };
-  const handleArticleApprove = () => { onStatusChange(order.id, "waiting_for_publication"); setExpanded(false); };
-  const handleDecline = () => { onStatusChange(order.id, "cancelled"); setExpanded(false); };
+  async function runAction(action: ClientOrderAction) {
+    setActing(true);
+    setActionError(null);
+    try {
+      await onAction(order.id, action);
+      setExpanded(false);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setActing(false);
+    }
+  }
+  const handleApprove = () => runAction("approve_condition_change");
+  const handleApprovePriceIncrease = () => runAction("accept_price_increase");
+  const handleArticleApprove = () => runAction("approve_article");
+  const handleDecline = () => runAction("decline");
 
   return (
     <div style={{ marginBottom: 16, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
@@ -297,6 +337,9 @@ function OrderCard({
 
       {expanded && (
         <div {...tourAttr("actions")} style={{ padding: 20, borderTop: `1px solid ${C.line2}` }}>
+          {actionError && (
+            <div style={{ marginBottom: 16, padding: 12, background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 8, color: "#8b0000", fontSize: 13, fontWeight: 600 }}>{actionError}</div>
+          )}
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 8 }}>Target URL</div>
             <div style={{ fontSize: 12, color: C.accent, fontFamily: "monospace", wordBreak: "break-all" as const }}>{order.targetUrl}</div>
@@ -341,8 +384,8 @@ function OrderCard({
           {order.status === "price_increase_requested" && (
             <div style={{ padding: 16, background: "#fce8c6", border: "1px solid #fde68a", borderRadius: 8, marginBottom: 16 }}>
               <div style={{ display: "flex", gap: 12 }}>
-                <button onClick={handleApprovePriceIncrease} style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={14} color="#fff" /> Accept Price Increase</button>
-                <button onClick={handleDecline} style={{ padding: "10px 16px", borderRadius: 8, background: "#fee2e2", color: "#8b0000", border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="x" size={14} color="#8b0000" /> Decline</button>
+                <button onClick={handleApprovePriceIncrease} disabled={acting} style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={14} color="#fff" /> Accept Price Increase</button>
+                <button onClick={handleDecline} disabled={acting} style={{ padding: "10px 16px", borderRadius: 8, background: "#fee2e2", color: "#8b0000", border: "1px solid #fecaca", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="x" size={14} color="#8b0000" /> Decline</button>
               </div>
             </div>
           )}
@@ -351,8 +394,8 @@ function OrderCard({
             <div style={{ padding: 16, background: "#fce8c6", border: "1px solid #fde68a", borderRadius: 8, marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#8b5900", marginBottom: 12 }}>Publisher changed conditions</div>
               <div style={{ display: "flex", gap: 12 }}>
-                <button onClick={handleApprove} style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={14} color="#fff" /> Approve</button>
-                <button onClick={handleDecline} style={{ padding: "10px 16px", borderRadius: 8, background: "#fee2e2", color: "#8b0000", border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="x" size={14} color="#8b0000" /> Decline</button>
+                <button onClick={handleApprove} disabled={acting} style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={14} color="#fff" /> Approve</button>
+                <button onClick={handleDecline} disabled={acting} style={{ padding: "10px 16px", borderRadius: 8, background: "#fee2e2", color: "#8b0000", border: "1px solid #fecaca", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="x" size={14} color="#8b0000" /> Decline</button>
               </div>
             </div>
           )}
@@ -360,7 +403,7 @@ function OrderCard({
           {order.status === "article_review" && (
             <div style={{ padding: 16, background: "#fce8c6", border: "1px solid #fde68a", borderRadius: 8, marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#8b5900", marginBottom: 12 }}>Your article is ready for review</div>
-              <button onClick={handleArticleApprove} style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={14} color="#fff" /> Approve Article</button>
+              <button onClick={handleArticleApprove} disabled={acting} style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={14} color="#fff" /> Approve Article</button>
             </div>
           )}
 
@@ -401,7 +444,7 @@ function OrderCard({
                   <Icon name="clock" size={13} color="#33518c" />
                   Sent {order.placedAt ?? "moments ago"} · typically up to 3 business days (up to 7 in some cases)
                 </div>
-                <button onClick={handleDecline} style={{ padding: "8px 14px", borderRadius: 8, background: "transparent", color: "#8b0000", border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 12 }}>Cancel order</button>
+                <button onClick={handleDecline} disabled={acting} style={{ padding: "8px 14px", borderRadius: 8, background: "transparent", color: "#8b0000", border: "1px solid #fecaca", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 12 }}>Cancel order</button>
               </div>
             </div>
           )}
@@ -468,7 +511,9 @@ function Tour({ steps, stepIndex, setStepIndex, onClose }: { steps: TourStepDef[
 }
 
 export default function OrdersPage() {
-  const [orders, setOrders] = useState<Order[]>(SAMPLE_ORDERS);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
@@ -478,6 +523,37 @@ export default function OrdersPage() {
   useEffect(() => {
     try { setTourSeen(window.localStorage.getItem("lp_order_tour_seen") === "1"); } catch { /* noop */ }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const res = await fetch("/api/orders");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Failed to load orders");
+        if (!cancelled) setOrders((data.orders as ApiOrder[]).map(mapApiOrder));
+      } catch (err) {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : "Failed to load orders");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleOrderAction(id: string, action: ClientOrderAction) {
+    const res = await fetch(`/api/orders/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Failed to update order");
+    setOrders((prev) => prev.map((o) => (o.id === id ? mapApiOrder(data.order as ApiOrder) : o)));
+  }
 
   const q = searchQuery.toLowerCase();
   const filteredOrders = !q ? orders : orders.filter((order) =>
@@ -537,9 +613,17 @@ export default function OrdersPage() {
         {searchQuery && <div style={{ fontSize: 12, color: C.mute, marginTop: 10 }}>Found {filteredOrders.length} order{filteredOrders.length !== 1 ? "s" : ""}</div>}
       </div>
 
-      {filteredOrders.length === 0 ? (
+      {loading ? (
+        <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, padding: 56, textAlign: "center", color: C.mute, fontSize: 14 }}>
+          Loading orders…
+        </div>
+      ) : loadError ? (
+        <div style={{ background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 12, padding: 24, textAlign: "center", color: "#8b0000", fontSize: 14 }}>
+          {loadError}
+        </div>
+      ) : filteredOrders.length === 0 ? (
         <div style={{ background: "#fff", border: `1px dashed ${C.line}`, borderRadius: 12, padding: 56, textAlign: "center", color: C.mute, fontSize: 14 }}>
-          No orders match &quot;{searchQuery}&quot;.
+          {orders.length === 0 ? "No orders yet — placements you buy will show up here." : `No orders match "${searchQuery}".`}
         </div>
       ) : (
         filteredOrders.map((order) => (
@@ -550,9 +634,7 @@ export default function OrdersPage() {
             forceExpanded={order.id === tourCardId ? tourExpand : null}
             showTourHint={!tourSeen && !tourActive && order.id === tourCardId}
             onStartTour={startTour}
-            onStatusChange={(id, status, updatedOrder) => {
-              setOrders((prev) => prev.map((o) => (o.id === id ? updatedOrder ?? { ...o, status } : o)));
-            }}
+            onAction={handleOrderAction}
           />
         ))
       )}

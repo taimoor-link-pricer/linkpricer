@@ -86,7 +86,10 @@ export function BlogStyles() {
       .lp-blog-card { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
       .lp-blog-card__media { aspect-ratio: 16 / 10; margin-bottom: 16px; }
       .lp-blog-card__cat { margin-bottom: 12px; }
-      .lp-blog-card__title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.25; color: var(--lp-ink); }
+      .lp-blog-card__title {
+        margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.25; color: var(--lp-ink);
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      }
       .lp-blog-card:hover .lp-blog-card__title { color: var(--lp-accent-700); }
       .lp-blog-card__excerpt {
         margin: 9px 0 0; font-size: 14.5px; line-height: 1.55; color: var(--lp-mute);
@@ -170,7 +173,7 @@ export function BlogStyles() {
       .lp-blog-cta p { margin: 14px auto 0; max-width: 520px; font-size: 16px; line-height: 1.55; color: #dce8fb; }
       .lp-blog-cta .lp-blog-btn { margin-top: 26px; position: relative; }
 
-      .lp-blog-related { margin: 64px 0 0; padding-top: 40px; border-top: 1px solid var(--lp-line); }
+      .lp-blog-related { margin-top: 64px; padding-top: 40px; border-top: 1px solid var(--lp-line); }
       .lp-blog-related h3 { margin: 0 0 22px; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
       .lp-blog-related .lp-blog-grid { gap: 28px; }
 

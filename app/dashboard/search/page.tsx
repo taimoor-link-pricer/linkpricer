@@ -148,6 +148,7 @@ type CartItem = {
   price: number; // raw USD, pre-fee
   delivery: number;
   link: string;
+  orderType: "managed" | "direct";
 };
 
 // ─── ExpandedPanel ────────────────────────────────────────────────────────────
@@ -384,7 +385,7 @@ function OfferCard({
           onMouseEnter={() => setHandleHover(true)}
           onMouseLeave={() => setHandleHover(false)}
           onClick={() =>
-            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: ourPrice, delivery: offer.delivery, link: offer.link })
+            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link, orderType: "managed" })
           }
           style={{
             padding: "9px 0",
@@ -408,7 +409,7 @@ function OfferCard({
           onMouseEnter={() => setBuyHover(true)}
           onMouseLeave={() => setBuyHover(false)}
           onClick={() =>
-            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link })
+            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link, orderType: "direct" })
           }
           style={{
             padding: "9px 0",
@@ -449,7 +450,7 @@ function CartPopup({
   onRemove: (idx: number) => void;
 }) {
   const subtotal = items.reduce((s, i) => s + i.price, 0);
-  const fee = Math.round(subtotal * 0.15);
+  const fee = Math.round(items.filter(i => i.orderType === "managed").reduce((s, i) => s + i.price, 0) * 0.15);
   const total = subtotal + fee;
 
   return (
@@ -979,7 +980,7 @@ function DomainRow({
               onMouseEnter={() => setBuyHover(true)}
               onMouseLeave={() => setBuyHover(false)}
               onClick={() =>
-                onAddToCart({ domain: row.domain, dr: row.dr, traffic: row.traffic, offerName: row.offers[0]?.name ?? "Marketplace", offerType: row.offers[0]?.type ?? "DB", price: row.bestPrice ?? 0, delivery: row.offers[0]?.delivery ?? 14, link: row.offers[0]?.link ?? "Dofollow" })
+                onAddToCart({ domain: row.domain, dr: row.dr, traffic: row.traffic, offerName: row.offers[0]?.name ?? "Marketplace", offerType: row.offers[0]?.type ?? "DB", price: row.bestPrice ?? 0, delivery: row.offers[0]?.delivery ?? 14, link: row.offers[0]?.link ?? "Dofollow", orderType: "managed" })
               }
               style={{
                 padding: "5px 12px",
@@ -1080,7 +1081,7 @@ type BriefItem = CartItem & {
 
 function CheckoutModal({ cartItems, onClose, onPlaced }: {
   cartItems: CartItem[];
-  onClose: () => void; onPlaced: () => void;
+  onClose: () => void; onPlaced: (orders: { id: string }[]) => void;
 }) {
   const [items, setItems] = useState<BriefItem[]>(() =>
     cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: 120 }))
@@ -1089,18 +1090,54 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   const [placing, setPlacing] = useState(false);
 
   const subtotal = items.reduce((s, i) => s + i.price + i.contentPrice, 0);
-  const fee = Math.round(subtotal * 0.15);
+  const fee = Math.round(items.filter(i => i.orderType === "managed").reduce((s, i) => s + i.price + i.contentPrice, 0) * 0.15);
   const total = subtotal + fee;
-  const readyCount = items.filter(i => !!i.title && !!i.targetUrl && !!i.anchorText && !!i.brief).length;
+  const readyCount = items.filter(i => i.contentMode === "linkpricer" ? (!!i.title && !!i.targetUrl && !!i.anchorText && !!i.brief) : i.contentMode === "url" ? (!!i.targetUrl && !!i.anchorText && !!i.articleUrl) : (!!i.targetUrl && !!i.anchorText)).length;
+  const [placeError, setPlaceError] = useState<string | null>(null);
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
   }
 
   async function handlePlace() {
+    setPlaceError(null);
+    if (readyCount < items.length) {
+      setPlaceError("Please fill in the required fields for every placement before confirming.");
+      return;
+    }
     setPlacing(true);
-    await new Promise(r => setTimeout(r, 900));
-    onPlaced();
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: items.map(i => ({
+            domain: i.domain,
+            offerName: i.offerName,
+            offerType: i.offerType,
+            orderType: i.orderType,
+            articleTitle: i.title || undefined,
+            targetUrl: i.targetUrl,
+            anchorText: i.anchorText,
+            contentNiche: i.niche || undefined,
+            contentTone: i.tone || undefined,
+            contentOption: i.contentMode === "linkpricer" ? "provided" : i.contentMode === "upload" ? "uploaded" : "url",
+            wordCount: i.contentMode === "linkpricer" ? 750 : undefined,
+            requirements: i.contentMode === "linkpricer" ? i.brief : undefined,
+            articleUrl: i.contentMode === "url" ? i.articleUrl : undefined,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to place order");
+      }
+      onPlaced(data.orders as { id: string }[]);
+    } catch (err) {
+      setPlaceError(err instanceof Error ? err.message : "Failed to place order");
+    } finally {
+      setPlacing(false);
+    }
   }
 
   const inp: React.CSSProperties = { width: "100%", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", fontSize: 13, color: C.ink, outline: "none", boxSizing: "border-box" };
@@ -1281,6 +1318,11 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                 </div>
               </div>
             </div>
+            {placeError && (
+              <div style={{ padding: "10px 12px", borderRadius: 9, background: "#fee2e2", border: "1px solid #fca5a5", color: C.bad, fontSize: 12.5, fontWeight: 600 }}>
+                {placeError}
+              </div>
+            )}
             <button onClick={handlePlace} disabled={placing} style={{ padding: 16, background: placing ? C.ink2 : C.ink, color: "#fff", border: "none", borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: placing ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
               {placing ? "Placing order…" : "✓ Place order"}
             </button>
@@ -1295,8 +1337,8 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 }
 
 // ─── Order Placed Modal ────────────────────────────────────────────────────────
-function OrderPlacedModal({ onClose }: { onClose: () => void }) {
-  const [orderId] = useState(() => `ord_${Math.random().toString(36).slice(2, 8)}`);
+function OrderPlacedModal({ orderIds, onClose }: { orderIds: string[]; onClose: () => void }) {
+  const orderId = orderIds[0]?.slice(0, 8) ?? "—";
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 18, padding: "44px 48px", maxWidth: 700, width: "100%" }}>
@@ -1551,6 +1593,7 @@ function SearchPageInner() {
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
+  const [placedOrderIds, setPlacedOrderIds] = useState<string[]>([]);
   const [analyzeHover, setAnalyzeHover] = useState(false);
 
   const [tourActive, setTourActive] = useState(false);
@@ -1711,12 +1754,17 @@ function SearchPageInner() {
         <CheckoutModal
           cartItems={cartItems}
           onClose={() => setCheckoutOpen(false)}
-          onPlaced={() => { setCheckoutOpen(false); setOrderPlaced(true); setCartItems([]); }}
+          onPlaced={(orders) => {
+            setCheckoutOpen(false);
+            setOrderPlaced(true);
+            setCartItems([]);
+            setPlacedOrderIds(orders.map(o => o.id));
+          }}
         />
       )}
 
       {orderPlaced && (
-        <OrderPlacedModal onClose={() => setOrderPlaced(false)} />
+        <OrderPlacedModal orderIds={placedOrderIds} onClose={() => setOrderPlaced(false)} />
       )}
 
       <div style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
