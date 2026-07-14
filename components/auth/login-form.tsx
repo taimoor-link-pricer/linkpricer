@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
 import {
   signInWithEmail,
@@ -34,10 +34,20 @@ const labelStyle: React.CSSProperties = {
   marginBottom: 8,
 };
 
+// Only accept an internal path (starts with "/", not "//") as a post-login
+// redirect target — anything else is either malformed or a potential
+// open-redirect and falls back to the default route instead.
+function validRedirect(raw: string | null): string | null {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
 export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirect = validRedirect(searchParams.get("redirect"));
 
   async function getPostLoginRoute(): Promise<string> {
     try {
@@ -48,7 +58,7 @@ export function LoginForm() {
         if (!data.hasCompletedOnboarding) return ROUTES.onboarding;
       }
     } catch {}
-    return ROUTES.search;
+    return redirect ?? ROUTES.search;
   }
 
   useEffect(() => {

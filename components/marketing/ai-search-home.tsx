@@ -1,43 +1,31 @@
 "use client";
 
 // Homepage body: full-page AI chat search, like Claude/ChatGPT/Gemini —
-// minimal empty state, docked input once a conversation starts. Ported from
-// `AiSearchTab.Tab` in design/v1-interactive/ai-search-tab.jsx, reusing the
-// app's existing sample data, formatters and UI primitives instead of
-// re-declaring them.
+// minimal empty state, docked input once a conversation starts. Backed by
+// the real marketplace catalog via /api/homepage-search (SQL prefilter +
+// Claude semantic rerank, see lib/search/catalog-search.ts) — same search
+// pipeline the in-app Related Sites feature uses, just capped to the single
+// best match since this UI shows one domain at a time.
 
 import { useEffect, useRef, useState } from "react";
 import { Icon, Stars } from "@/lib/design-v1/icons";
-import { LP_DATA } from "@/lib/design-v1/sample-data";
 import { fmt } from "@/lib/design-v1/format";
 import { Pill, btn, chip, priceLbl, priceVal } from "@/components/design-v1/primitives";
-import type { Domain, Offer } from "@/lib/design-v1/types";
+import type { CatalogSearchResult, CatalogSearchOffer } from "@/lib/search/catalog-search";
 import { SignupModal, type SignupReason } from "./signup-modal";
 
-const CORPUS: { keys: string[]; domain: string }[] = [
-  { keys: ["vpn", "saas", "software", "b2b"], domain: "techcrunch.com" },
-  { keys: ["finance", "fintech", "banking", "business"], domain: "forbes.com" },
-  { keys: ["igaming", "casino", "betting", "gambling"], domain: "betimate.com" },
-  { keys: ["gaming", "esports", "game"], domain: "oneangrygamer.net" },
-  { keys: ["health", "wellness", "fitness", "medical"], domain: "healthline.com" },
-];
-const DEFAULT_DOMAIN = "forbes.com";
 const CHIPS = ["Finance guest post", "iGaming niche edit", "Tech blog under $200", "SaaS website about VPN"];
 
-function findDomain(text: string): Domain | null {
-  const t = text.toLowerCase();
-  const hit = CORPUS.find((c) => c.keys.some((k) => t.includes(k)));
-  const name = hit ? hit.domain : null;
-  return LP_DATA.find((d) => d.domain === name) || null;
-}
-
-type ThreadMessage = { role: "user"; text: string } | { role: "assistant"; text: string } | { role: "assistant"; domain: Domain };
+type ThreadMessage =
+  | { role: "user"; text: string }
+  | { role: "assistant"; text: string }
+  | { role: "assistant"; domain: CatalogSearchResult };
 
 function priceFmt(n: number | null | undefined) {
   return fmt.price(n, "$");
 }
 
-function OfferCard({ o, d, onBuy }: { o: Offer; d: Domain; onBuy: (d: Domain, o: Offer) => void }) {
+function OfferCard({ o, onBuy }: { o: CatalogSearchOffer; onBuy: () => void }) {
   const linkGood = o.link === "Dofollow";
   const typeIcon = ({ API: "plug", DB: "db", Vendor: "user" } as const)[o.type] || "plug";
   return (
@@ -84,7 +72,7 @@ function OfferCard({ o, d, onBuy }: { o: Offer; d: Domain; onBuy: (d: Domain, o:
       </div>
 
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
-        <button style={{ ...btn("primary", "sm"), cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => onBuy(d, o)}>
+        <button style={{ ...btn("primary", "sm"), cursor: "pointer", whiteSpace: "nowrap" }} onClick={onBuy}>
           <Icon name="shield" size={13} /> Buy now
         </button>
       </div>
@@ -92,7 +80,7 @@ function OfferCard({ o, d, onBuy }: { o: Offer; d: Domain; onBuy: (d: Domain, o:
   );
 }
 
-function MatchResult({ d, onBuy, onViewMore }: { d: Domain; onBuy: (d: Domain, o: Offer) => void; onViewMore: () => void }) {
+function MatchResult({ d, onBuy, onViewMore }: { d: CatalogSearchResult; onBuy: () => void; onViewMore: () => void }) {
   const offers = (d.offers || []).slice().sort((a, b) => a.minPrice - b.minPrice);
   const best = offers[0];
 
@@ -104,7 +92,7 @@ function MatchResult({ d, onBuy, onViewMore }: { d: Domain; onBuy: (d: Domain, o
         {d.category && <Pill color="blue">{d.category}</Pill>}
       </div>
 
-      {best && <OfferCard o={best} d={d} onBuy={onBuy} />}
+      {best && <OfferCard o={best} onBuy={onBuy} />}
 
       {offers.length > 1 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
@@ -163,19 +151,18 @@ function InputBar({ docked, value, setValue, thinking, send }: { docked: boolean
   );
 }
 
-const FOLLOW_UPS = [
-  "Give me a few more details — what type of website or niche are you after, your budget range, and any metrics that matter to you (DR, traffic, etc.)?",
-  "Still narrowing it down — could you tell me the niche or industry you need (e.g. finance, SaaS, health, iGaming) and roughly what you'd like to spend?",
-  "One more thing so I can find the right match — what's the site's topic/niche, and your target budget?",
-];
-const MAX_ROUNDS = 3;
+interface HomepageSearchResponse {
+  result: CatalogSearchResult | null;
+  lowRelevance: boolean;
+  remaining?: number;
+}
 
 export function AiSearchHome() {
   const [thread, setThread] = useState<ThreadMessage[]>([]);
   const [value, setValue] = useState("");
   const [thinking, setThinking] = useState(false);
   const [signup, setSignup] = useState<SignupReason | null>(null);
-  const slots = useRef({ domain: null as Domain | null, rounds: 0 });
+  const slots = useRef<{ domain: CatalogSearchResult | null }>({ domain: null });
   const threadRef = useRef<HTMLDivElement>(null);
   const started = thread.length > 0;
 
@@ -183,21 +170,40 @@ export function AiSearchHome() {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [thread, thinking]);
 
-  function respond(text: string) {
-    const s = slots.current;
-    const found = findDomain(text);
-    if (found) s.domain = found;
+  const requireSignup = (reason: SignupReason) => setSignup(reason);
 
-    window.setTimeout(() => {
-      setThinking(false);
-      if (!s.domain && s.rounds < MAX_ROUNDS) {
-        setThread((t) => [...t, { role: "assistant", text: FOLLOW_UPS[Math.min(s.rounds, FOLLOW_UPS.length - 1)] }]);
-        s.rounds++;
+  async function respond(text: string) {
+    try {
+      const res = await fetch("/api/homepage-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: text }),
+      });
+
+      if (res.status === 429) {
+        setThinking(false);
+        requireSignup("search");
         return;
       }
-      const d = s.domain || LP_DATA.find((x) => x.domain === DEFAULT_DOMAIN)!;
-      setThread((t) => [...t, { role: "assistant", text: `Found it — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}. Here's the best price we found:` }, { role: "assistant", domain: d }]);
-    }, 700);
+
+      const data: HomepageSearchResponse = await res.json();
+      setThinking(false);
+
+      if (!data.result) {
+        setThread((t) => [...t, { role: "assistant", text: "I couldn't find a match for that — try describing the niche, budget, or type of site you're after." }]);
+        return;
+      }
+
+      const d = data.result;
+      slots.current.domain = d;
+      const intro = data.lowRelevance
+        ? `Closest match we found for that — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}:`
+        : `Found it — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}. Here's the best price we found:`;
+      setThread((t) => [...t, { role: "assistant", text: intro }, { role: "assistant", domain: d }]);
+    } catch {
+      setThinking(false);
+      setThread((t) => [...t, { role: "assistant", text: "Something went wrong on our end — please try again." }]);
+    }
   }
 
   function send(text?: string) {
@@ -208,8 +214,6 @@ export function AiSearchHome() {
     setThinking(true);
     respond(q);
   }
-
-  const requireSignup = (reason: SignupReason) => setSignup(reason);
 
   return (
     <div className="lp-reset" id="top" style={{ background: "var(--lp-bg)", minHeight: "calc(100dvh - 64px)", display: "flex", flexDirection: "column", fontFamily: "var(--lp-sans)", color: "var(--lp-ink)" }}>
@@ -253,7 +257,7 @@ export function AiSearchHome() {
         </div>
       )}
 
-      {signup && <SignupModal reason={signup} onClose={() => setSignup(null)} />}
+      {signup && <SignupModal reason={signup} onClose={() => setSignup(null)} domain={slots.current.domain?.domain} />}
     </div>
   );
 }

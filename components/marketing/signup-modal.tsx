@@ -14,8 +14,15 @@ const COPY: Record<SignupReason, { title: string; body: string }> = {
   generic: { title: "Create your free LinkPricer account", body: "Search live marketplaces, compare prices and order directly — all in one place." },
 };
 
-export function SignupModal({ reason, onClose }: { reason: SignupReason; onClose: () => void }) {
+export function SignupModal({ reason, onClose, domain }: { reason: SignupReason; onClose: () => void; domain?: string }) {
   const c = COPY[reason] || COPY.generic;
+
+  // Carries the matched domain through signup/login so the user lands back
+  // on its real compare-offers view post-auth, instead of a generic
+  // dashboard — see login-form.tsx/signup-form.tsx's `redirect` handling.
+  const target = domain ? `${ROUTES.search}?domain=${encodeURIComponent(domain)}` : undefined;
+  const signupHref = target ? `${ROUTES.signup}?redirect=${encodeURIComponent(target)}` : ROUTES.signup;
+  const loginHref = target ? `${ROUTES.login}?redirect=${encodeURIComponent(target)}` : ROUTES.login;
 
   const field: React.CSSProperties = { width: "100%", boxSizing: "border-box", height: 44, padding: "0 14px", borderRadius: 10, border: "1px solid var(--lp-line)", fontSize: 14, fontFamily: "inherit", color: "var(--lp-ink-2)", outline: "none", background: "#fff" };
 
@@ -33,13 +40,13 @@ export function SignupModal({ reason, onClose }: { reason: SignupReason; onClose
           <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 20 }}>
             <input type="email" placeholder="Work email" style={field} />
             <input type="password" placeholder="Choose a password" style={field} />
-            <Link href={ROUTES.signup} style={{ ...btn("primary"), height: 46, justifyContent: "center", textDecoration: "none", fontSize: 14.5 }}>Create free account</Link>
+            <Link href={signupHref} style={{ ...btn("primary"), height: 46, justifyContent: "center", textDecoration: "none", fontSize: 14.5 }}>Create free account</Link>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0", color: "var(--lp-mute-2)", fontSize: 12 }}>
             <span style={{ flex: 1, height: 1, background: "var(--lp-line)" }} /> already have an account? <span style={{ flex: 1, height: 1, background: "var(--lp-line)" }} />
           </div>
-          <Link href={ROUTES.login} style={{ ...btn("ghost"), width: "100%", height: 44, justifyContent: "center", textDecoration: "none", boxSizing: "border-box" }}>Log in</Link>
+          <Link href={loginHref} style={{ ...btn("ghost"), width: "100%", height: 44, justifyContent: "center", textDecoration: "none", boxSizing: "border-box" }}>Log in</Link>
 
           <p style={{ margin: "16px 0 0", fontSize: 11.5, color: "var(--lp-mute)", textAlign: "center", lineHeight: 1.5 }}>
             No credit card required · Pay only after publication

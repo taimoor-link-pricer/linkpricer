@@ -2,6 +2,7 @@
 
 import React, { useState, Suspense, useRef, useEffect } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
@@ -1582,6 +1583,14 @@ const TOUR_DEMO_ROW: Domain = {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 function SearchPageInner() {
+  // Populated when arriving from the homepage AI chat's "Buy now"/"See all
+  // suppliers" -> signup/login -> redirect flow (see signup-modal.tsx and
+  // login-form.tsx/signup-form.tsx's `redirect` param handling) — lets that
+  // flow land the user directly on this domain's real compare-offers view
+  // instead of an empty search page.
+  const searchParams = useSearchParams();
+  const domainParam = searchParams.get("domain")?.trim().toLowerCase() || null;
+
   const [pasteValue, setPasteValue] = useState("");
   const [niche, setNiche] = useState("general");
   const [nicheOpen, setNicheOpen] = useState(false);
@@ -1630,8 +1639,14 @@ function SearchPageInner() {
     setNotFound([]);
   }
 
-  async function handleAnalyze() {
-    if (domainCount === 0) return;
+  // `domainsOverride` lets callers (the ?domain= auto-run effect below)
+  // trigger analysis directly without round-tripping through `pasteValue`
+  // state first — setPasteValue + an immediate handleAnalyze() call in the
+  // same tick would still see the *old* parsedDomains/parsedLines from this
+  // render's closure, not the just-set value.
+  async function handleAnalyze(domainsOverride?: string[]) {
+    const domains = domainsOverride ?? parsedDomains;
+    if (domains.length === 0) return;
     setAnalyzing(true);
     setResults(null);
 
@@ -1639,13 +1654,17 @@ function SearchPageInner() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domains: parsedDomains.slice(0, MAX_DOMAINS) }),
+        body: JSON.stringify({ domains: domains.slice(0, MAX_DOMAINS) }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Analysis failed");
 
-      // Merge user-entered yourPrice back in
-      const priceByDomain = new Map(parsedLines.map((l) => [l.domain, l.yourPriceUsd]));
+      // Merge user-entered yourPrice back in — only meaningful for the
+      // paste-box flow; a domain arriving via ?domain= has no user-entered
+      // price to merge.
+      const priceByDomain = domainsOverride
+        ? new Map<string, number | null>()
+        : new Map(parsedLines.map((l) => [l.domain, l.yourPriceUsd]));
       const found: Domain[] = (data.found as Domain[]).map((d) => ({
         ...d,
         yourPrice: priceByDomain.get(d.domain) ?? null,
@@ -1658,6 +1677,15 @@ function SearchPageInner() {
       setAnalyzing(false);
     }
   }
+
+  // Auto-run analysis for a domain arriving via ?domain= (homepage chat ->
+  // signup/login redirect). Runs once per distinct domainParam.
+  useEffect(() => {
+    if (!domainParam) return;
+    setPasteValue(domainParam);
+    handleAnalyze([domainParam]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domainParam]);
 
   function handleSampleChip(domain: string) {
     setPasteValue((v) => {
@@ -2117,7 +2145,7 @@ function SearchPageInner() {
                 disabled={domainCount === 0 || analyzing}
                 onMouseEnter={() => setAnalyzeHover(true)}
                 onMouseLeave={() => setAnalyzeHover(false)}
-                onClick={handleAnalyze}
+                onClick={() => handleAnalyze()}
                 style={{
                   width: "100%",
                   padding: "12px 0",
@@ -2185,7 +2213,7 @@ function SearchPageInner() {
             notFound={notFound}
             currency={currency}
             onAddToCart={handleAddToCart}
-            forceExpandDomain={tourActive && tourStep === 2 ? TOUR_DEMO_ROW.domain : undefined}
+            forceExpandDomain={tourActive && tourStep === 2 ? TOUR_DEMO_ROW.domain : (domainParam ?? undefined)}
           />
         )}
 
