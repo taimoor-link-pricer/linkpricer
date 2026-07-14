@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
           MAX(d.country) AS country,
           MAX(d.language) AS lang,
           MAX(d.category) AS category,
-          MAX(m."domainRating"::float) AS dr,
+          COALESCE(MAX(ads."domain_rating"::float), MAX(m."domainRating"::float)) AS dr,
           MAX(m."orgTraffic") AS traffic,
           MAX(m."orgKeywords") AS keywords,
           MAX(m."refDomains") AS ref_domains,
@@ -88,6 +88,7 @@ export async function POST(req: NextRequest) {
         FROM lp_marketplace_domains d
         JOIN lp_domain_price p ON p."domainId" = d.id
         LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
+        LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
         WHERE d."isActive" = true
           AND p."isActive" = true
           AND d."deletedAt" IS NULL

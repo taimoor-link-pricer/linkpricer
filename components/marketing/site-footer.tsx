@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
 
 const col: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 0 };
@@ -9,18 +8,6 @@ const h5: React.CSSProperties = { margin: "0 0 14px", fontSize: 12, fontWeight: 
 const lnk: React.CSSProperties = { textDecoration: "none", color: "var(--lp-ink-3)", fontSize: 14, padding: "5px 0" };
 
 export function SiteFooter() {
-  const pathname = usePathname();
-
-  // Next.js only auto-scrolls when the URL hash actually changes, so a second
-  // click to the same section (after scrolling away) would otherwise no-op.
-  // Scroll manually whenever we're already on the homepage.
-  const scrollToSection = (id: string) => (e: React.MouseEvent<HTMLAnchorElement>) => {
-    if (pathname !== ROUTES.home) return;
-    e.preventDefault();
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.history.replaceState(null, "", `#${id}`);
-  };
-
   return (
     <>
       <style>{`
@@ -37,9 +24,9 @@ export function SiteFooter() {
           </div>
           <div style={col}>
             <h5 style={h5}>Product</h5>
-            <Link href={`${ROUTES.home}#domain-analysis`} style={lnk} onClick={scrollToSection("domain-analysis")}>Domain analysis</Link>
-            <Link href={`${ROUTES.home}#related-sites`} style={lnk} onClick={scrollToSection("related-sites")}>Related sites</Link>
-            <Link href={`${ROUTES.home}#top`} style={lnk}>Pricing</Link>
+            <Link href={ROUTES.home} style={lnk}>AI Search</Link>
+            <Link href={ROUTES.compare} style={lnk}>Price comparison</Link>
+            <Link href={ROUTES.relatedSites} style={lnk}>Related sites</Link>
           </div>
           <div style={col}>
             <h5 style={h5}>Resources</h5>

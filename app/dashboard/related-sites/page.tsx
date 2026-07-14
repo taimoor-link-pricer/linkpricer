@@ -359,7 +359,12 @@ export default function RelatedSitesPage() {
 
       const res = await fetch("/api/related-sites", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, filters: parsedFilters }),
+        body: JSON.stringify({
+          query,
+          filters: parsedFilters,
+          ownSite: hasSite ? ownSite.trim() : undefined,
+          hideLinked: hasSite && hideLinked,
+        }),
       });
       const data = await res.json();
       setHasSearched(true);

@@ -2,11 +2,19 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
 import { btn } from "@/components/design-v1/primitives";
 
+const NAV_LINKS = [
+  { label: "AI Search", href: ROUTES.home },
+  { label: "Backlink price comparison", href: ROUTES.compare },
+  { label: "Related sites", href: ROUTES.relatedSites },
+];
+
 export function SiteHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const pathname = usePathname();
 
   return (
     <>
@@ -37,10 +45,25 @@ export function SiteHeader() {
           <span style={{ fontWeight: 800, fontSize: 19, letterSpacing: -0.4, color: "#000" }}>Linkpricer</span>
         </Link>
 
-        <nav className="lp-nav-links" style={{ alignItems: "center", gap: 10 }}>
-          <Link href="/docs" style={{ ...btn("ghost"), border: "none", color: "var(--lp-ink-2)", fontWeight: 600, textDecoration: "none", boxSizing: "border-box" }}>Docs</Link>
-          <Link href="/blog" style={{ ...btn("ghost"), border: "none", color: "var(--lp-ink-2)", fontWeight: 600, textDecoration: "none", boxSizing: "border-box" }}>Blog</Link>
-          <Link href={ROUTES.login} style={{ ...btn("ghost"), border: "none", color: "var(--lp-ink-2)", fontWeight: 600, textDecoration: "none", boxSizing: "border-box" }}>Log in</Link>
+        <nav className="lp-nav-links" style={{ alignItems: "center", gap: 4 }}>
+          {NAV_LINKS.map((l) => {
+            const active = pathname === l.href;
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                style={{
+                  padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, textDecoration: "none",
+                  color: active ? "var(--lp-ink)" : "var(--lp-mute)",
+                  background: active ? "var(--lp-bg-3)" : "transparent",
+                }}
+              >
+                {l.label}
+              </Link>
+            );
+          })}
+          <span style={{ width: 1, height: 18, background: "var(--lp-line)", margin: "0 6px" }} />
+          <Link href={ROUTES.login} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: "var(--lp-mute)", textDecoration: "none" }}>Log in</Link>
           <Link href={ROUTES.signup} style={{ ...btn("primary"), textDecoration: "none", boxSizing: "border-box" }}>Sign up</Link>
         </nav>
 
@@ -58,7 +81,7 @@ export function SiteHeader() {
 
       {menuOpen && (
         <div className="lp-mobile-nav" style={{ flexDirection: "column", background: "#fff", borderBottom: "1px solid var(--lp-line)", padding: 16, gap: 0, zIndex: 49, position: "sticky", top: 64 }}>
-          {[{ label: "Docs", href: "/docs" }, { label: "Blog", href: "/blog" }].map((l) => (
+          {NAV_LINKS.map((l) => (
             <Link key={l.href} href={l.href} onClick={() => setMenuOpen(false)} style={{ display: "block", padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>
               {l.label}
             </Link>

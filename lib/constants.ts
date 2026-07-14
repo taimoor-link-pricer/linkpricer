@@ -12,6 +12,8 @@ export const ROUTES = {
   contact: "/contact",
   login: "/login",
   signup: "/signup",
+  compare: "/compare",
+  relatedSites: "/related-sites",
   forgotPassword: "/forgot-password",
   onboarding: "/onboarding",
   dashboard: "/dashboard",

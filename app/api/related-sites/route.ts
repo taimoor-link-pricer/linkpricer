@@ -3,19 +3,29 @@ import { adminAuth } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { getExcludedDomains } from "@/lib/integrations/referring-domains-cache";
+import { rerankWithClaude } from "@/lib/ai/claude-rerank";
 
 // ── Weekly search quota ──────────────────────────────────────────────────────
 // Reuses the existing generic `user_activity_events` log (eventType +
 // userId + timestamp, already indexed) rather than a new table/migration.
-// No embeddings API key is configured in this environment (lp_marketplace_domains
-// and lp_domain_ai_metrics both have a pgvector `embeddings` column, clearly meant
-// for real semantic search — but generating a query embedding needs an
-// OPENAI_API_KEY that isn't set up here). Until that's wired in, relevance is
-// computed with Postgres full-text search (ts_rank) over each domain's
-// category / semantic-category / semantic-summary text — a real, working
-// ranked search over the real catalog, just not true vector similarity yet.
+//
+// Relevance ranking: an ILIKE/word-overlap pass narrows the candidate pool
+// (cheap, SQL-side), then a bounded shortlist is reranked by Claude for real
+// semantic relevance (see lib/ai/claude-rerank.ts) — not literal keyword
+// matching. lp_marketplace_domains/lp_domain_ai_metrics also have an unused
+// pgvector `embeddings` column from an earlier, abandoned OpenAI-embeddings
+// design; not used here.
 const WEEKLY_LIMIT = 10;
 const EVENT_TYPE = "related_sites_search";
+const CLAUDE_SHORTLIST_SIZE = 80;
+const FINAL_RESULT_SIZE = 30;
+
+// Ordinal ranking for the "grade" filter's "X & above" semantics (A+ is the
+// only exact-match option; A/B+/B are thresholds). Mirrors the same DR
+// fallback used to compute each row's displayed grade below, so filtering
+// and display never disagree.
+const GRADE_RANK: Record<string, number> = { B: 1, "B+": 2, A: 3, "A+": 4 };
 
 function fmtUpdated(ts: string | null): string {
   if (!ts) return "—";
@@ -135,6 +145,7 @@ interface SearchFilters {
   minTraffic?: number;
   minDr?: number;
   maxDr?: number;
+  minPrice?: number;
   maxPrice?: number;
   category?: string;
   grade?: string;
@@ -143,6 +154,8 @@ interface SearchFilters {
 interface SearchBody {
   query: string;
   filters?: SearchFilters;
+  ownSite?: string;
+  hideLinked?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -176,88 +189,136 @@ export async function POST(req: NextRequest) {
       f.minTraffic != null ? sql`AND COALESCE(traffic, 0) >= ${f.minTraffic}` : sql``,
       f.minDr != null ? sql`AND COALESCE(dr, 0) >= ${f.minDr}` : sql``,
       f.maxDr != null ? sql`AND COALESCE(dr, 0) <= ${f.maxDr}` : sql``,
+      f.minPrice != null ? sql`AND best_price >= ${f.minPrice}` : sql``,
       f.maxPrice != null ? sql`AND best_price <= ${f.maxPrice}` : sql``,
       f.category ? sql`AND LOWER(raw_category) LIKE LOWER(${"%" + f.category + "%"})` : sql``,
+      f.grade && GRADE_RANK[f.grade] != null
+        ? sql`AND (CASE COALESCE(ai_grade, CASE WHEN COALESCE(dr, 0) >= 70 THEN 'A+' WHEN COALESCE(dr, 0) >= 55 THEN 'A' WHEN COALESCE(dr, 0) >= 40 THEN 'B+' ELSE 'B' END)
+                WHEN 'A+' THEN 4 WHEN 'A' THEN 3 WHEN 'B+' THEN 2 ELSE 1 END) >= ${GRADE_RANK[f.grade]}`
+        : sql``,
     ];
 
     // Split into words and pre-filter on the *narrow* text columns (category,
-    // domain name) with ILIKE before touching pricing/metrics joins or doing
-    // any aggregation. The first version of this query ran to_tsvector/ts_rank
-    // over every active row in the whole catalog with no pre-filter at all —
-    // it hung for 15s+ in testing. This bounds the candidate set up front
-    // instead. Real fix long-term is a trigram/GIN index (or the pgvector
-    // embeddings columns already on these tables, once an embeddings API key
-    // is configured) — this is the fast-enough interim version.
+    // domain name, plus the AI-labeled semantic category/summary) with ILIKE
+    // before touching pricing/metrics joins or doing any aggregation. The
+    // first version of this query ran to_tsvector/ts_rank over every active
+    // row in the whole catalog with no pre-filter at all — it hung for 15s+
+    // in testing. This bounds the candidate set up front (recall), while
+    // final ranking quality (precision) comes from the Claude rerank pass
+    // below over the resulting shortlist.
     const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
     const wordClauses = words.map(
-      (w) => sql`(d.category ILIKE ${"%" + w + "%"} OR d.w ILIKE ${"%" + w + "%"})`
+      (w) =>
+        sql`(d.category ILIKE ${"%" + w + "%"} OR d.w ILIKE ${"%" + w + "%"} OR ai."semanticCategory" ILIKE ${"%" + w + "%"} OR ai."semanticSummary" ILIKE ${"%" + w + "%"})`
     );
     const matchClause = wordClauses.length
       ? sql`AND (${sql.join(wordClauses, sql` OR `)})`
       : sql``;
 
-    const rows = await db.execute(sql`
-      WITH matched AS (
-        SELECT d.id, d.w, d.category, d.country, d.language
-        FROM lp_marketplace_domains d
-        JOIN lp_domain_price p ON p."domainId" = d.id
-        WHERE d."isActive" = true AND p."isActive" = true AND d."deletedAt" IS NULL
-          ${matchClause}
-        LIMIT 400
-      ),
-      aggregated AS (
-        SELECT
-          LOWER(d.w) AS domain,
-          MAX(d.category) AS raw_category,
-          MAX(d.country) AS country,
-          MAX(d.language) AS lang,
-          MAX(m."domainRating"::float) AS dr,
-          MAX(m."orgTraffic") AS traffic,
-          MAX(m."orgKeywords") AS keywords,
-          MAX(m."refDomains") AS ref_domains,
-          MIN(p.price::float) AS best_price,
-          MAX(ai."semanticCategory") AS semantic_category,
-          MAX(ai."valueGrade") AS ai_grade,
-          MAX(ai."valueScore"::float) AS ai_score
-        FROM matched d
-        JOIN lp_domain_price p ON p."domainId" = d.id
-        LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
-        LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
-        GROUP BY d.w
-      )
-      SELECT * FROM aggregated
-      WHERE 1 = 1
-        ${sql.join(outerFilterClauses, sql``)}
-    `);
+    // Main catalog query and the (optional) "already links to me" exclusion
+    // lookup are independent — run them concurrently rather than serially.
+    const [rows, exclusionResult] = await Promise.all([
+      db.execute(sql`
+        WITH matched AS (
+          SELECT DISTINCT d.id, d.w, d.category, d.country, d.language
+          FROM lp_marketplace_domains d
+          JOIN lp_domain_price p ON p."domainId" = d.id
+          LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
+          WHERE d."isActive" = true AND p."isActive" = true AND d."deletedAt" IS NULL
+            ${matchClause}
+          LIMIT 400
+        ),
+        aggregated AS (
+          SELECT
+            LOWER(d.w) AS domain,
+            MAX(d.category) AS raw_category,
+            MAX(d.country) AS country,
+            MAX(d.language) AS lang,
+            COALESCE(MAX(ads."domain_rating"::float), MAX(m."domainRating"::float)) AS dr,
+            MAX(m."orgTraffic") AS traffic,
+            MAX(m."orgKeywords") AS keywords,
+            MAX(m."refDomains") AS ref_domains,
+            MIN(p.price::float) AS best_price,
+            MAX(ai."semanticCategory") AS semantic_category,
+            MAX(ai."semanticSummary") AS semantic_summary,
+            MAX(ai."valueGrade") AS ai_grade,
+            MAX(ai."valueScore"::float) AS ai_score
+          FROM matched d
+          JOIN lp_domain_price p ON p."domainId" = d.id
+          LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
+          LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
+          LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
+          GROUP BY d.w
+        )
+        SELECT * FROM aggregated
+        WHERE 1 = 1
+          ${sql.join(outerFilterClauses, sql``)}
+      `),
+      body.hideLinked && body.ownSite?.trim()
+        ? getExcludedDomains(body.ownSite.trim())
+        : Promise.resolve({ excluded: new Set<string>(), degraded: false }),
+    ]);
+    const degradedAhrefs = exclusionResult.degraded;
 
-    if (rows.rows.length === 0) {
-      return NextResponse.json({ results: [], lowRelevance: false, ...quota });
+    // Filtering in JS against a Set (not a SQL NOT IN) is deliberate: the
+    // candidate pool is already bounded to <=400 rows above, so this is
+    // cheap and avoids building a huge SQL NOT IN(...) list from what could
+    // be 1000s of referring domains.
+    const matchedRows = exclusionResult.excluded.size
+      ? rows.rows.filter((r) => !exclusionResult.excluded.has((r.domain as string).toLowerCase()))
+      : rows.rows;
+
+    if (matchedRows.length === 0) {
+      return NextResponse.json({ results: [], lowRelevance: false, degradedAhrefs, ...quota });
     }
 
     // Simple relevance score: how many query words appear in this domain's
-    // category or name. Computed here (not in SQL) now that the candidate
-    // set is already small. Sort by it and take the top 30 — the SQL LIMIT
-    // 400 above only bounds the candidate pool, it isn't the final ranking.
+    // category or name. Used to cut a shortlist for the Claude rerank pass
+    // below, and as the fallback ranking if that call fails or is skipped.
     function relevance(domain: string, category: string): number {
       const hay = `${category} ${domain}`.toLowerCase();
       return words.filter((w) => hay.includes(w)).length;
     }
 
-    const scored = rows.rows
+    const shortlist = matchedRows
       .map((r) => ({ row: r, rel: relevance(r.domain as string, (r.raw_category as string) ?? "") }))
       .sort((a, b) => b.rel - a.rel)
-      .slice(0, 30);
-    const maxRel = Math.max(1, ...scored.map((s) => s.rel));
+      .slice(0, CLAUDE_SHORTLIST_SIZE);
+
+    // Real semantic ranking over the shortlist. Falls back to the word-overlap
+    // ranking above (unchanged behavior) if Claude is unavailable, times out,
+    // or returns something unparseable — this call must never fail the search.
+    const claudeScores = await rerankWithClaude(
+      query,
+      shortlist.map((s) => ({
+        domain: s.row.domain as string,
+        category: (s.row.raw_category as string) ?? "",
+        semanticSummary: s.row.semantic_summary as string | null,
+      }))
+    );
+
+    const scored = claudeScores
+      ? shortlist
+          .map((s) => ({
+            row: s.row,
+            matchPct: Math.round(Math.max(0, Math.min(100, claudeScores.get(s.row.domain as string) ?? 0))),
+          }))
+          .sort((a, b) => b.matchPct - a.matchPct)
+          .slice(0, FINAL_RESULT_SIZE)
+      : (() => {
+          const top = shortlist.slice(0, FINAL_RESULT_SIZE);
+          const maxRel = Math.max(1, ...top.map((s) => s.rel));
+          return top.map((s) => ({ row: s.row, matchPct: Math.round((s.rel / maxRel) * 100) }));
+        })();
 
     const offersMap = await fetchOffersForDomains(scored.map((s) => s.row.domain as string));
 
-    const results = scored.map(({ row: r, rel }) => {
+    const results = scored.map(({ row: r, matchPct }) => {
       const domain = r.domain as string;
       const dr = r.dr != null ? Number(r.dr) : 0;
       const traffic = r.traffic != null ? Number(r.traffic) : 0;
       const grade = (r.ai_grade as string) ?? (dr >= 70 ? "A+" : dr >= 55 ? "A" : dr >= 40 ? "B+" : "B");
       const score = r.ai_score != null ? Math.round(Number(r.ai_score)) : Math.round(Math.min(dr, 100) * 0.7 + Math.min(traffic / 100000, 30));
-      const matchPct = Math.round((rel / maxRel) * 100);
       const offers = offersMap.get(domain) ?? [];
       const lpBestPrice = r.best_price != null ? Number(r.best_price) : null;
       const offerMin = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
@@ -281,10 +342,13 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // Low-relevance flag: even the best match only hit a small fraction of
-    // the query's words — mirrors the source's separate "weak matches" empty
-    // state (distinct from zero results).
-    const lowRelevance = words.length > 1 && maxRel / words.length < 0.4;
+    // Low-relevance flag: even the best word-overlap match only hit a small
+    // fraction of the query's words — mirrors the source's separate "weak
+    // matches" empty state (distinct from zero results). Based on word
+    // overlap regardless of whether Claude reranked, since this signals
+    // whether the SQL pre-filter found anything worth ranking at all.
+    const bestWordRel = shortlist[0]?.rel ?? 0;
+    const lowRelevance = words.length > 1 && bestWordRel / words.length < 0.4;
 
     // Log usage against the weekly quota only on a successful, executed search.
     await db.execute(sql`
@@ -293,7 +357,7 @@ export async function POST(req: NextRequest) {
     `);
 
     const updatedQuota = await getQuota(userId);
-    return NextResponse.json({ results, lowRelevance, ...updatedQuota });
+    return NextResponse.json({ results, lowRelevance, degradedAhrefs, ...updatedQuota });
   } catch (err) {
     console.error("[/api/related-sites]", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Search failed" }, { status: 500 });

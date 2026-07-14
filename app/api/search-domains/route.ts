@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
       SELECT
         LOWER(d.w) AS domain,
         MAX(d.country) AS country,
-        MAX(m."domainRating"::float) AS dr,
+        COALESCE(MAX(ads."domain_rating"::float), MAX(m."domainRating"::float)) AS dr,
         MAX(m."orgTraffic") AS traffic,
         MAX(m."orgKeywords") AS keywords,
         MAX(m."refDomains") AS ref_domains,
@@ -44,10 +44,11 @@ export async function GET(req: NextRequest) {
       FROM lp_marketplace_domains d
       JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true
       LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
+      LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
       WHERE d."isActive" = true AND d."deletedAt" IS NULL
       ${searchClause}
       GROUP BY LOWER(d.w)
-      ORDER BY MAX(m."domainRating"::float) DESC NULLS LAST
+      ORDER BY COALESCE(MAX(ads."domain_rating"::float), MAX(m."domainRating"::float)) DESC NULLS LAST
       LIMIT ${limit}
     `);
 
