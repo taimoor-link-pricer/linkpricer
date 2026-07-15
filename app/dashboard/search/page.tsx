@@ -616,27 +616,37 @@ function CartPopup({
 type SortKey = "domain" | "score" | "dr" | "traffic" | "keywords";
 type SortDir = "asc" | "desc";
 
-function SortArrow({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
+function SortArrow({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey | null; sortDir: SortDir }) {
   if (sortKey !== col) return <span style={{ color: C.mute2, marginLeft: 3 }}>↔</span>;
   return <span style={{ color: C.accent, marginLeft: 3 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
 }
 
+// Either a resolved domain row, or one that came back "not found" — kept as
+// a single tagged union so both can be interleaved in one ordered list
+// (entry order, or sorted-with-not-found-trailing) instead of two disjoint
+// arrays that always render found-then-not-found regardless of input order.
+type TableRow = { kind: "found"; row: Domain } | { kind: "notfound"; domain: string };
+
 function ResultsTable({
   results,
   notFound,
+  order,
   currency,
   onAddToCart,
   forceExpandDomain,
 }: {
   results: Domain[];
   notFound: string[];
+  order: string[];
   currency: Currency;
   onAddToCart: (item: CartItem) => void;
   forceExpandDomain?: string;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [sortKey, setSortKey] = useState<SortKey>("score");
+  // null = neutral/no sort — the default, and also what a 3rd click on an
+  // active column returns to (desc -> asc -> none -> desc -> ...).
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterOpen, setFilterOpen] = useState(false);
 
@@ -683,36 +693,76 @@ function ResultsTable({
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      if (sortDir === "desc") setSortDir("asc");
+      else { setSortKey(null); setSortDir("desc"); } // 3rd click -> back to neutral
     } else {
       setSortKey(key);
       setSortDir("desc");
     }
   }
 
-  const sorted = [...results].sort((a, b) => {
-    let av: number | string = 0;
-    let bv: number | string = 0;
-    if (sortKey === "domain") { av = a.domain; bv = b.domain; }
-    else if (sortKey === "score") { av = a.score; bv = b.score; }
-    else if (sortKey === "dr") { av = a.dr; bv = b.dr; }
-    else if (sortKey === "traffic") { av = a.traffic; bv = b.traffic; }
-    else if (sortKey === "keywords") { av = a.keywords; bv = b.keywords; }
-    if (typeof av === "string" && typeof bv === "string") {
-      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+  function sortFound(rows: Domain[]): Domain[] {
+    return [...rows].sort((a, b) => {
+      let av: number | string = 0;
+      let bv: number | string = 0;
+      if (sortKey === "domain") { av = a.domain; bv = b.domain; }
+      else if (sortKey === "score") { av = a.score; bv = b.score; }
+      else if (sortKey === "dr") { av = a.dr; bv = b.dr; }
+      else if (sortKey === "traffic") { av = a.traffic; bv = b.traffic; }
+      else if (sortKey === "keywords") { av = a.keywords; bv = b.keywords; }
+      if (typeof av === "string" && typeof bv === "string") {
+        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      return sortDir === "asc" ? (av as number) - (bv as number) : (bv as number) - (av as number);
+    });
+  }
+
+  // Neutral state: interleave found + not-found rows in the exact sequence
+  // the user entered them (via `order`), not-found domains included inline
+  // rather than always trailing. With an explicit column sort active, found
+  // rows are ranked by that column and not-found rows (nothing to rank)
+  // trail after — but still in their original relative entry order.
+  function buildRows(): TableRow[] {
+    const notFoundSet = new Set(notFound);
+    const byDomain = new Map(results.map((r) => [r.domain, r]));
+
+    if (sortKey === null) {
+      const seq = order.length > 0 ? order : [...results.map((r) => r.domain), ...notFound];
+      const rows: TableRow[] = [];
+      const seen = new Set<string>();
+      for (const d of seq) {
+        if (seen.has(d)) continue;
+        seen.add(d);
+        const found = byDomain.get(d);
+        if (found) rows.push({ kind: "found", row: found });
+        else if (notFoundSet.has(d)) rows.push({ kind: "notfound", domain: d });
+      }
+      // Safety net for any result/not-found domain that fell outside `order`
+      // (e.g. stale order state) — still show it rather than drop it.
+      for (const r of results) if (!seen.has(r.domain)) { rows.push({ kind: "found", row: r }); seen.add(r.domain); }
+      for (const d of notFound) if (!seen.has(d)) { rows.push({ kind: "notfound", domain: d }); seen.add(d); }
+      return rows;
     }
-    return sortDir === "asc" ? (av as number) - (bv as number) : (bv as number) - (av as number);
-  });
+
+    const orderedNotFound = order.length > 0 ? order.filter((d) => notFoundSet.has(d)) : notFound;
+    return [
+      ...sortFound(results).map((row): TableRow => ({ kind: "found", row })),
+      ...orderedNotFound.map((domain): TableRow => ({ kind: "notfound", domain })),
+    ];
+  }
+
+  const rows = buildRows();
 
   function handleDownloadCSV() {
     const header = "Domain,Country,Category,DR,Traffic,Keywords,Grade,Score,Best Price\n";
-    const rows = results
-      .map(
-        (d) =>
-          `${d.domain},${d.country},${d.category},${d.dr},${d.traffic},${d.keywords},${d.grade},${d.score},${d.bestPrice}`
+    const lines = rows
+      .map((r) =>
+        r.kind === "found"
+          ? `${r.row.domain},${r.row.country},${r.row.category},${r.row.dr},${r.row.traffic},${r.row.keywords},${r.row.grade},${r.row.score},${r.row.bestPrice}`
+          : `${r.domain},,,,,,,,not found`
       )
       .join("\n");
-    const blob = new Blob([header + rows], { type: "text/csv" });
+    const blob = new Blob([header + lines], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -843,11 +893,22 @@ function ResultsTable({
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row, idx) => {
+            {rows.map((r, idx) => {
+              const isLastRow = idx === rows.length - 1;
+              if (r.kind === "notfound") {
+                return (
+                  <tr key={r.domain}>
+                    <td colSpan={9} style={{ padding: "12px 20px", borderBottom: isLastRow ? "none" : `1px solid ${C.line}`, fontSize: 13 }}>
+                      <span style={{ fontFamily: C.mono, color: C.ink2 }}>{r.domain}</span>
+                      <span style={{ color: C.mute, marginLeft: 10 }}>— not found in any marketplace</span>
+                    </td>
+                  </tr>
+                );
+              }
+              const row = r.row;
               const isExp = expanded.has(row.domain);
               const isFav = favorites.has(row.domain);
               const gs = gradeStyle(row.grade);
-              const isLast = idx === sorted.length - 1 && notFound.length === 0;
               return (
                 <React.Fragment key={row.domain}>
                   <DomainRow
@@ -855,7 +916,7 @@ function ResultsTable({
                     row={row}
                     isExpanded={isExp}
                     isFavorite={isFav}
-                    isLast={isLast}
+                    isLast={isLastRow}
                     currency={currency}
                     gradeStyle={gs}
                     onToggleExpand={() => toggleExpand(row.domain)}
@@ -876,14 +937,6 @@ function ResultsTable({
                 </React.Fragment>
               );
             })}
-            {notFound.map((d, idx) => (
-              <tr key={d}>
-                <td colSpan={9} style={{ padding: "12px 20px", borderBottom: idx === notFound.length - 1 ? "none" : `1px solid ${C.line}`, fontSize: 13 }}>
-                  <span style={{ fontFamily: C.mono, color: C.ink2 }}>{d}</span>
-                  <span style={{ color: C.mute, marginLeft: 10 }}>— not found in any marketplace</span>
-                </td>
-              </tr>
-            ))}
           </tbody>
         </table>
       </div>
@@ -1535,6 +1588,12 @@ function SearchPageInner() {
   const [analyzing, setAnalyzing] = useState(false);
   const [results, setResults] = useState<Domain[] | null>(null);
   const [notFound, setNotFound] = useState<string[]>([]);
+  // The exact sequence the user entered domains in — kept separate from
+  // `results`/`notFound` (which the API splits into found/missing) so the
+  // table can display everything back in that original order, not-found
+  // domains included in their original position rather than shoved to the
+  // bottom.
+  const [order, setOrder] = useState<string[]>([]);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -1574,6 +1633,7 @@ function SearchPageInner() {
     setPasteValue("");
     setResults(null);
     setNotFound([]);
+    setOrder([]);
   }
 
   // `domainsOverride` lets callers (the ?domain= auto-run effect below)
@@ -1586,6 +1646,7 @@ function SearchPageInner() {
     if (domains.length === 0) return;
     setAnalyzing(true);
     setResults(null);
+    setOrder(domains);
 
     try {
       const res = await fetch("/api/analyze", {
@@ -2148,6 +2209,7 @@ function SearchPageInner() {
           <ResultsTable
             results={results}
             notFound={notFound}
+            order={order}
             currency={currency}
             onAddToCart={handleAddToCart}
             forceExpandDomain={tourActive && tourStep === 2 ? TOUR_DEMO_ROW.domain : (domainParam ?? undefined)}
