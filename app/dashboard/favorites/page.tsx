@@ -40,21 +40,34 @@ interface FavoriteDomain {
   category: string | null;
 }
 
-const navLinkStyle: React.CSSProperties = { padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: "#6b7280", textDecoration: "none" };
-const navActiveStyle: React.CSSProperties = { padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, color: "#000000" };
-
+// Same TopBar markup/style as Analyze, Related Sites, and Orders — kept
+// local (not extracted to a shared component yet, matching how those three
+// pages each already have their own copy) so this page's nav looks and
+// behaves identically to the others rather than as a separate design.
 function DashboardNav() {
   return (
-    <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 40px", borderBottom: "1px solid #e8eaed", background: "#ffffff" }}>
+    <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: "#000000" }}>Linkpricer</span>
-        <span style={{ color: "#9ca3af", fontSize: 12 }}>/ app / favorites</span>
+        <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: "#0f1620" }}>Linkpricer</span>
+        <span style={{ marginLeft: 4, color: "#9ca3af", fontSize: 12 }}>/ app / favorites</span>
       </div>
       <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <Link href={ROUTES.search} style={navLinkStyle}>Analyze</Link>
-        <Link href="/dashboard/related-sites" style={navLinkStyle}>Related Sites</Link>
-        <span style={navActiveStyle}>Favorites</span>
-        <Link href={ROUTES.orders} style={navLinkStyle}>Orders</Link>
+        {([
+          { label: "Analyze", href: ROUTES.search },
+          { label: "Related Sites", href: "/dashboard/related-sites" },
+          { label: "Favorites", href: null },
+          { label: "Orders", href: ROUTES.orders },
+        ] as { label: string; href: string | null }[]).map(({ label, href }) =>
+          href ? (
+            <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: "#9ca3af", background: "transparent", textDecoration: "none" }}>
+              {label}
+            </Link>
+          ) : (
+            <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "default", color: "#0f1620" }}>
+              {label}
+            </span>
+          )
+        )}
       </nav>
     </header>
   );
@@ -87,7 +100,6 @@ export default function FavoritesPage() {
 
   return (
     <>
-    <DashboardNav />
     <style>{`
       .favs-page { padding: 32px 40px; max-width: 1100px; margin: 0 auto; }
       .favs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
@@ -101,6 +113,7 @@ export default function FavoritesPage() {
       }
     `}</style>
     <div className="favs-page">
+      <DashboardNav />
       {/* Header */}
       <div className="favs-header">
         <div>

@@ -12,6 +12,7 @@
 // Stripe/company-details gating in front of "Pay Now" (he was explicit that
 // sequencing there is still undecided — "you figure out what's best").
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import type { ClientOrderAction } from "@/lib/orders/types";
 
@@ -588,6 +589,32 @@ export default function OrdersPage() {
       <style>{`* { box-sizing: border-box; }`}</style>
 
       {tourActive && <Tour steps={tourSteps} stepIndex={tourStep} setStepIndex={setTourStep} onClose={endTour} />}
+
+      {/* ── TopBar (same nav as Analyze/Related Sites/Favorites) ── */}
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
+          <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / orders</span>
+        </div>
+        <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {([
+            { label: "Analyze", href: "/dashboard/search" },
+            { label: "Related Sites", href: "/dashboard/related-sites" },
+            { label: "Favorites", href: "/dashboard/favorites" },
+            { label: "Orders", href: null },
+          ] as { label: string; href: string | null }[]).map(({ label, href }) =>
+            href ? (
+              <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: C.mute, background: "transparent", textDecoration: "none" }}>
+                {label}
+              </Link>
+            ) : (
+              <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "default", color: C.ink }}>
+                {label}
+              </span>
+            )
+          )}
+        </nav>
+      </header>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <div>
