@@ -22,6 +22,13 @@ export const metadata: Metadata = {
     shortcut: "/logo-icon.png",
     apple: "/logo-icon.png",
   },
+  // TEMPORARY: site-wide noindex while pre-launch — remove this block (and
+  // restore the allow-list in app/robots.ts) once Karolis confirms we're
+  // ready for Google to index the site.
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export default function RootLayout({
