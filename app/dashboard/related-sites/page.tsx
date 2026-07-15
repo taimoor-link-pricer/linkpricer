@@ -339,6 +339,10 @@ export default function RelatedSitesPage() {
 
   useEffect(() => {
     fetch("/api/related-sites").then((r) => (r.ok ? r.json() : null)).then((q) => q && setQuota(q)).catch(() => {});
+    fetch("/api/favorites")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => data && setFavorites(new Set((data.favorites as { domain: string }[]).map((f) => f.domain))))
+      .catch(() => {});
   }, []);
 
   async function runSearch() {
@@ -386,7 +390,18 @@ export default function RelatedSitesPage() {
 
   function clearFilters() { setFilters(RS_DEFAULT_FILTERS); }
   function toggleRow(domain: string) { setExpanded((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
-  function toggleFav(domain: string) { setFavorites((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
+  function toggleFav(row: RelatedSite) {
+    const wasFav = favorites.has(row.domain);
+    setFavorites((prev) => { const n = new Set(prev); wasFav ? n.delete(row.domain) : n.add(row.domain); return n; });
+    if (wasFav) {
+      fetch(`/api/favorites?domain=${encodeURIComponent(row.domain)}`, { method: "DELETE" }).catch(() => {});
+    } else {
+      fetch("/api/favorites", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: row.domain, dr: row.dr, traffic: row.traffic, category: row.category }),
+      }).catch(() => {});
+    }
+  }
   function addToCart(item: CartItem) { setCartItems((prev) => [...prev, item]); }
 
   const sorted = [...results].sort((a, b) => {
@@ -520,7 +535,7 @@ export default function RelatedSitesPage() {
                     expanded={expanded.has(row.domain)}
                     onToggle={() => toggleRow(row.domain)}
                     isFav={favorites.has(row.domain)}
-                    onFav={() => toggleFav(row.domain)}
+                    onFav={() => toggleFav(row)}
                     currency="USD"
                     onAddToCart={addToCart}
                   />

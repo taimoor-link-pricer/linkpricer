@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ROUTES } from "@/lib/constants";
+import { fmt } from "@/lib/design-v1/format";
 
 function LoadingSpinner() {
   return (
@@ -33,23 +34,60 @@ function LoadingSpinner() {
 
 interface FavoriteDomain {
   domain: string;
-  price: string;
+  price: number | null;
   dr: number;
-  traffic: string;
+  traffic: number;
+  category: string | null;
+}
+
+const navLinkStyle: React.CSSProperties = { padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: "#6b7280", textDecoration: "none" };
+const navActiveStyle: React.CSSProperties = { padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, color: "#000000" };
+
+function DashboardNav() {
+  return (
+    <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 40px", borderBottom: "1px solid #e8eaed", background: "#ffffff" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: "#000000" }}>Linkpricer</span>
+        <span style={{ color: "#9ca3af", fontSize: 12 }}>/ app / favorites</span>
+      </div>
+      <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <Link href={ROUTES.search} style={navLinkStyle}>Analyze</Link>
+        <Link href="/dashboard/related-sites" style={navLinkStyle}>Related Sites</Link>
+        <span style={navActiveStyle}>Favorites</span>
+        <Link href={ROUTES.orders} style={navLinkStyle}>Orders</Link>
+      </nav>
+    </header>
+  );
 }
 
 export default function FavoritesPage() {
   const { loading } = useAuthContext();
   const [favorites, setFavorites] = useState<FavoriteDomain[]>([]);
+  const [fetching, setFetching] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/favorites")
+      .then((r) => (r.ok ? r.json() : { favorites: [] }))
+      .then((data) => setFavorites(data.favorites ?? []))
+      .catch(() => setFavorites([]))
+      .finally(() => setFetching(false));
+  }, []);
 
   if (loading) return <LoadingSpinner />;
 
-  function removeFavorite(domain: string) {
+  async function removeFavorite(domain: string) {
     setFavorites((prev) => prev.filter((f) => f.domain !== domain));
+    try {
+      await fetch(`/api/favorites?domain=${encodeURIComponent(domain)}`, { method: "DELETE" });
+    } catch {
+      // best-effort — local state already updated; a stale server row just
+      // means it reappears on next visit, not worth blocking the UI on
+    }
   }
 
   return (
     <>
+    <DashboardNav />
     <style>{`
       .favs-page { padding: 32px 40px; max-width: 1100px; margin: 0 auto; }
       .favs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
@@ -96,7 +134,7 @@ export default function FavoritesPage() {
         </Link>
       </div>
 
-      {favorites.length === 0 ? (
+      {!fetching && favorites.length === 0 ? (
         /* Empty state */
         <div
           style={{
@@ -242,7 +280,7 @@ function FavoriteCard({
             Price
           </div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#006621" }}>
-            {domain.price}
+            {fmt.price(domain.price)}
           </div>
         </div>
         <div>
@@ -256,14 +294,14 @@ function FavoriteCard({
             Traffic
           </div>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
-            {domain.traffic}
+            {fmt.num(domain.traffic)}
           </div>
         </div>
       </div>
 
       <div style={{ marginTop: 16 }}>
         <Link
-          href={`${ROUTES.search}?q=${encodeURIComponent(domain.domain)}`}
+          href={`${ROUTES.search}?domain=${encodeURIComponent(domain.domain)}`}
           style={{
             fontSize: 13,
             color: "#0052cc",

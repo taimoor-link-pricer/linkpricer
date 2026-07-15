@@ -647,6 +647,13 @@ function ResultsTable({
     }
   }, [forceExpandDomain]);
 
+  useEffect(() => {
+    fetch("/api/favorites")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => data && setFavorites(new Set((data.favorites as { domain: string }[]).map((f) => f.domain))))
+      .catch(() => {});
+  }, []);
+
   function toggleExpand(domain: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -656,13 +663,21 @@ function ResultsTable({
     });
   }
 
-  function toggleFav(domain: string) {
+  function toggleFav(row: Domain) {
+    const wasFav = favorites.has(row.domain);
     setFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(domain)) next.delete(domain);
-      else next.add(domain);
+      wasFav ? next.delete(row.domain) : next.add(row.domain);
       return next;
     });
+    if (wasFav) {
+      fetch(`/api/favorites?domain=${encodeURIComponent(row.domain)}`, { method: "DELETE" }).catch(() => {});
+    } else {
+      fetch("/api/favorites", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: row.domain, dr: row.dr, traffic: row.traffic, category: row.category }),
+      }).catch(() => {});
+    }
   }
 
   function handleSort(key: SortKey) {
@@ -843,7 +858,7 @@ function ResultsTable({
                     currency={currency}
                     gradeStyle={gs}
                     onToggleExpand={() => toggleExpand(row.domain)}
-                    onToggleFav={() => toggleFav(row.domain)}
+                    onToggleFav={() => toggleFav(row)}
                     onAddToCart={onAddToCart}
                   />
                   {isExp && (
