@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
+import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
 
 // ── searchable dropdown (ported from RSDropdown) ────────────────────────────
@@ -431,6 +432,7 @@ export default function RelatedSitesPage() {
           <span style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Related Sites</span>
           <Link href="/dashboard/favorites" style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: C.mute, textDecoration: "none" }}>Favorites</Link>
           <Link href="/dashboard/orders" style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: C.mute, textDecoration: "none" }}>Orders</Link>
+          <ProfileMenu />
         </nav>
       </header>
 

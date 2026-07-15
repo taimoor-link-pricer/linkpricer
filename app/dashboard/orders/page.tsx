@@ -13,6 +13,7 @@
 // sequencing there is still undecided — "you figure out what's best").
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import type { ClientOrderAction } from "@/lib/orders/types";
 
@@ -613,6 +614,7 @@ export default function OrdersPage() {
               </span>
             )
           )}
+          <ProfileMenu />
         </nav>
       </header>
 

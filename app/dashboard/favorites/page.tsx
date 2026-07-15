@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
+import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { ROUTES } from "@/lib/constants";
 import { fmt } from "@/lib/design-v1/format";
 
@@ -68,6 +69,7 @@ function DashboardNav() {
             </span>
           )
         )}
+        <ProfileMenu />
       </nav>
     </header>
   );
