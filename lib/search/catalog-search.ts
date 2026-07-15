@@ -10,6 +10,22 @@ import { rerankWithClaude } from "@/lib/ai/claude-rerank";
 
 const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
 const DEFAULT_FINAL_RESULT_SIZE = 30;
+const DEFAULT_CANDIDATE_POOL_LIMIT = 400;
+
+export type CatalogSortBy = "match" | "dr" | "traffic" | "price" | "keywords" | "refDomains";
+export type CatalogSortDir = "asc" | "desc";
+
+// Column extractors for server-side (non-Claude) sorting — used when the
+// caller asks to sort by a plain metric instead of "best match". Null/NaN
+// always sorts last regardless of direction, so missing data never floats
+// to the top of an ascending sort.
+const SORT_EXTRACTORS: Partial<Record<CatalogSortBy, (r: Record<string, unknown>) => number | null>> = {
+  dr: (r) => (r.dr != null ? Number(r.dr) : null),
+  traffic: (r) => (r.traffic != null ? Number(r.traffic) : null),
+  price: (r) => (r.best_price != null ? Number(r.best_price) : null),
+  keywords: (r) => (r.keywords != null ? Number(r.keywords) : null),
+  refDomains: (r) => (r.ref_domains != null ? Number(r.ref_domains) : null),
+};
 
 // Ordinal ranking for the "grade" filter's "X & above" semantics (A+ is the
 // only exact-match option; A/B+/B are thresholds). Mirrors the same DR
@@ -77,12 +93,20 @@ export interface CatalogSearchOptions {
   hideLinked?: boolean;
   claudeShortlistSize?: number;
   finalResultSize?: number;
+  // When sortBy is "match" (default/omitted), ranking is the existing
+  // Claude semantic rerank over the word-overlap shortlist. Any other
+  // sortBy skips Claude entirely and orders the full candidate pool by
+  // that plain SQL column instead — cheaper and unbounded by shortlist size.
+  sortBy?: CatalogSortBy;
+  sortDir?: CatalogSortDir;
+  candidatePoolLimit?: number;
 }
 
 export interface CatalogSearchOutput {
   results: CatalogSearchResult[];
   lowRelevance: boolean;
   degradedAhrefs: boolean;
+  total: number;
 }
 
 // Same offers join as /api/analyze — marketplace_offers + supplier_offers +
@@ -155,6 +179,9 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const f = opts.filters ?? {};
   const claudeShortlistSize = opts.claudeShortlistSize ?? DEFAULT_CLAUDE_SHORTLIST_SIZE;
   const finalResultSize = opts.finalResultSize ?? DEFAULT_FINAL_RESULT_SIZE;
+  const candidatePoolLimit = opts.candidatePoolLimit ?? DEFAULT_CANDIDATE_POOL_LIMIT;
+  const sortBy: CatalogSortBy = opts.sortBy ?? "match";
+  const sortDir: CatalogSortDir = opts.sortDir ?? "desc";
 
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
@@ -199,7 +226,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
         WHERE d."isActive" = true AND p."isActive" = true AND d."deletedAt" IS NULL
           ${matchClause}
-        LIMIT 400
+        LIMIT ${candidatePoolLimit}
       ),
       aggregated AS (
         SELECT
@@ -242,7 +269,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     : rows.rows;
 
   if (matchedRows.length === 0) {
-    return { results: [], lowRelevance: false, degradedAhrefs };
+    return { results: [], lowRelevance: false, degradedAhrefs, total: 0 };
   }
 
   // Simple relevance score: how many query words appear in this domain's
@@ -258,31 +285,59 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     .sort((a, b) => b.rel - a.rel)
     .slice(0, claudeShortlistSize);
 
-  // Real semantic ranking over the shortlist. Falls back to the word-overlap
-  // ranking above (unchanged behavior) if Claude is unavailable, times out,
-  // or returns something unparseable — this call must never fail the search.
-  const claudeScores = await rerankWithClaude(
-    query,
-    shortlist.map((s) => ({
-      domain: s.row.domain as string,
-      category: (s.row.raw_category as string) ?? "",
-      semanticSummary: s.row.semantic_summary as string | null,
-    }))
-  );
+  let scored: { row: Record<string, unknown>; matchPct: number }[];
+  let total: number;
 
-  const scored = claudeScores
-    ? shortlist
-        .map((s) => ({
-          row: s.row,
-          matchPct: Math.round(Math.max(0, Math.min(100, claudeScores.get(s.row.domain as string) ?? 0))),
-        }))
-        .sort((a, b) => b.matchPct - a.matchPct)
-        .slice(0, finalResultSize)
-    : (() => {
-        const top = shortlist.slice(0, finalResultSize);
-        const maxRel = Math.max(1, ...top.map((s) => s.rel));
-        return top.map((s) => ({ row: s.row, matchPct: Math.round((s.rel / maxRel) * 100) }));
-      })();
+  if (sortBy !== "match") {
+    // Plain-column sort: skip Claude entirely and order the *full* matched
+    // candidate pool (not just the shortlist) directly by that SQL column.
+    // matchPct is still computed (cheap word-overlap) purely for display —
+    // it does not drive ordering in this mode.
+    const extractor = SORT_EXTRACTORS[sortBy]!;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const relByDomain = new Map(shortlist.map((s) => [s.row.domain as string, s.rel]));
+    const maxRel = Math.max(1, ...shortlist.map((s) => s.rel));
+    const sortedRows = [...matchedRows].sort((a, b) => {
+      const av = extractor(a);
+      const bv = extractor(b);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; // nulls always last
+      if (bv == null) return -1;
+      return (av - bv) * dir;
+    });
+    total = sortedRows.length;
+    scored = sortedRows.slice(0, finalResultSize).map((row) => ({
+      row,
+      matchPct: Math.round(((relByDomain.get(row.domain as string) ?? 0) / maxRel) * 100),
+    }));
+  } else {
+    // Real semantic ranking over the shortlist. Falls back to the word-overlap
+    // ranking above (unchanged behavior) if Claude is unavailable, times out,
+    // or returns something unparseable — this call must never fail the search.
+    const claudeScores = await rerankWithClaude(
+      query,
+      shortlist.map((s) => ({
+        domain: s.row.domain as string,
+        category: (s.row.raw_category as string) ?? "",
+        semanticSummary: s.row.semantic_summary as string | null,
+      }))
+    );
+
+    total = shortlist.length;
+    scored = claudeScores
+      ? shortlist
+          .map((s) => ({
+            row: s.row,
+            matchPct: Math.round(Math.max(0, Math.min(100, claudeScores.get(s.row.domain as string) ?? 0))),
+          }))
+          .sort((a, b) => b.matchPct - a.matchPct)
+          .slice(0, finalResultSize)
+      : (() => {
+          const top = shortlist.slice(0, finalResultSize);
+          const maxRel = Math.max(1, ...top.map((s) => s.rel));
+          return top.map((s) => ({ row: s.row, matchPct: Math.round((s.rel / maxRel) * 100) }));
+        })();
+  }
 
   const offersMap = await fetchOffersForDomains(scored.map((s) => s.row.domain as string));
 
@@ -322,5 +377,5 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const bestWordRel = shortlist[0]?.rel ?? 0;
   const lowRelevance = words.length > 1 && bestWordRel / words.length < 0.4;
 
-  return { results, lowRelevance, degradedAhrefs };
+  return { results, lowRelevance, degradedAhrefs, total };
 }

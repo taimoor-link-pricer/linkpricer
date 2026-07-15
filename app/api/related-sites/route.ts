@@ -3,7 +3,7 @@ import { adminAuth } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { cookies } from "next/headers";
-import { searchCatalog, type CatalogSearchFilters } from "@/lib/search/catalog-search";
+import { searchCatalog, type CatalogSearchFilters, type CatalogSortBy, type CatalogSortDir } from "@/lib/search/catalog-search";
 
 // ── Weekly search quota ──────────────────────────────────────────────────────
 // Reuses the existing generic `user_activity_events` log (eventType +
@@ -16,6 +16,12 @@ const WEEKLY_LIMIT = 10;
 const EVENT_TYPE = "related_sites_search";
 const CLAUDE_SHORTLIST_SIZE = 80;
 const FINAL_RESULT_SIZE = 30;
+// Plain-column sorts (DR/traffic/price/keywords/refDomains) skip Claude
+// entirely, so they can afford to return a much larger, unbounded-feeling
+// result set — the frontend paginates over it client-side and the CSV
+// export needs "all" of it in the same order that's on screen.
+const SORTED_RESULT_SIZE = 500;
+const SORTED_CANDIDATE_POOL_LIMIT = 3000;
 
 function startOfWeekUTC(d = new Date()): Date {
   const day = d.getUTCDay(); // 0 = Sunday
@@ -59,6 +65,14 @@ interface SearchBody {
   filters?: CatalogSearchFilters;
   ownSite?: string;
   hideLinked?: boolean;
+  sortBy?: CatalogSortBy;
+  sortDir?: CatalogSortDir;
+  // Re-sorting an already-run search (clicking a column header) doesn't
+  // consume a weekly quota unit — only the initial "Search" click, and any
+  // change to the query/filters/own-site inputs, does. The quota gate still
+  // blocks the request outright once exhausted (see below), it just doesn't
+  // additionally decrement on sort-only refinements.
+  countAsSearch?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -80,28 +94,38 @@ export async function POST(req: NextRequest) {
   const query = (body.query ?? "").trim();
   if (!query) return NextResponse.json({ error: "query is required" }, { status: 400 });
 
+  const sortBy = body.sortBy ?? "match";
+  const isPlainSort = sortBy !== "match";
+  const countAsSearch = body.countAsSearch !== false;
+
   try {
-    const { results, lowRelevance, degradedAhrefs } = await searchCatalog({
+    const { results, lowRelevance, degradedAhrefs, total } = await searchCatalog({
       query,
       filters: body.filters,
       ownSite: body.ownSite,
       hideLinked: body.hideLinked,
       claudeShortlistSize: CLAUDE_SHORTLIST_SIZE,
-      finalResultSize: FINAL_RESULT_SIZE,
+      finalResultSize: isPlainSort ? SORTED_RESULT_SIZE : FINAL_RESULT_SIZE,
+      candidatePoolLimit: isPlainSort ? SORTED_CANDIDATE_POOL_LIMIT : undefined,
+      sortBy,
+      sortDir: body.sortDir,
     });
 
     if (results.length === 0) {
-      return NextResponse.json({ results: [], lowRelevance: false, degradedAhrefs, ...quota });
+      return NextResponse.json({ results: [], lowRelevance: false, degradedAhrefs, total: 0, ...quota });
     }
 
-    // Log usage against the weekly quota only on a successful, executed search.
-    await db.execute(sql`
-      INSERT INTO user_activity_events (user_id, event_type, metadata)
-      VALUES (${userId}, ${EVENT_TYPE}, ${JSON.stringify({ query })})
-    `);
+    // Log usage against the weekly quota only on a successful, executed
+    // search that should actually count (not a sort-only re-fetch).
+    if (countAsSearch) {
+      await db.execute(sql`
+        INSERT INTO user_activity_events (user_id, event_type, metadata)
+        VALUES (${userId}, ${EVENT_TYPE}, ${JSON.stringify({ query })})
+      `);
+    }
 
-    const updatedQuota = await getQuota(userId);
-    return NextResponse.json({ results, lowRelevance, degradedAhrefs, ...updatedQuota });
+    const updatedQuota = countAsSearch ? await getQuota(userId) : quota;
+    return NextResponse.json({ results, lowRelevance, degradedAhrefs, total, ...updatedQuota });
   } catch (err) {
     console.error("[/api/related-sites]", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Search failed" }, { status: 500 });

@@ -136,9 +136,17 @@ const RS_PRICE_MAP: Record<string, { priceMin?: number; priceMax?: number }> = {
   any: {}, lt300: { priceMax: 300 }, "300-700": { priceMin: 300, priceMax: 700 }, "700-1200": { priceMin: 700, priceMax: 1200 }, gt1200: { priceMin: 1200 },
 };
 
-const RS_SORTS: DropdownOption[] = [
-  { id: "match", label: "Best match" }, { id: "dr", label: "Highest DR" }, { id: "traffic", label: "Most traffic" }, { id: "bestPrice", label: "Lowest price" },
+// Sortable columns mirror lib/search/catalog-search.ts's CatalogSortBy —
+// "match" (Claude semantic rerank, the default) has no asc/desc concept, so
+// its header just resets back to neutral rather than cycling a direction.
+type SortableColumn = "match" | "dr" | "traffic" | "keywords";
+type SortDir = "asc" | "desc";
+const RS_COLUMNS: { label: string; sortKey?: SortableColumn }[] = [
+  { label: "" }, { label: "Site" }, { label: "Match", sortKey: "match" }, { label: "Actions" },
+  { label: "Value" }, { label: "Country" }, { label: "DR", sortKey: "dr" }, { label: "Traffic", sortKey: "traffic" },
+  { label: "Keywords", sortKey: "keywords" }, { label: "Category" },
 ];
+const PAGE_SIZE = 25;
 
 const RS_DEFAULT_FILTERS = { country: "any", language: "any", traffic: "any", dr: "any", price: "any", niche: "any", grade: "any" };
 
@@ -322,7 +330,9 @@ export default function RelatedSitesPage() {
   const [ownSite, setOwnSite] = useState("");
   const [hideLinked, setHideLinked] = useState(true);
   const [filters, setFilters] = useState(RS_DEFAULT_FILTERS);
-  const [sortId, setSortId] = useState("match");
+  const [sortBy, setSortBy] = useState<SortableColumn>("match");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [page, setPage] = useState(1);
   const [results, setResults] = useState<RelatedSite[]>([]);
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -346,8 +356,11 @@ export default function RelatedSitesPage() {
       .catch(() => {});
   }, []);
 
-  async function runSearch() {
+  async function runSearch(overrides?: { sortBy?: SortableColumn; sortDir?: SortDir; countAsSearch?: boolean }) {
     if (!query.trim() || searching) return;
+    const useSortBy = overrides?.sortBy ?? sortBy;
+    const useSortDir = overrides?.sortDir ?? sortDir;
+    const countAsSearch = overrides?.countAsSearch ?? true;
     setSearching(true);
     setError(null);
     try {
@@ -369,6 +382,9 @@ export default function RelatedSitesPage() {
           filters: parsedFilters,
           ownSite: hasSite ? ownSite.trim() : undefined,
           hideLinked: hasSite && hideLinked,
+          sortBy: useSortBy,
+          sortDir: useSortDir,
+          countAsSearch,
         }),
       });
       const data = await res.json();
@@ -382,11 +398,59 @@ export default function RelatedSitesPage() {
       setResults(data.results);
       setLowRelevance(data.lowRelevance ?? false);
       setQuota({ used: data.used, remaining: data.remaining, limit: data.limit, resetsAt: data.resetsAt });
+      setPage(1);
     } catch {
       setError("Network error. Please try again.");
     } finally {
       setSearching(false);
     }
+  }
+
+  function handleSearchClick() {
+    setSortBy("match");
+    setSortDir("desc");
+    runSearch({ sortBy: "match", sortDir: "desc", countAsSearch: true });
+  }
+
+  function cycleColumnSort(col: Exclude<SortableColumn, "match">) {
+    if (searching || !hasSearched) return;
+    let nextBy: SortableColumn = "match";
+    let nextDir: SortDir = "desc";
+    if (sortBy !== col) {
+      nextBy = col; nextDir = "desc";
+    } else if (sortDir === "desc") {
+      nextBy = col; nextDir = "asc";
+    } // else: already asc on this column -> falls back to "match" (neutral)
+    setSortBy(nextBy);
+    setSortDir(nextDir);
+    runSearch({ sortBy: nextBy, sortDir: nextDir, countAsSearch: false });
+  }
+
+  function resetToMatchSort() {
+    if (searching || !hasSearched || sortBy === "match") return;
+    setSortBy("match");
+    setSortDir("desc");
+    runSearch({ sortBy: "match", sortDir: "desc", countAsSearch: false });
+  }
+
+  function exportCsv() {
+    if (results.length === 0) return;
+    const headers = ["Domain", "Match %", "Country", "Language", "Category", "DR", "Traffic", "Keywords", "Ref Domains", "Grade", "Score", "Best Price"];
+    const escape = (v: string | number | null) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = results.map((r) => [r.domain, r.matchPct, r.country, r.lang, r.category, r.dr, r.traffic, r.keywords, r.refDomains, r.grade, r.score, r.bestPrice].map(escape).join(","));
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `related-sites-${query.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40) || "export"}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function clearFilters() { setFilters(RS_DEFAULT_FILTERS); }
@@ -405,12 +469,13 @@ export default function RelatedSitesPage() {
   }
   function addToCart(item: CartItem) { setCartItems((prev) => [...prev, item]); }
 
-  const sorted = [...results].sort((a, b) => {
-    if (sortId === "dr") return b.dr - a.dr;
-    if (sortId === "traffic") return b.traffic - a.traffic;
-    if (sortId === "bestPrice") return (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity);
-    return b.matchPct - a.matchPct;
-  });
+  // Sorting now happens server-side (lib/search/catalog-search.ts) — `results`
+  // already arrives in the correct order for the active sortBy/sortDir.
+  // Pagination is a pure client-side slice over that already-ordered array,
+  // so CSV export (which uses the full `results` array) always matches the
+  // same sequence the table is showing, page or no page.
+  const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
+  const pageResults = results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   if (loading) return <LoadingSpinner />;
 
@@ -458,9 +523,9 @@ export default function RelatedSitesPage() {
         <div data-tour="search" style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
           <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
             <span style={{ position: "absolute", left: 16, color: C.mute, pointerEvents: "none" }}>🔍</span>
-            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runSearch()} placeholder="Describe the sites you want, e.g. football news" style={{ width: "100%", height: 52, padding: "0 16px 0 46px", fontSize: 16, fontWeight: 500, border: `1px solid ${C.line}`, borderRadius: 10, outline: "none", color: C.ink }} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearchClick()} placeholder="Describe the sites you want, e.g. football news" style={{ width: "100%", height: 52, padding: "0 16px 0 46px", fontSize: 16, fontWeight: 500, border: `1px solid ${C.line}`, borderRadius: 10, outline: "none", color: C.ink }} />
           </div>
-          <button onClick={runSearch} disabled={searching || (quota?.remaining ?? 1) <= 0} style={{ height: 52, padding: "0 26px", fontSize: 15.5, background: searching || (quota?.remaining ?? 1) <= 0 ? C.mute2 : C.accent, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, cursor: searching ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
+          <button onClick={handleSearchClick} disabled={searching || (quota?.remaining ?? 1) <= 0} style={{ height: 52, padding: "0 26px", fontSize: 15.5, background: searching || (quota?.remaining ?? 1) <= 0 ? C.mute2 : C.accent, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, cursor: searching ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
             {searching ? "Searching…" : "🔍 Search"}
           </button>
         </div>
@@ -471,7 +536,7 @@ export default function RelatedSitesPage() {
         <div data-tour="mysite" style={{ display: "flex", alignItems: "center", gap: 18, marginTop: 14, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 300px", minWidth: 240, position: "relative", display: "flex", alignItems: "center" }}>
             <span style={{ position: "absolute", left: 14, color: C.mute2, fontSize: 13, pointerEvents: "none" }}>🔗</span>
-            <input value={ownSite} onChange={(e) => setOwnSite(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runSearch()} placeholder="Your website (optional), e.g. mysite.com" style={{ width: "100%", height: 42, padding: "0 14px 0 40px", fontSize: 13, fontFamily: C.mono, border: `1px solid ${C.line}`, borderRadius: 10, outline: "none", color: C.ink }} />
+            <input value={ownSite} onChange={(e) => setOwnSite(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearchClick()} placeholder="Your website (optional), e.g. mysite.com" style={{ width: "100%", height: 42, padding: "0 14px 0 40px", fontSize: 13, fontFamily: C.mono, border: `1px solid ${C.line}`, borderRadius: 10, outline: "none", color: C.ink }} />
           </div>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: hasSite ? "pointer" : "default", fontSize: 13.5, fontWeight: 600, color: hasSite ? C.ink2 : C.mute }}>
             <RSToggle checked={hideLinked && hasSite} disabled={!hasSite} onChange={(v) => setHideLinked(v)} />
@@ -512,28 +577,44 @@ export default function RelatedSitesPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Related sites</h2>
               <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{results.length} {results.length === 1 ? "result" : "results"}</span>
-              <span style={{ fontSize: 12, color: C.mute }}>ranked by semantic match</span>
+              <span style={{ fontSize: 12, color: C.mute }}>{sortBy === "match" ? "ranked by semantic match" : `sorted by ${sortBy} (${sortDir === "desc" ? "high to low" : "low to high"})`}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 12, color: C.mute, fontWeight: 600 }}>Sort by</span>
-              <RSDropdown value={sortId} options={RS_SORTS} onChange={setSortId} minWidth={150} align="right" />
+              <button onClick={exportCsv} title="Export all results as CSV" style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 34, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+                ⬇ Export CSV
+              </button>
             </div>
           </header>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
               <thead>
                 <tr>
-                  {["", "Site", "Match", "Actions", "Value", "Country", "DR", "Traffic", "Keywords", "Category"].map((h) => (
-                    <th key={h} style={{ padding: "11px 14px", fontSize: 11, fontWeight: 700, color: C.ink3, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: `1px solid ${C.line}`, background: C.line2, textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
+                  {RS_COLUMNS.map((col) => {
+                    const isSortable = !!col.sortKey;
+                    const isActive = isSortable && sortBy === col.sortKey;
+                    const indicator = col.sortKey
+                      ? col.sortKey === "match"
+                        ? sortBy === "match" ? "●" : ""
+                        : isActive ? (sortDir === "desc" ? " ▼" : " ▲") : ""
+                      : "";
+                    return (
+                      <th
+                        key={col.label || "expand"}
+                        onClick={isSortable ? () => (col.sortKey === "match" ? resetToMatchSort() : cycleColumnSort(col.sortKey as Exclude<SortableColumn, "match">)) : undefined}
+                        style={{ padding: "11px 14px", fontSize: 11, fontWeight: 700, color: isActive ? C.accent700 : C.ink3, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: `1px solid ${C.line}`, background: isActive ? C.accent50 : C.line2, textAlign: "left", whiteSpace: "nowrap", cursor: isSortable ? "pointer" : "default", userSelect: "none" }}
+                      >
+                        {col.label}{indicator}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((row, idx) => (
+                {pageResults.map((row, idx) => (
                   <ResultRow
                     key={row.domain}
                     row={row}
-                    isLast={idx === sorted.length - 1}
+                    isLast={idx === pageResults.length - 1}
                     expanded={expanded.has(row.domain)}
                     onToggle={() => toggleRow(row.domain)}
                     isFav={favorites.has(row.domain)}
@@ -545,6 +626,13 @@ export default function RelatedSitesPage() {
               </tbody>
             </table>
           </div>
+          {totalPages > 1 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 20px", borderTop: `1px solid ${C.line}` }}>
+              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} style={{ padding: "6px 12px", border: `1px solid ${C.line}`, borderRadius: 7, background: "#fff", color: page <= 1 ? C.mute2 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: page <= 1 ? "not-allowed" : "pointer" }}>← Prev</button>
+              <span style={{ fontSize: 12.5, color: C.ink3, fontWeight: 600 }}>Page {page} of {totalPages}</span>
+              <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={{ padding: "6px 12px", border: `1px solid ${C.line}`, borderRadius: 7, background: "#fff", color: page >= totalPages ? C.mute2 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: page >= totalPages ? "not-allowed" : "pointer" }}>Next →</button>
+            </div>
+          )}
         </section>
       )}
       {cartItems.length > 0 && (
