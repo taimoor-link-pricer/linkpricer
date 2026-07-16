@@ -48,8 +48,12 @@ export default function SeoMeetupVilnius01Page() {
           color: var(--ink);
           -webkit-font-smoothing: antialiased;
         }
-        .smv-page a { color: var(--accent); }
-        .smv-page a:hover { color: #003a99; }
+        /* :where() keeps this page-scoped without adding specificity, so
+           more specific rules below (.smv-cta-btn, .smv-logo, .smv-foot-social)
+           still win the cascade the same way they would with a bare "a"
+           selector in an unscoped stylesheet. */
+        :where(.smv-page) a { color: var(--accent); }
+        :where(.smv-page) a:hover { color: #003a99; }
 
         .smv-wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
 

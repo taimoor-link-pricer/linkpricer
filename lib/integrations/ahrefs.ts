@@ -8,11 +8,12 @@
 // (2026-07-14): GET /v3/site-explorer/refdomains, response wrapped as
 // { refdomains: [...] }, fields include `domain` and `traffic_domain`.
 //
-// NOTE: as of 2026-07-14 the current AHREFS_API_KEY returns 401 Unauthorized
-// on this endpoint (and even on the free subscription-info/limits-and-usage
-// endpoint) — it only has access to the free public/domain-rating-free tier.
-// This is an account/key-scope issue, not a bug in this code; confirm with
-// Karolis before relying on this in production.
+// NOTE: the AHREFS_API_KEY used through 2026-07-14 returned 401 Unauthorized
+// on this endpoint — it was scoped to Ahrefs' "MCP" key type, not "API".
+// Fixed 2026-07-14 by generating a proper REST-API-scoped key from Ahrefs'
+// dashboard (Account -> API keys -> "Generate API key", not "Generate MCP
+// key") and re-verified live (200s against both this endpoint and
+// subscription-info/limits-and-usage) on 2026-07-16.
 
 const API_URL = "https://api.ahrefs.com/v3/site-explorer/refdomains";
 const MIN_REFERRING_TRAFFIC = 100;

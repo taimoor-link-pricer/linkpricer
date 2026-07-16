@@ -5,7 +5,7 @@
 // the offers joins.
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
-import { getExcludedDomains } from "@/lib/integrations/referring-domains-cache";
+import { getExcludedDomains, normalizeDomain } from "@/lib/integrations/referring-domains-cache";
 import { rerankWithClaude } from "@/lib/ai/claude-rerank";
 
 const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
@@ -264,8 +264,11 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // candidate pool is already bounded to <=400 rows above, so this is
   // cheap and avoids building a huge SQL NOT IN(...) list from what could
   // be 1000s of referring domains.
+  // normalizeDomain (not just .toLowerCase()) so a www.-prefixed host from
+  // Ahrefs still matches the catalog's bare-domain rows, or vice versa —
+  // see the comment on normalizeDomain in referring-domains-cache.ts.
   const matchedRows = exclusionResult.excluded.size
-    ? rows.rows.filter((r) => !exclusionResult.excluded.has((r.domain as string).toLowerCase()))
+    ? rows.rows.filter((r) => !exclusionResult.excluded.has(normalizeDomain(r.domain as string)))
     : rows.rows;
 
   if (matchedRows.length === 0) {
@@ -295,8 +298,15 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     // it does not drive ordering in this mode.
     const extractor = SORT_EXTRACTORS[sortBy]!;
     const dir = sortDir === "asc" ? 1 : -1;
-    const relByDomain = new Map(shortlist.map((s) => [s.row.domain as string, s.rel]));
-    const maxRel = Math.max(1, ...shortlist.map((s) => s.rel));
+    // Relevance over the *full* matched pool, not just the claudeShortlist —
+    // that shortlist is capped (default 80) for the Claude-rerank path, but
+    // a plain-column sort can return up to `finalResultSize` (e.g. 500) rows
+    // pulled from a much larger pool. Using the shortlist's relevance map
+    // here meant any row outside the top 80 fell back to matchPct=0 even
+    // when it genuinely matched the query.
+    const relEntries = matchedRows.map((r) => ({ domain: r.domain as string, rel: relevance(r.domain as string, (r.raw_category as string) ?? "") }));
+    const relByDomain = new Map(relEntries.map((e) => [e.domain, e.rel]));
+    const maxRel = Math.max(1, ...relEntries.map((e) => e.rel));
     const sortedRows = [...matchedRows].sort((a, b) => {
       const av = extractor(a);
       const bv = extractor(b);

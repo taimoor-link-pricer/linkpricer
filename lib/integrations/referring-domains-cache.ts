@@ -49,7 +49,13 @@ async function ensureTables(): Promise<void> {
   tablesEnsured = true;
 }
 
-function normalizeDomain(raw: string): string {
+// Exported so catalog-search.ts can apply the exact same normalization to
+// the marketplace catalog's domain column before comparing against this
+// module's exclusion Set — Ahrefs' refdomains endpoint frequently returns
+// www.-prefixed hosts, and without normalizing both sides consistently the
+// Set.has() lookup silently misses valid matches (a site that already links
+// to the user ends up not excluded, with no error surfaced anywhere).
+export function normalizeDomain(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
@@ -63,7 +69,9 @@ async function readCache(targetDomain: string): Promise<Set<string>> {
     SELECT referring_domain FROM lp_ahrefs_referring_domains_cache
     WHERE target_domain = ${targetDomain}
   `);
-  return new Set(rows.rows.map((r) => r.referring_domain as string));
+  // Normalize on read too, not just on write — covers rows cached before
+  // this normalization existed, without needing a data migration.
+  return new Set(rows.rows.map((r) => normalizeDomain(r.referring_domain as string)));
 }
 
 async function writeCache(
@@ -73,7 +81,7 @@ async function writeCache(
   await db.execute(sql`DELETE FROM lp_ahrefs_referring_domains_cache WHERE target_domain = ${targetDomain}`);
   if (domains.length > 0) {
     const values = sql.join(
-      domains.map((d) => sql`(${targetDomain}, ${d.domain}, ${d.orgTraffic})`),
+      domains.map((d) => sql`(${targetDomain}, ${normalizeDomain(d.domain)}, ${d.orgTraffic})`),
       sql`, `
     );
     await db.execute(sql`
@@ -124,7 +132,7 @@ export async function getExcludedDomains(ownSiteRaw: string): Promise<ExcludedDo
   try {
     const fetched = await fetchReferringDomainsFromAhrefs(targetDomain);
     await writeCache(targetDomain, fetched);
-    return { excluded: new Set(fetched.map((d) => d.domain)), degraded: false };
+    return { excluded: new Set(fetched.map((d) => normalizeDomain(d.domain))), degraded: false };
   } catch (err) {
     console.error(
       "[referring-domains-cache] Ahrefs fetch failed:",

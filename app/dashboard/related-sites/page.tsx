@@ -337,6 +337,7 @@ export default function RelatedSitesPage() {
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [lowRelevance, setLowRelevance] = useState(false);
+  const [degradedAhrefs, setDegradedAhrefs] = useState(false);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -397,6 +398,7 @@ export default function RelatedSitesPage() {
       }
       setResults(data.results);
       setLowRelevance(data.lowRelevance ?? false);
+      setDegradedAhrefs(data.degradedAhrefs ?? false);
       setQuota({ used: data.used, remaining: data.remaining, limit: data.limit, resetsAt: data.resetsAt });
       setPage(1);
     } catch {
@@ -544,6 +546,12 @@ export default function RelatedSitesPage() {
             {!hasSite && <span style={{ fontWeight: 500, color: C.mute2, fontSize: 12.5 }}>— add your site to enable</span>}
           </label>
         </div>
+
+        {hasSearched && hasSite && hideLinked && degradedAhrefs && (
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: C.warn }}>
+            ⚠ Exclusion data temporarily unavailable — results below may include sites that already link to you.
+          </div>
+        )}
       </section>
 
       <section data-tour="filters" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16, boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
