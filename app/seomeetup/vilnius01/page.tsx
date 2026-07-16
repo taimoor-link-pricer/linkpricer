@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 
 // Easily-editable placeholder — swap in the real Google Form URL once it exists.
 const GOOGLE_FORM_URL = "https://forms.gle/{GOOGLE_FORM_URL}";
@@ -7,27 +8,12 @@ export const metadata: Metadata = {
   title: "Thank you — SEO Meetup #01 Vilnius",
 };
 
-function ImageSlot({ label }: { label: string }) {
+// Real event photos, picked from the shared Google Photos album and saved
+// to public/seomeetup/vilnius01/ — see file for provenance if replacing.
+function EventPhoto({ src, alt }: { src: string; alt: string }) {
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: 130,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        textAlign: "center",
-        padding: 12,
-        background: "linear-gradient(135deg, #eef1f6 0%, #e4e8f0 100%)",
-        border: "1px dashed #c7cddb",
-        borderRadius: 16,
-        color: "#8890a0",
-        fontSize: 12.5,
-        fontWeight: 600,
-      }}
-    >
-      {label}
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <Image src={src} alt={alt} fill sizes="(max-width: 700px) 50vw, 33vw" style={{ objectFit: "cover" }} />
     </div>
   );
 }
@@ -140,12 +126,12 @@ export default function SeoMeetupVilnius01Page() {
         <section className="smv-gallery">
           <div className="smv-wrap">
             <div className="smv-gallery-grid">
-              <div className="smv-g-item wide tall"><ImageSlot label="Full room / crowd shot" /></div>
-              <div className="smv-g-item narrow"><ImageSlot label="Speaker on stage" /></div>
-              <div className="smv-g-item narrow"><ImageSlot label="Networking / mingling" /></div>
-              <div className="smv-g-item"><ImageSlot label="Q&A moment" /></div>
-              <div className="smv-g-item"><ImageSlot label="Attendees chatting" /></div>
-              <div className="smv-g-item"><ImageSlot label="Group / closing shot" /></div>
+              <div className="smv-g-item wide tall"><EventPhoto src="/seomeetup/vilnius01/crowd.jpg" alt="Full room of attendees at SEO Meetup #01 Vilnius" /></div>
+              <div className="smv-g-item narrow"><EventPhoto src="/seomeetup/vilnius01/speaker.jpg" alt="Speaker presenting at SEO Meetup #01 Vilnius" /></div>
+              <div className="smv-g-item narrow"><EventPhoto src="/seomeetup/vilnius01/networking.jpg" alt="Attendees networking at SEO Meetup #01 Vilnius" /></div>
+              <div className="smv-g-item"><EventPhoto src="/seomeetup/vilnius01/qa.jpg" alt="Attendees in conversation at SEO Meetup #01 Vilnius" /></div>
+              <div className="smv-g-item"><EventPhoto src="/seomeetup/vilnius01/chatting.jpg" alt="Attendees chatting at SEO Meetup #01 Vilnius" /></div>
+              <div className="smv-g-item"><EventPhoto src="/seomeetup/vilnius01/closing.jpg" alt="Group photo closing out SEO Meetup #01 Vilnius" /></div>
             </div>
           </div>
         </section>
