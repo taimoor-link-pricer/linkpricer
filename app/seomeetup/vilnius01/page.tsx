@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 
-// Easily-editable placeholder — swap in the real Google Form URL once it exists.
-const GOOGLE_FORM_URL = "https://forms.gle/{GOOGLE_FORM_URL}";
+const GOOGLE_FORM_URL = "https://forms.gle/zF2xZV9hFAW7aXcp9";
 
 export const metadata: Metadata = {
   title: "Thank you — SEO Meetup #01 Vilnius",
@@ -10,10 +9,10 @@ export const metadata: Metadata = {
 
 // Real event photos, picked from the shared Google Photos album and saved
 // to public/seomeetup/vilnius01/ — see file for provenance if replacing.
-function EventPhoto({ src, alt }: { src: string; alt: string }) {
+function EventPhoto({ src, alt, priority }: { src: string; alt: string; priority?: boolean }) {
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <Image src={src} alt={alt} fill sizes="(max-width: 700px) 50vw, 33vw" style={{ objectFit: "cover" }} />
+      <Image src={src} alt={alt} fill priority={priority} sizes="(max-width: 700px) 50vw, 33vw" style={{ objectFit: "cover" }} />
     </div>
   );
 }
@@ -126,7 +125,7 @@ export default function SeoMeetupVilnius01Page() {
         <section className="smv-gallery">
           <div className="smv-wrap">
             <div className="smv-gallery-grid">
-              <div className="smv-g-item wide tall"><EventPhoto src="/seomeetup/vilnius01/crowd.jpg" alt="Full room of attendees at SEO Meetup #01 Vilnius" /></div>
+              <div className="smv-g-item wide tall"><EventPhoto src="/seomeetup/vilnius01/crowd.jpg" alt="Full room of attendees at SEO Meetup #01 Vilnius" priority /></div>
               <div className="smv-g-item narrow"><EventPhoto src="/seomeetup/vilnius01/speaker.jpg" alt="Speaker presenting at SEO Meetup #01 Vilnius" /></div>
               <div className="smv-g-item narrow"><EventPhoto src="/seomeetup/vilnius01/networking.jpg" alt="Attendees networking at SEO Meetup #01 Vilnius" /></div>
               <div className="smv-g-item"><EventPhoto src="/seomeetup/vilnius01/qa.jpg" alt="Attendees in conversation at SEO Meetup #01 Vilnius" /></div>
