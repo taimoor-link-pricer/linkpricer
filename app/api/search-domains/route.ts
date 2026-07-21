@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
         MAX(m."refDomains") AS ref_domains,
         MIN(p.price::float) AS best_price
       FROM lp_marketplace_domains d
-      JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true
+      JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true AND p.price::float > 0
       LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
       LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
       WHERE d."isActive" = true AND d."deletedAt" IS NULL

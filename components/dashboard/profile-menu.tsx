@@ -59,7 +59,6 @@ export function ProfileMenu() {
             {[
               { label: "My profile", icon: "👤", href: "/dashboard/profile" },
               { label: "Settings", icon: "⚙️", href: "/dashboard/settings" },
-              { label: "My orders", icon: "📦", href: "/dashboard/orders" },
             ].map(item => (
               <a key={item.label} href={item.href} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", fontSize: 13, color: C.ink2, textDecoration: "none", cursor: "pointer" }}
                 onMouseEnter={e => (e.currentTarget.style.background = C.bg3)}

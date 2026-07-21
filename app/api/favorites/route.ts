@@ -24,7 +24,7 @@ async function fetchBestPrices(domainNames: string[]): Promise<Map<string, numbe
     SELECT LOWER(d.w) AS domain, MIN(p.price::float) AS price
     FROM lp_marketplace_domains d
     JOIN lp_domain_price p ON p."domainId" = d.id
-    WHERE d."isActive" = true AND p."isActive" = true AND LOWER(d.w) IN (${domainList})
+    WHERE d."isActive" = true AND p."isActive" = true AND p.price::float > 0 AND LOWER(d.w) IN (${domainList})
     GROUP BY LOWER(d.w)
   `);
   for (const r of rows.rows) priceMap.set(r.domain as string, Number(r.price));

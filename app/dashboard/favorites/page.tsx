@@ -33,6 +33,34 @@ function LoadingSpinner() {
   );
 }
 
+function FavoritesLoading() {
+  return (
+    <div
+      style={{
+        background: "#ffffff",
+        border: "1px solid #e8eaed",
+        borderRadius: 12,
+        padding: "80px 20px",
+        textAlign: "center",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)",
+      }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          margin: "0 auto",
+          border: "3px solid #e8eaed",
+          borderTopColor: "#0052cc",
+          borderRadius: "50%",
+          animation: "spin 0.8s linear infinite",
+        }}
+      />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
 interface FavoriteDomain {
   domain: string;
   price: number | null;
@@ -130,7 +158,7 @@ export default function FavoritesPage() {
             My Favorites
           </h1>
           <p style={{ fontSize: 14, color: "#6b7280", margin: 0 }}>
-            {favorites.length} saved domain{favorites.length !== 1 ? "s" : ""}
+            {fetching ? "Loading…" : `${favorites.length} saved domain${favorites.length !== 1 ? "s" : ""}`}
           </p>
         </div>
         <Link
@@ -149,7 +177,9 @@ export default function FavoritesPage() {
         </Link>
       </div>
 
-      {!fetching && favorites.length === 0 ? (
+      {fetching ? (
+        <FavoritesLoading />
+      ) : favorites.length === 0 ? (
         /* Empty state */
         <div
           style={{

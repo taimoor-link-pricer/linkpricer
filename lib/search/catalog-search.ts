@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { getExcludedDomains, normalizeDomain } from "@/lib/integrations/referring-domains-cache";
 import { rerankWithClaude } from "@/lib/ai/claude-rerank";
+import { normalizeLanguage, languageDisplayLabel } from "@/lib/search/language-normalize";
 
 const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
 const DEFAULT_FINAL_RESULT_SIZE = 30;
@@ -123,7 +124,7 @@ async function fetchOffersForDomains(domains: string[]): Promise<Map<string, Cat
              mo.delivery_time_days, mo.quality_score, mo.link_type, mo.tat, mo.updated_at
       FROM marketplace_offers mo
       JOIN domains d ON d.id = mo.domain_id
-      WHERE mo.available = true AND LOWER(d.domain) IN (${domainList})
+      WHERE mo.available = true AND mo.min_price::float > 0 AND LOWER(d.domain) IN (${domainList})
       ORDER BY mo.min_price::float ASC
     `),
     db.execute(sql`
@@ -131,7 +132,7 @@ async function fetchOffersForDomains(domains: string[]): Promise<Map<string, Cat
              so.min_price, so.max_price, so.delivery_time_days, so.updated_at, so.status
       FROM supplier_offers so
       JOIN users u ON u.id = so.vendor_user_id
-      WHERE so.status = 'active' AND so.is_active = true AND LOWER(so.domain) IN (${domainList})
+      WHERE so.status = 'active' AND so.is_active = true AND so.min_price::float > 0 AND LOWER(so.domain) IN (${domainList})
       ORDER BY so.min_price::float ASC
     `),
     db.execute(sql`
@@ -186,9 +187,15 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
   // as plain column aliases to filter on.
+  // Note: `language` is deliberately NOT filtered here in SQL. The raw
+  // `lang` column is messy scraped free text ("Spanish", "Español", "es",
+  // "Spain", ...) with no consistent format, so a SQL string-equality
+  // comparison against the filter's ISO code would silently match almost
+  // nothing (see normalizeLanguage in lib/search/language-normalize.ts for
+  // the full story). It's applied in JS against matchedRows below instead,
+  // after normalizing both sides to the same ISO 639-1 code.
   const outerFilterClauses = [
     f.country ? sql`AND LOWER(country) = LOWER(${f.country})` : sql``,
-    f.language ? sql`AND LOWER(lang) = LOWER(${f.language})` : sql``,
     f.minTraffic != null ? sql`AND COALESCE(traffic, 0) >= ${f.minTraffic}` : sql``,
     f.minDr != null ? sql`AND COALESCE(dr, 0) >= ${f.minDr}` : sql``,
     f.maxDr != null ? sql`AND COALESCE(dr, 0) <= ${f.maxDr}` : sql``,
@@ -224,7 +231,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         FROM lp_marketplace_domains d
         JOIN lp_domain_price p ON p."domainId" = d.id
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
-        WHERE d."isActive" = true AND p."isActive" = true AND d."deletedAt" IS NULL
+        WHERE d."isActive" = true AND p."isActive" = true AND p.price::float > 0 AND d."deletedAt" IS NULL
           ${matchClause}
         LIMIT ${candidatePoolLimit}
       ),
@@ -244,7 +251,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           MAX(ai."valueGrade") AS ai_grade,
           MAX(ai."valueScore"::float) AS ai_score
         FROM matched d
-        JOIN lp_domain_price p ON p."domainId" = d.id
+        JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true AND p.price::float > 0
         LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
         LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
@@ -267,9 +274,16 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // normalizeDomain (not just .toLowerCase()) so a www.-prefixed host from
   // Ahrefs still matches the catalog's bare-domain rows, or vice versa —
   // see the comment on normalizeDomain in referring-domains-cache.ts.
-  const matchedRows = exclusionResult.excluded.size
+  let matchedRows = exclusionResult.excluded.size
     ? rows.rows.filter((r) => !exclusionResult.excluded.has(normalizeDomain(r.domain as string)))
     : rows.rows;
+
+  // Language filter, applied here (not in SQL) against the normalized code —
+  // see the comment on outerFilterClauses above for why.
+  if (f.language) {
+    const wanted = f.language.toLowerCase();
+    matchedRows = matchedRows.filter((r) => normalizeLanguage(r.lang as string | null) === wanted);
+  }
 
   if (matchedRows.length === 0) {
     return { results: [], lowRelevance: false, degradedAhrefs, total: 0 };
@@ -360,12 +374,17 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     const offers = offersMap.get(domain) ?? [];
     const lpBestPrice = r.best_price != null ? Number(r.best_price) : null;
     const offerMin = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
-    const bestPrice = lpBestPrice != null && offerMin != null ? Math.min(lpBestPrice, offerMin) : (lpBestPrice ?? offerMin);
+    // Prefer marketplace_offers (kept fresh by the scraper fleet) over
+    // lp_domain_price, a legacy table most connectors stopped writing to
+    // (frozen ~March 2026 for 44/46 marketplaces). Math.min let a months-stale
+    // number beat today's real price. lp is fallback-only for domains with no
+    // offers coverage yet.
+    const bestPrice = offerMin ?? lpBestPrice;
     return {
       domain,
       matchPct,
       country: (r.country as string) ?? "US",
-      lang: (r.lang as string) ?? "en",
+      lang: languageDisplayLabel(r.lang as string | null),
       category: (r.raw_category as string) ?? (r.semantic_category as string) ?? "General",
       dr,
       drTrend: "flat",

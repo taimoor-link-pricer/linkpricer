@@ -100,7 +100,19 @@ function DashboardContent() {
   }, []);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const idToken = await user.getIdToken();
+          await fetch("/api/auth/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idToken }),
+          });
+        } catch {
+          // session creation failed — fetchMe will 401 and show login
+        }
+      }
       setFirebaseUser(user);
       setAuthLoading(false);
     });

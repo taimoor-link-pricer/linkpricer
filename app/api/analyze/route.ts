@@ -12,6 +12,16 @@ function normalizeDomain(raw: string): string {
     .trim();
 }
 
+// Marketplace prices are stored in their source currency (mo.currency / so.currency / p.currency),
+// not USD. Convert to USD here so every price leaving this route is genuinely USD — the frontend's
+// priceFmt(usd, displayCurrency) assumes its input is already USD.
+const CURRENCY_TO_USD: Record<string, number> = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
+function toUsd(amount: number | null | undefined, currency: string | null | undefined): number | null {
+  if (amount == null) return null;
+  const rate = CURRENCY_TO_USD[(currency ?? "USD").trim().toUpperCase()] ?? 1;
+  return Math.round(amount * rate * 100) / 100;
+}
+
 function computeGrade(dr: number | null, traffic: number | null): string {
   if (dr == null) return "C";
   if (dr >= 70 && (traffic ?? 0) >= 50000) return "A+";
@@ -91,6 +101,7 @@ export async function POST(req: NextRequest) {
         LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
         WHERE d."isActive" = true
           AND p."isActive" = true
+          AND p.price::float > 0
           AND d."deletedAt" IS NULL
           AND LOWER(d.w) IN (${domainList})
         GROUP BY LOWER(d.w)
@@ -108,6 +119,7 @@ export async function POST(req: NextRequest) {
           mo.marketplace_name AS name,
           mo.min_price,
           mo.max_price,
+          mo.currency,
           mo.delivery_time_days,
           mo.quality_score,
           mo.link_type,
@@ -116,6 +128,7 @@ export async function POST(req: NextRequest) {
         FROM marketplace_offers mo
         JOIN domains d ON d.id = mo.domain_id
         WHERE mo.available = true
+          AND mo.min_price::float > 0
           AND LOWER(d.domain) IN (${domainList})
         ORDER BY mo.min_price::float ASC
       `),
@@ -126,6 +139,7 @@ export async function POST(req: NextRequest) {
           COALESCE(u.vendor_name, CONCAT(u.first_name, ' ', u.last_name), u.email) AS vendor_name,
           so.min_price,
           so.max_price,
+          so.currency,
           so.delivery_time_days,
           so.updated_at,
           so.status
@@ -133,6 +147,7 @@ export async function POST(req: NextRequest) {
         JOIN users u ON u.id = so.vendor_user_id
         WHERE so.status = 'active'
           AND so.is_active = true
+          AND so.min_price::float > 0
           AND LOWER(so.domain) IN (${domainList})
         ORDER BY so.min_price::float ASC
       `),
@@ -183,12 +198,14 @@ export async function POST(req: NextRequest) {
       const domain = r.domain as string;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
       const ex = exampleMap.get(domain);
+      const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null) ?? 0;
+      const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null) ?? minUsd;
       offersMap.get(domain)!.push({
         name: (r.name as string) ?? "Marketplace",
         type: "DB",
         updated: fmtUpdated(r.updated_at as string | null),
-        minPrice: Number(r.min_price ?? 0),
-        maxPrice: Number(r.max_price ?? r.min_price ?? 0),
+        minPrice: minUsd,
+        maxPrice: maxUsd,
         quality: Math.min(5, Math.max(1, Number(r.quality_score ?? 3))),
         delivery: Number(r.delivery_time_days ?? 14),
         tat: Number(r.tat ?? r.delivery_time_days ?? 14),
@@ -201,12 +218,14 @@ export async function POST(req: NextRequest) {
       const domain = r.domain as string;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
       const exV = exampleMap.get(domain);
+      const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null) ?? 0;
+      const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null) ?? minUsd;
       offersMap.get(domain)!.push({
         name: `Vendor: ${r.vendor_name as string}`,
         type: "Vendor",
         updated: fmtUpdated(r.updated_at as string | null),
-        minPrice: Number(r.min_price ?? 0),
-        maxPrice: Number(r.max_price ?? r.min_price ?? 0),
+        minPrice: minUsd,
+        maxPrice: maxUsd,
         quality: 3,
         delivery: Number(r.delivery_time_days ?? 14),
         tat: Number(r.delivery_time_days ?? 14),
@@ -228,12 +247,14 @@ export async function POST(req: NextRequest) {
       const traffic = r.traffic != null ? Number(r.traffic) : null;
       const gradeInfo = gradeMap.get(domain);
       const offers = offersMap.get(domain) ?? [];
-      const lpPrice = r.best_price != null ? Number(r.best_price) : null;
+      const lpPrice = toUsd(r.best_price != null ? Number(r.best_price) : null, r.currency as string | null);
       const offerMin = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
-      const bestPrice =
-        lpPrice != null && offerMin != null
-          ? Math.min(lpPrice, offerMin)
-          : (lpPrice ?? offerMin);
+      // Prefer marketplace_offers (kept fresh by the scraper fleet) over
+      // lp_domain_price, a legacy table most connectors stopped writing to
+      // (frozen ~March 2026 for 44/46 marketplaces). Blending with Math.min
+      // let a months-stale number beat today's real price whenever it was
+      // lower. lp is fallback-only, for domains with no offers coverage yet.
+      const bestPrice = offerMin ?? lpPrice;
 
       return {
         domain,

@@ -23,6 +23,14 @@ function toPrice(val: unknown): number | null {
   return val == null || val === "" || isNaN(n) || n === 0 ? null : Math.round(n * 100) / 100;
 }
 
+// lp_domain_price stores prices in their source currency (p.currency), not USD.
+// Convert before returning/caching so the "currency": "USD" field in the response is true.
+const CURRENCY_TO_USD: Record<string, number> = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
+function toUsd(amount: number, currency: string | null | undefined): number {
+  const rate = CURRENCY_TO_USD[(currency ?? "USD").trim().toUpperCase()] ?? 1;
+  return Math.round(amount * rate * 100) / 100;
+}
+
 function jsonError(code: string, message: string, status: number, extra?: Record<string, string>) {
   return NextResponse.json(
     { error: code, message, status },
@@ -142,6 +150,7 @@ export async function GET(
       const sourceRows = await db.execute(sql`
         SELECT
           d."marketPlace"                    AS marketplace_name,
+          MAX(p.currency)                    AS currency,
           MIN(p.price::float)                AS min_price,
           MIN(p.gambling::float)             AS gambling_min,
           MIN(p.adult::float)                AS adult_min,
@@ -151,7 +160,7 @@ export async function GET(
           MIN(p.crypto::float)               AS crypto_min,
           MIN(p."tradingForex"::float)       AS trading_forex_min
         FROM lp_marketplace_domains d
-        JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true
+        JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true AND p.price::float > 0
         WHERE LOWER(d.w) = ${domain}
           AND d."isActive" = true
           AND d."deletedAt" IS NULL
@@ -159,6 +168,32 @@ export async function GET(
       `);
 
       if (sourceRows.rows.length > 0) {
+        // Convert every price field to USD up front — both the response aggregate and the
+        // cache write below must use these, never the raw (possibly non-USD) source values.
+        type SourceRow = {
+          marketplace_name: string;
+          currency: string | null;
+          min_price: unknown;
+          gambling_min: unknown;
+          adult_min: unknown;
+          cbd_min: unknown;
+          loan_min: unknown;
+          dating_min: unknown;
+          crypto_min: unknown;
+          trading_forex_min: unknown;
+        };
+        const usdRows = (sourceRows.rows as unknown as SourceRow[]).map((row) => ({
+          marketplace_name: row.marketplace_name,
+          min_price: toPrice(row.min_price) != null ? toUsd(toPrice(row.min_price)!, row.currency) : null,
+          gambling_min: toPrice(row.gambling_min) != null ? toUsd(toPrice(row.gambling_min)!, row.currency) : null,
+          adult_min: toPrice(row.adult_min) != null ? toUsd(toPrice(row.adult_min)!, row.currency) : null,
+          cbd_min: toPrice(row.cbd_min) != null ? toUsd(toPrice(row.cbd_min)!, row.currency) : null,
+          loan_min: toPrice(row.loan_min) != null ? toUsd(toPrice(row.loan_min)!, row.currency) : null,
+          dating_min: toPrice(row.dating_min) != null ? toUsd(toPrice(row.dating_min)!, row.currency) : null,
+          crypto_min: toPrice(row.crypto_min) != null ? toUsd(toPrice(row.crypto_min)!, row.currency) : null,
+          trading_forex_min: toPrice(row.trading_forex_min) != null ? toUsd(toPrice(row.trading_forex_min)!, row.currency) : null,
+        }));
+
         // Aggregate MIN across all marketplaces for the response
         const agg: Record<string, number | null> = {
           standard_lowest: null,
@@ -171,12 +206,9 @@ export async function GET(
           forex_lowest: null,
         };
 
-        for (const row of sourceRows.rows as any[]) {
-          const pick = (cur: number | null, next: unknown) => {
-            const n = toPrice(next);
-            if (n == null) return cur;
-            return cur == null ? n : Math.min(cur, n);
-          };
+        for (const row of usdRows) {
+          const pick = (cur: number | null, next: number | null) =>
+            next == null ? cur : cur == null ? next : Math.min(cur, next);
           agg.standard_lowest  = pick(agg.standard_lowest,  row.min_price);
           agg.gambling_lowest  = pick(agg.gambling_lowest,  row.gambling_min);
           agg.adult_lowest     = pick(agg.adult_lowest,     row.adult_min);
@@ -190,22 +222,23 @@ export async function GET(
         pr = agg;
         lastUpdated = new Date().toISOString();
 
-        // Write to cache asynchronously (one row per marketplace, 24h TTL)
-        for (const row of sourceRows.rows as any[]) {
+        // Write to cache asynchronously (one row per marketplace, 24h TTL) — already USD.
+        for (const row of usdRows) {
           db.execute(sql`
             INSERT INTO marketplace_price_cache (
-              domain, marketplace_name, min_price,
+              domain, marketplace_name, min_price, currency,
               gambling_min_price, adult_min_price, cbd_min_price,
               loan_min_price, dating_min_price, crypto_min_price,
               trading_forex_min_price, available, fetched_at, expires_at
             ) VALUES (
-              ${domain}, ${row.marketplace_name}, ${row.min_price},
+              ${domain}, ${row.marketplace_name}, ${row.min_price}, 'USD',
               ${row.gambling_min}, ${row.adult_min}, ${row.cbd_min},
               ${row.loan_min}, ${row.dating_min}, ${row.crypto_min},
               ${row.trading_forex_min}, true, NOW(), NOW() + INTERVAL '24 hours'
             )
             ON CONFLICT (domain, marketplace_name) DO UPDATE SET
               min_price             = EXCLUDED.min_price,
+              currency               = EXCLUDED.currency,
               gambling_min_price    = EXCLUDED.gambling_min_price,
               adult_min_price       = EXCLUDED.adult_min_price,
               cbd_min_price         = EXCLUDED.cbd_min_price,
