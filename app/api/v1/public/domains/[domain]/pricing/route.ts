@@ -130,6 +130,7 @@ export async function GET(
     );
   }
   const nicheFilter = nicheParam as Niche | null;
+  const showMarketplace = req.nextUrl.searchParams.get("showmarketplace") === "true";
 
   let httpStatus = 200;
 
@@ -153,7 +154,7 @@ export async function GET(
     `);
 
     const cached = cacheRows.rows[0] ?? null;
-    const cacheHit = cached?.last_updated != null;
+    const cacheHit = cached?.last_updated != null && !showMarketplace;
 
     // 7. If no cache, fetch from source tables
     let pr: Record<string, unknown> | null = null;
@@ -193,23 +194,35 @@ export async function GET(
           crypto_lowest: null,
           forex_lowest: null,
         };
+        const marketplaceFor: Record<string, string | null> = {
+          standard_lowest: null,
+          gambling_lowest: null,
+          adult_lowest: null,
+          cbd_lowest: null,
+          loan_lowest: null,
+          dating_lowest: null,
+          crypto_lowest: null,
+          forex_lowest: null,
+        };
 
         for (const row of sourceRows.rows as any[]) {
-          const pick = (cur: number | null, next: unknown) => {
+          const pick = (key: string, cur: number | null, next: unknown) => {
             const n = toPrice(next);
-            return n == null ? cur : cur == null ? n : Math.min(cur, n);
+            if (n == null) return cur;
+            if (cur == null || n < cur) { marketplaceFor[key] = row.marketplace_name; return n; }
+            return cur;
           };
-          agg.standard_lowest  = pick(agg.standard_lowest,  row.min_price);
-          agg.gambling_lowest  = pick(agg.gambling_lowest,  row.gambling_min);
-          agg.adult_lowest     = pick(agg.adult_lowest,     row.adult_min);
-          agg.cbd_lowest       = pick(agg.cbd_lowest,       row.cbd_min);
-          agg.loan_lowest      = pick(agg.loan_lowest,      row.loan_min);
-          agg.dating_lowest    = pick(agg.dating_lowest,    row.dating_min);
-          agg.crypto_lowest    = pick(agg.crypto_lowest,    row.crypto_min);
-          agg.forex_lowest     = pick(agg.forex_lowest,     row.trading_forex_min);
+          agg.standard_lowest  = pick("standard_lowest",  agg.standard_lowest,  row.min_price);
+          agg.gambling_lowest  = pick("gambling_lowest",  agg.gambling_lowest,  row.gambling_min);
+          agg.adult_lowest     = pick("adult_lowest",     agg.adult_lowest,     row.adult_min);
+          agg.cbd_lowest       = pick("cbd_lowest",       agg.cbd_lowest,       row.cbd_min);
+          agg.loan_lowest      = pick("loan_lowest",      agg.loan_lowest,      row.loan_min);
+          agg.dating_lowest    = pick("dating_lowest",    agg.dating_lowest,    row.dating_min);
+          agg.crypto_lowest    = pick("crypto_lowest",    agg.crypto_lowest,    row.crypto_min);
+          agg.forex_lowest     = pick("forex_lowest",     agg.forex_lowest,     row.trading_forex_min);
         }
 
-        pr = agg;
+        pr = { ...agg, ...Object.fromEntries(Object.entries(marketplaceFor).map(([k, v]) => [`${k}_mp`, v])) };
         lastUpdated = new Date().toISOString();
 
         // Write to cache asynchronously (one row per marketplace, 24h TTL)
@@ -263,21 +276,26 @@ export async function GET(
       return jsonError("domain_not_found", "No data found for this domain.", 404);
     }
 
-    const allPricing = {
-      standard:      toPrice(pr?.standard_lowest),
-      gambling:      toPrice(pr?.gambling_lowest),
-      adult:         toPrice(pr?.adult_lowest),
-      cbd:           toPrice(pr?.cbd_lowest),
-      loan:          toPrice(pr?.loan_lowest),
-      dating:        toPrice(pr?.dating_lowest),
-      crypto:        toPrice(pr?.crypto_lowest),
-      trading_forex: toPrice(pr?.forex_lowest),
+    const allPricing: Record<string, { price: number | null; mp: string | null }> = {
+      standard:      { price: toPrice(pr?.standard_lowest),  mp: (pr?.standard_lowest_mp as string) ?? null },
+      gambling:      { price: toPrice(pr?.gambling_lowest),  mp: (pr?.gambling_lowest_mp as string) ?? null },
+      adult:         { price: toPrice(pr?.adult_lowest),     mp: (pr?.adult_lowest_mp as string) ?? null },
+      cbd:           { price: toPrice(pr?.cbd_lowest),       mp: (pr?.cbd_lowest_mp as string) ?? null },
+      loan:          { price: toPrice(pr?.loan_lowest),      mp: (pr?.loan_lowest_mp as string) ?? null },
+      dating:        { price: toPrice(pr?.dating_lowest),    mp: (pr?.dating_lowest_mp as string) ?? null },
+      crypto:        { price: toPrice(pr?.crypto_lowest),    mp: (pr?.crypto_lowest_mp as string) ?? null },
+      trading_forex: { price: toPrice(pr?.forex_lowest),     mp: (pr?.forex_lowest_mp as string) ?? null },
     };
 
     const pricing = Object.fromEntries(
       Object.entries(allPricing)
-        .filter(([k, v]) => v !== null && (!nicheFilter || k === nicheFilter))
-        .map(([k, v]) => [k, { lowest_price: v, our_price: ourPrice(v as number), currency: "USD" }])
+        .filter(([k, { price }]) => price !== null && (!nicheFilter || k === nicheFilter))
+        .map(([k, { price, mp }]) => [k, {
+          lowest_price: price,
+          our_price: ourPrice(price as number),
+          ...(showMarketplace ? { marketplace: mp } : {}),
+          currency: "USD",
+        }])
     );
 
     return NextResponse.json({
