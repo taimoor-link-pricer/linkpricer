@@ -114,6 +114,19 @@ export async function GET(
     return jsonError("invalid_domain", "Domain parameter is missing or malformed.", 422);
   }
 
+  // 6. Optional niche filter
+  const VALID_NICHES = ["standard", "gambling", "adult", "cbd", "loan", "dating", "crypto", "trading_forex"] as const;
+  type Niche = typeof VALID_NICHES[number];
+  const nicheParam = req.nextUrl.searchParams.get("niche");
+  if (nicheParam && !VALID_NICHES.includes(nicheParam as Niche)) {
+    return jsonError(
+      "invalid_niche",
+      `Invalid niche. Valid values are: ${VALID_NICHES.join(", ")}`,
+      422
+    );
+  }
+  const nicheFilter = nicheParam as Niche | null;
+
   let httpStatus = 200;
 
   try {
@@ -289,7 +302,7 @@ export async function GET(
 
     const pricing = Object.fromEntries(
       Object.entries(allPricing)
-        .filter(([, v]) => v !== null)
+        .filter(([k, v]) => v !== null && (!nicheFilter || k === nicheFilter))
         .map(([k, v]) => [k, { lowest_price: v, currency: "USD" }])
     );
 
