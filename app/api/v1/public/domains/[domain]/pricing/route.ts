@@ -23,6 +23,10 @@ function toPrice(val: unknown): number | null {
   return val == null || val === "" || isNaN(n) || n === 0 ? null : Math.round(n * 100) / 100;
 }
 
+function ourPrice(marketplacePrice: number): number {
+  return Math.max(Math.round(marketplacePrice * 1.15), Math.floor(marketplacePrice) + 1);
+}
+
 // lp_domain_price stores prices in their source currency (p.currency), not USD.
 // Convert before returning/caching so the "currency": "USD" field in the response is true.
 const CURRENCY_TO_USD: Record<string, number> = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
@@ -273,7 +277,7 @@ export async function GET(
     const pricing = Object.fromEntries(
       Object.entries(allPricing)
         .filter(([k, v]) => v !== null && (!nicheFilter || k === nicheFilter))
-        .map(([k, v]) => [k, { lowest_price: v, currency: "USD" }])
+        .map(([k, v]) => [k, { lowest_price: v, our_price: ourPrice(v as number), currency: "USD" }])
     );
 
     return NextResponse.json({
