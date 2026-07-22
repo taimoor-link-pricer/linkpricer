@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { getUsdRates, toUsd as toUsdWithRates } from "@/lib/currency";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -25,14 +26,6 @@ function toPrice(val: unknown): number | null {
 
 function ourPrice(marketplacePrice: number): number {
   return Math.max(Math.round(marketplacePrice * 1.15), Math.floor(marketplacePrice) + 1);
-}
-
-// lp_domain_price stores prices in their source currency (p.currency), not USD.
-// Convert before returning/caching so the "currency": "USD" field in the response is true.
-const CURRENCY_TO_USD: Record<string, number> = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
-function toUsd(amount: number, currency: string | null | undefined): number {
-  const rate = CURRENCY_TO_USD[(currency ?? "USD").trim().toUpperCase()] ?? 1;
-  return Math.round(amount * rate * 100) / 100;
 }
 
 function jsonError(code: string, message: string, status: number, extra?: Record<string, string>) {
@@ -135,6 +128,10 @@ export async function GET(
   let httpStatus = 200;
 
   try {
+    const rates = await getUsdRates();
+    const toUsd = (amount: number, currency: string | null | undefined): number =>
+      toUsdWithRates(amount, currency, rates) as number;
+
     // 6. Check cache first
     const cacheRows = await db.execute(sql`
       SELECT

@@ -48,8 +48,39 @@ export const matchPillColor = (m: number | null | undefined): "green" | "blue" |
 export const sampleInput =
   "forbes.com\nbetimate.com\noneangrygamer.net\ntechcrunch.com 1100\nhealthline.com\npitchfork.com\nobscure-blog-2017.example";
 
+// Fallback only — overwritten by hydrateRates() with the admin-configured
+// values from /api/currency-rates (lib/currency.ts) as soon as any page
+// that shows prices mounts. Kept as a mutable object (not reassigned) so
+// every module that imported RATES sees the update in place.
 export const RATES: Record<Currency, number> = { USD: 1, EUR: 0.92, GBP: 0.79 };
 export const SYMS: Record<Currency, string> = { USD: "$", EUR: "€", GBP: "£" };
+
+let hydrated = false;
+let hydrating: Promise<void> | null = null;
+
+// Admin rates are stored as "1 unit of currency = X USD" (toUsd = amount * rate).
+// RATES here is the inverse direction "1 USD = Y of currency" (conv = usd * RATES[cur]),
+// so Y = 1 / X.
+export function hydrateRates(): Promise<void> {
+  if (hydrated) return Promise.resolve();
+  if (hydrating) return hydrating;
+  hydrating = fetch("/api/currency-rates")
+    .then((res) => res.json())
+    .then((data: { rates: Record<string, number> }) => {
+      for (const cur of ["EUR", "GBP"] as const) {
+        const adminRate = data.rates?.[cur];
+        if (adminRate && adminRate > 0) RATES[cur] = 1 / adminRate;
+      }
+      hydrated = true;
+    })
+    .catch((err) => {
+      console.error("[hydrateRates] keeping fallback rates", err);
+    })
+    .finally(() => {
+      hydrating = null;
+    });
+  return hydrating;
+}
 
 export function conv(usd: number, cur: Currency): number {
   return Math.round(usd * RATES[cur]);

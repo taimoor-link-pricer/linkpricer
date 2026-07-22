@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
+import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -34,12 +35,14 @@ function fmtNum(n: number | null): string {
 }
 
 type Currency = "USD" | "EUR" | "GBP";
+// Rates come from LIVE_RATES (lib/design-v1/format.ts), hydrated at runtime
+// from the admin-configured /api/currency-rates — not hardcoded here, so
+// this can't drift out of sync with the backend's conversion the way it did
+// before (backend used the admin rate, this used a stale fallback forever).
 function priceFmt(usd: number | null, cur: Currency): string {
   if (usd == null) return "—";
-  const rates: Record<Currency, number> = { USD: 1, EUR: 0.92, GBP: 0.79 };
-  const syms: Record<Currency, string> = { USD: "$", EUR: "€", GBP: "£" };
-  const v = Math.round(usd * rates[cur]);
-  return syms[cur] + v.toLocaleString();
+  const v = Math.round(usd * LIVE_RATES[cur]);
+  return LIVE_SYMS[cur] + v.toLocaleString();
 }
 
 function withFee(p: number): number {
@@ -1609,7 +1612,12 @@ function SearchPageInner() {
     catch { return false; }
   });
 
-  const RATES: Record<Currency, number> = { USD: 1, EUR: 0.92, GBP: 0.79 };
+  // Force a re-render once hydrateRates() resolves — mutating LIVE_RATES in
+  // place doesn't itself trigger React to re-render already-mounted rows.
+  const [, forceRatesRerender] = useState(0);
+  useEffect(() => {
+    hydrateRates().then(() => forceRatesRerender((n) => n + 1));
+  }, []);
 
   // Parse "domain.com 200" or "domain.com $200" lines
   const parsedLines = pasteValue
@@ -1621,7 +1629,7 @@ function SearchPageInner() {
       const priceTok = rest.find((t) => /^\$?€?£?\d+(\.\d+)?$/.test(t));
       const rawPrice = priceTok ? parseFloat(priceTok.replace(/[$€£]/, "")) : null;
       // Convert user-entered price from active currency to USD for comparison
-      const yourPriceUsd = rawPrice != null ? Math.round(rawPrice / RATES[currency]) : null;
+      const yourPriceUsd = rawPrice != null ? Math.round(rawPrice / LIVE_RATES[currency]) : null;
       return { domain: domain.toLowerCase(), yourPriceUsd };
     });
 

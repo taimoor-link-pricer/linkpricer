@@ -6,6 +6,9 @@
 // (v1-interactive/related-sites.jsx explicitly reuses window.V1Shared's
 // DomainRow/offer-card machinery for this reason — this file is that.)
 import { useState } from "react";
+import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
+
+export { hydrateRates };
 
 export const C = {
   ink: "#0f1620", ink2: "#374151", ink3: "#6b7280", mute: "#9ca3af", mute2: "#d1d5db",
@@ -24,11 +27,12 @@ export function fmtNum(n: number | null): string {
   return String(n);
 }
 
+// Rates come from LIVE_RATES (lib/design-v1/format.ts), hydrated at runtime
+// from the admin-configured /api/currency-rates — see search/page.tsx's
+// priceFmt for why this can't be a local hardcoded copy anymore.
 export function priceFmt(usd: number | null, cur: Currency): string {
   if (usd == null) return "—";
-  const rates: Record<Currency, number> = { USD: 1, EUR: 0.92, GBP: 0.79 };
-  const syms: Record<Currency, string> = { USD: "$", EUR: "€", GBP: "£" };
-  return syms[cur] + Math.round(usd * rates[cur]).toLocaleString();
+  return LIVE_SYMS[cur] + Math.round(usd * LIVE_RATES[cur]).toLocaleString();
 }
 
 export function withFee(p: number): number {

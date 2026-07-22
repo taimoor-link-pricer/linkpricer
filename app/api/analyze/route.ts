@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { getUsdRates, toUsd as toUsdWithRates } from "@/lib/currency";
 
 function normalizeDomain(raw: string): string {
   return raw
@@ -10,16 +11,6 @@ function normalizeDomain(raw: string): string {
     .split("/")[0]
     .split("?")[0]
     .trim();
-}
-
-// Marketplace prices are stored in their source currency (mo.currency / so.currency / p.currency),
-// not USD. Convert to USD here so every price leaving this route is genuinely USD — the frontend's
-// priceFmt(usd, displayCurrency) assumes its input is already USD.
-const CURRENCY_TO_USD: Record<string, number> = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
-function toUsd(amount: number | null | undefined, currency: string | null | undefined): number | null {
-  if (amount == null) return null;
-  const rate = CURRENCY_TO_USD[(currency ?? "USD").trim().toUpperCase()] ?? 1;
-  return Math.round(amount * rate * 100) / 100;
 }
 
 function computeGrade(dr: number | null, traffic: number | null): string {
@@ -71,46 +62,34 @@ export async function POST(req: NextRequest) {
   );
 
   try {
-    // Ensure domain_examples table exists
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS domain_examples (
-        domain TEXT PRIMARY KEY,
-        example_url TEXT,
-        example_title TEXT,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    const rates = await getUsdRates();
+    const toUsd = (amount: number | null | undefined, currency: string | null | undefined) =>
+      toUsdWithRates(amount, currency, rates);
 
-    const [lpRows, gradeRows, marketplaceRows, vendorRows, exampleRows] = await Promise.all([
-      // LP catalog: DR, traffic, keywords, ref domains, min price
+    const [domainRows, marketplaceRows, vendorRows, exampleRows] = await Promise.all([
+      // Canonical domain catalog: DR, traffic, keywords, ref domains, grade/score.
+      // Base/gate for `found` — every domain here shows up regardless of whether
+      // it has current pricing, so a domain never gets hidden just because it
+      // has no offer yet (that's handled below via noPrice, not exclusion).
+      // Only actively scraper-fed tables: `domains` (upsert.ts) and
+      // `lp_ahrefs_dr_staging` (live ahrefs-dr.ts job, 4x/day) — legacy
+      // lp_marketplace_domains/lp_domain_price/lp_domain_metrics are
+      // intentionally not queried here (see PUBLIC_API / analyze-query notes).
       db.execute(sql`
         SELECT
-          LOWER(d.w) AS domain,
-          MAX(d.country) AS country,
-          MAX(d.language) AS lang,
-          MAX(d.category) AS category,
-          COALESCE(MAX(ads."domain_rating"::float), MAX(m."domainRating"::float)) AS dr,
-          MAX(m."orgTraffic") AS traffic,
-          MAX(m."orgKeywords") AS keywords,
-          MAX(m."refDomains") AS ref_domains,
-          MIN(p.price::float) AS best_price,
-          MAX(TRIM(COALESCE(p.currency::text, 'EUR'))) AS currency
-        FROM lp_marketplace_domains d
-        JOIN lp_domain_price p ON p."domainId" = d.id
-        LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
-        LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
-        WHERE d."isActive" = true
-          AND p."isActive" = true
-          AND p.price::float > 0
-          AND d."deletedAt" IS NULL
-          AND LOWER(d.w) IN (${domainList})
-        GROUP BY LOWER(d.w)
-      `),
-      // Domains table: grade override
-      db.execute(sql`
-        SELECT LOWER(domain) AS domain, value_grade AS grade, value_score AS score
-        FROM domains
-        WHERE LOWER(domain) IN (${domainList})
+          LOWER(d.domain) AS domain,
+          d.country_main_traffic AS country,
+          d.language_written_in_website AS lang,
+          d.category AS category,
+          COALESCE(ads."domain_rating"::float, d.domain_rating) AS dr,
+          d.org_traffic AS traffic,
+          d.org_keywords AS keywords,
+          d.ref_domains AS ref_domains,
+          d.value_grade AS grade,
+          d.value_score AS score
+        FROM domains d
+        LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.domain)
+        WHERE LOWER(d.domain) IN (${domainList})
       `),
       // Marketplace offers (synced from external platforms)
       db.execute(sql`
@@ -167,15 +146,6 @@ export async function POST(req: NextRequest) {
       exampleMap.set(r.domain as string, {
         url: r.example_url as string,
         title: (r.example_title as string) ?? "",
-      });
-    }
-
-    // Build grade map
-    const gradeMap = new Map<string, { grade: string; score: number }>();
-    for (const r of gradeRows.rows) {
-      gradeMap.set(r.domain as string, {
-        grade: (r.grade as string) ?? "C",
-        score: Number(r.score ?? 0),
       });
     }
 
@@ -240,21 +210,18 @@ export async function POST(req: NextRequest) {
     }
 
     const foundDomains = new Set<string>();
-    const found = lpRows.rows.map((r) => {
+    const found = domainRows.rows.map((r) => {
       const domain = r.domain as string;
       foundDomains.add(domain);
       const dr = r.dr != null ? Number(r.dr) : null;
       const traffic = r.traffic != null ? Number(r.traffic) : null;
-      const gradeInfo = gradeMap.get(domain);
       const offers = offersMap.get(domain) ?? [];
-      const lpPrice = toUsd(r.best_price != null ? Number(r.best_price) : null, r.currency as string | null);
-      const offerMin = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
-      // Prefer marketplace_offers (kept fresh by the scraper fleet) over
-      // lp_domain_price, a legacy table most connectors stopped writing to
-      // (frozen ~March 2026 for 44/46 marketplaces). Blending with Math.min
-      // let a months-stale number beat today's real price whenever it was
-      // lower. lp is fallback-only, for domains with no offers coverage yet.
-      const bestPrice = offerMin ?? lpPrice;
+      // Price comes only from marketplace_offers/supplier_offers now — no
+      // legacy lp_domain_price fallback. Domains with no current offer show
+      // noPrice: true rather than a possibly stale legacy number. (~15K
+      // domains that only ever had a legacy price are a known, accepted gap
+      // here pending a future migration of that data into marketplace_offers.)
+      const bestPrice = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
 
       return {
         domain,
@@ -266,8 +233,8 @@ export async function POST(req: NextRequest) {
         traffic: traffic ?? 0,
         keywords: r.keywords != null ? Number(r.keywords) : 0,
         refDomains: r.ref_domains != null ? Number(r.ref_domains) : 0,
-        grade: gradeInfo?.grade ?? computeGrade(dr, traffic),
-        score: computeScore(dr, traffic),
+        grade: (r.grade as string) ?? computeGrade(dr, traffic),
+        score: r.score != null ? Number(r.score) : computeScore(dr, traffic),
         bestPrice,
         yourPrice: null as number | null,
         noPrice: bestPrice == null,

@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
-import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
+import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, hydrateRates, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
 
 // ── searchable dropdown (ported from RSDropdown) ────────────────────────────
 interface DropdownOption { id: string; label: string }
@@ -350,6 +350,7 @@ export default function RelatedSitesPage() {
   const activeFilterCount = Object.entries(filters).filter(([, v]) => v !== "any").length;
 
   useEffect(() => {
+    hydrateRates();
     fetch("/api/related-sites").then((r) => (r.ok ? r.json() : null)).then((q) => q && setQuota(q)).catch(() => {});
     fetch("/api/favorites")
       .then((r) => (r.ok ? r.json() : null))
