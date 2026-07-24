@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
+import { normalizeDomain } from "@/lib/normalize-domain";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -1582,7 +1583,10 @@ function SearchPageInner() {
   // flow land the user directly on this domain's real compare-offers view
   // instead of an empty search page.
   const searchParams = useSearchParams();
-  const domainParam = searchParams.get("domain")?.trim().toLowerCase() || null;
+  const domainParam = (() => {
+    const raw = searchParams.get("domain");
+    return raw ? normalizeDomain(raw) || null : null;
+  })();
 
   const [pasteValue, setPasteValue] = useState("");
   const [niche, setNiche] = useState("general");
@@ -1630,7 +1634,13 @@ function SearchPageInner() {
       const rawPrice = priceTok ? parseFloat(priceTok.replace(/[$€£]/, "")) : null;
       // Convert user-entered price from active currency to USD for comparison
       const yourPriceUsd = rawPrice != null ? Math.round(rawPrice / LIVE_RATES[currency]) : null;
-      return { domain: domain.toLowerCase(), yourPriceUsd };
+      // normalizeDomain (not just .toLowerCase()) so this matches exactly
+      // what /api/analyze returns as d.domain (it strips http(s)://, www.,
+      // and trailing path/query server-side) — otherwise typing a domain as
+      // a URL breaks both the results row order (order/byDomain lookup) and
+      // the yourPrice merge below (priceByDomain lookup), since neither
+      // would ever match the server's normalized key.
+      return { domain: normalizeDomain(domain), yourPriceUsd };
     });
 
   const parsedDomains = parsedLines.map((l) => l.domain);

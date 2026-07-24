@@ -2,16 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { getUsdRates, toUsd as toUsdWithRates } from "@/lib/currency";
-
-function normalizeDomain(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .split("/")[0]
-    .split("?")[0]
-    .trim();
-}
+import { normalizeDomain } from "@/lib/normalize-domain";
 
 function computeGrade(dr: number | null, traffic: number | null): string {
   if (dr == null) return "C";
@@ -38,8 +29,36 @@ function fmtUpdated(ts: string | null): string {
   }
 }
 
+// Mirrors search/page.tsx's NICHES list — same ids, mapped to the matching
+// niche-specific price columns that already exist on both marketplace_offers
+// and supplier_offers. "general" (or anything unrecognized) means "just use
+// the base min_price/max_price," same as before this existed.
+const NICHE_COLUMNS: Record<string, { min: string; max: string }> = {
+  igaming: { min: "gambling_min_price", max: "gambling_max_price" },
+  adult: { min: "adult_min_price", max: "adult_max_price" },
+  cbd: { min: "cbd_min_price", max: "cbd_max_price" },
+  loans: { min: "loan_min_price", max: "loan_max_price" },
+  dating: { min: "dating_min_price", max: "dating_max_price" },
+  crypto: { min: "crypto_min_price", max: "crypto_max_price" },
+  forex: { min: "trading_forex_min_price", max: "trading_forex_max_price" },
+  insertion: { min: "link_insertion_min_price", max: "link_insertion_max_price" },
+};
+
+// Picks the niche-specific price for a row when one was requested and the
+// offer actually has it set; otherwise falls back to the base price — a
+// niche selection changes which number is shown, it never hides an offer
+// that simply doesn't have niche-specific pricing set.
+function nichePrice(row: Record<string, unknown>, niche: string): { min: unknown; max: unknown } {
+  const cols = NICHE_COLUMNS[niche];
+  if (cols) {
+    const min = row[cols.min];
+    if (min != null) return { min, max: row[cols.max] ?? min };
+  }
+  return { min: row.min_price, max: row.max_price ?? row.min_price };
+}
+
 export async function POST(req: NextRequest) {
-  let body: { domains: string[] };
+  let body: { domains: string[]; niche?: string };
   try {
     body = await req.json();
   } catch {
@@ -47,6 +66,9 @@ export async function POST(req: NextRequest) {
   }
 
   const { domains } = body;
+  const niche = typeof body.niche === "string" && (body.niche === "general" || body.niche in NICHE_COLUMNS)
+    ? body.niche
+    : "general";
   if (!Array.isArray(domains) || domains.length === 0) {
     return NextResponse.json({ error: "domains array required" }, { status: 400 });
   }
@@ -90,6 +112,7 @@ export async function POST(req: NextRequest) {
         FROM domains d
         LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.domain)
         WHERE LOWER(d.domain) IN (${domainList})
+        ORDER BY LOWER(d.domain)
       `),
       // Marketplace offers (synced from external platforms)
       db.execute(sql`
@@ -98,6 +121,22 @@ export async function POST(req: NextRequest) {
           mo.marketplace_name AS name,
           mo.min_price,
           mo.max_price,
+          mo.gambling_min_price,
+          mo.gambling_max_price,
+          mo.adult_min_price,
+          mo.adult_max_price,
+          mo.cbd_min_price,
+          mo.cbd_max_price,
+          mo.loan_min_price,
+          mo.loan_max_price,
+          mo.dating_min_price,
+          mo.dating_max_price,
+          mo.crypto_min_price,
+          mo.crypto_max_price,
+          mo.trading_forex_min_price,
+          mo.trading_forex_max_price,
+          mo.link_insertion_min_price,
+          mo.link_insertion_max_price,
           mo.currency,
           mo.delivery_time_days,
           mo.quality_score,
@@ -118,6 +157,22 @@ export async function POST(req: NextRequest) {
           COALESCE(u.vendor_name, CONCAT(u.first_name, ' ', u.last_name), u.email) AS vendor_name,
           so.min_price,
           so.max_price,
+          so.gambling_min_price,
+          so.gambling_max_price,
+          so.adult_min_price,
+          so.adult_max_price,
+          so.cbd_min_price,
+          so.cbd_max_price,
+          so.loan_min_price,
+          so.loan_max_price,
+          so.dating_min_price,
+          so.dating_max_price,
+          so.crypto_min_price,
+          so.crypto_max_price,
+          so.trading_forex_min_price,
+          so.trading_forex_max_price,
+          so.link_insertion_min_price,
+          so.link_insertion_max_price,
           so.currency,
           so.delivery_time_days,
           so.updated_at,
@@ -168,8 +223,9 @@ export async function POST(req: NextRequest) {
       const domain = r.domain as string;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
       const ex = exampleMap.get(domain);
-      const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null) ?? 0;
-      const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null) ?? minUsd;
+      const { min: rawMin, max: rawMax } = nichePrice(r as Record<string, unknown>, niche);
+      const minUsd = toUsd(Number(rawMin ?? 0), r.currency as string | null) ?? 0;
+      const maxUsd = toUsd(Number(rawMax ?? rawMin ?? 0), r.currency as string | null) ?? minUsd;
       offersMap.get(domain)!.push({
         name: (r.name as string) ?? "Marketplace",
         type: "DB",
@@ -188,8 +244,9 @@ export async function POST(req: NextRequest) {
       const domain = r.domain as string;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
       const exV = exampleMap.get(domain);
-      const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null) ?? 0;
-      const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null) ?? minUsd;
+      const { min: rawMinV, max: rawMaxV } = nichePrice(r as Record<string, unknown>, niche);
+      const minUsd = toUsd(Number(rawMinV ?? 0), r.currency as string | null) ?? 0;
+      const maxUsd = toUsd(Number(rawMaxV ?? rawMinV ?? 0), r.currency as string | null) ?? minUsd;
       offersMap.get(domain)!.push({
         name: `Vendor: ${r.vendor_name as string}`,
         type: "Vendor",
