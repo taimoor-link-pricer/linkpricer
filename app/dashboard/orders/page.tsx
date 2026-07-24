@@ -16,6 +16,7 @@ import Link from "next/link";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import type { ClientOrderAction } from "@/lib/orders/types";
+import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 const C = {
   ink: "#0f1620", ink2: "#374151", ink3: "#6b7280", mute: "#9ca3af", mute2: "#d1d5db",
@@ -322,7 +323,7 @@ function OrderCard({
           )}
         </div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Domain</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{order.domain}</div></div>
-        <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Marketplace</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{order.marketplace}</div></div>
+        <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Marketplace</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{prettyMarketplaceName(order.marketplace)}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Status</div><div style={{ display: "inline-block", padding: "4px 12px", borderRadius: 6, background: config.bg, color: config.color, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{config.label}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Words</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{order.wordCount.toLocaleString()}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Amount</div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtPrice(order.newPrice ?? order.price)}</div></div>
@@ -422,7 +423,7 @@ function OrderCard({
               <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
                 <div style={{ marginTop: 2, width: 16, height: 16, border: "2px solid #003d99", borderTopColor: "transparent", borderRadius: "50%", animation: "lp-order-spin 0.8s linear infinite", flexShrink: 0 }} />
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#003d99", marginBottom: 4 }}>Confirming your order with {order.marketplace}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#003d99", marginBottom: 4 }}>Confirming your order with {prettyMarketplaceName(order.marketplace)}</div>
                   <div style={{ fontSize: 13, color: "#33518c", lineHeight: 1.5 }}>
                     We&apos;ve sent your placement to the marketplace and are confirming it&apos;s still available and locking in the agreed price and conditions. This typically takes up to 3 business days, though it can take up to 7 in some cases — no action needed. We&apos;ll notify you the moment it&apos;s confirmed, or if the publisher requests any changes.
                   </div>
@@ -565,6 +566,7 @@ export default function OrdersPage() {
     order.anchorText.toLowerCase().includes(q) ||
     order.id.toLowerCase().includes(q) ||
     order.marketplace.toLowerCase().includes(q) ||
+    prettyMarketplaceName(order.marketplace).toLowerCase().includes(q) ||
     STATUS_CONFIG[order.status].label.toLowerCase().includes(q)
   );
 

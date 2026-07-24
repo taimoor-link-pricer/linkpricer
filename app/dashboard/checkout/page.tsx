@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
+import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 type ContentMode = "linkpricer" | "upload" | "url";
 
@@ -279,7 +280,7 @@ function BriefCard({ item, idx, expanded, onToggle, onChange, onRemove }: {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: "#111827" }}>{item.domain}</span>
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>via {item.marketplace}</span>
+            <span style={{ fontSize: 11, color: "#9ca3af" }}>via {prettyMarketplaceName(item.marketplace)}</span>
           </div>
           <div style={{ fontSize: 11.5, color: "#9ca3af", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {item.title || "No title yet"}
@@ -564,7 +565,7 @@ function OrderConfirmed({ items, total }: { items: CartItem[]; total: number }) 
             }}>{item.domain[0].toUpperCase()}</div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "#111827" }}>{item.domain}</div>
-              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>via {item.marketplace} · {item.delivery}d delivery</div>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>via {prettyMarketplaceName(item.marketplace)} · {item.delivery}d delivery</div>
             </div>
             <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 14, color: "#111827" }}>
               ${(item.gpPrice + item.contentPrice).toLocaleString()}

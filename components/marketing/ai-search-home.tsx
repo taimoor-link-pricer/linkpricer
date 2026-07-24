@@ -13,6 +13,7 @@ import { fmt } from "@/lib/design-v1/format";
 import { Pill, btn, chip, priceLbl, priceVal } from "@/components/design-v1/primitives";
 import type { CatalogSearchResult, CatalogSearchOffer } from "@/lib/search/catalog-search";
 import { SignupModal, type SignupReason } from "./signup-modal";
+import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 const CHIPS = ["Finance guest post", "iGaming niche edit", "Tech blog under $200", "SaaS website about VPN"];
 
@@ -48,7 +49,7 @@ function OfferCard({ o, onBuy }: { o: CatalogSearchOffer; onBuy: () => void }) {
           display: "flex", alignItems: "center", justifyContent: "center",
         }}><Icon name={typeIcon} size={15} /></div>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--lp-ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.name}</div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--lp-ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.type === "Vendor" ? o.name : prettyMarketplaceName(o.name)}</div>
           <Stars n={o.quality} size={11} />
         </div>
       </div>

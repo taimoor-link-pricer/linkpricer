@@ -7,6 +7,7 @@
 // DomainRow/offer-card machinery for this reason — this file is that.)
 import { useState } from "react";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
+import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 export { hydrateRates };
 
@@ -158,7 +159,7 @@ function OfferCard({
           <div style={{ width: 28, height: 28, borderRadius: 6, flexShrink: 0, background: offer.type === "Vendor" ? "#fdf2dd" : offer.type === "API" ? "#e9f1fe" : "#eef0f4", color: offer.type === "Vendor" ? "#a35d00" : offer.type === "API" ? "#1d4ed8" : "#374151", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>
             {offer.type === "Vendor" ? "◈" : offer.type === "API" ? "⚡" : "◇"}
           </div>
-          <div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.name}</div><div style={{ fontSize: 11, color: C.mute }}>Updated {offer.updated}</div></div>
+          <div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.type === "Vendor" ? offer.name : prettyMarketplaceName(offer.name)}</div><div style={{ fontSize: 11, color: C.mute }}>Updated {offer.updated}</div></div>
         </div>
         <Stars n={offer.quality} />
       </div>

@@ -7,6 +7,7 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
 import { normalizeDomain } from "@/lib/normalize-domain";
+import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -296,7 +297,7 @@ function OfferCard({
             {offer.type === "Vendor" ? "◈" : offer.type === "API" ? "⚡" : "◇"}
           </div>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.name}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.type === "Vendor" ? offer.name : prettyMarketplaceName(offer.name)}</div>
             <div style={{ fontSize: 11, color: C.mute }}>Updated {offer.updated}</div>
           </div>
         </div>
@@ -524,7 +525,7 @@ function CartPopup({
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, fontFamily: C.mono }}>{item.domain}</div>
-                <div style={{ fontSize: 11.5, color: C.mute, marginTop: 2 }}>via <strong style={{ color: C.ink2 }}>{item.offerName}</strong></div>
+                <div style={{ fontSize: 11.5, color: C.mute, marginTop: 2 }}>via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong></div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{priceFmt(item.price, currency)}</div>
@@ -1273,7 +1274,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontFamily: C.mono, fontWeight: 700, fontSize: 14 }}>{item.domain}</span>
-                      <span style={{ fontSize: 11, color: C.mute }}>via {item.offerName}</span>
+                      <span style={{ fontSize: 11, color: C.mute }}>via {item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</span>
                     </div>
                     <div style={{ fontSize: 11.5, color: item.title ? C.ink2 : C.mute, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || "No title yet"}</div>
                   </div>
@@ -1370,7 +1371,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                       <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "#e8f6ee", fontWeight: 700, color: C.good }}>✓ {item.link}</span>
                     </div>
                     <div style={{ fontSize: 10.5, color: C.mute, marginTop: 2 }}>
-                      via <strong style={{ color: C.ink2 }}>{item.offerName}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
+                      via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
                     </div>
                   </div>
                   <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${(item.price + item.contentPrice).toLocaleString()}</div>

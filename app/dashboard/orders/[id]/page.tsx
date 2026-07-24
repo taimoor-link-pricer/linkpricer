@@ -7,6 +7,7 @@ import { ROUTES } from "@/lib/constants";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import { ORDER_STATUSES, type OrderStatus, type ClientOrderAction } from "@/lib/orders/types";
 import type { OrderStatusChangedMeta, OrderMessageMeta } from "@/lib/orders/events";
+import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 function LoadingSpinner() {
   return (
@@ -169,7 +170,7 @@ function DetailsCard({ order }: { order: ApiOrder }) {
       <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>Order details</h3>
       <KV label="Order ID" value={order.id} mono />
       <KV label="Domain" value={<span style={{ fontFamily: "monospace", fontWeight: 700 }}>{order.snapshotDomain ?? "—"}</span>} />
-      <KV label="Marketplace" value={order.snapshotMarketplaceName ?? "—"} />
+      <KV label="Marketplace" value={order.snapshotMarketplaceName ? prettyMarketplaceName(order.snapshotMarketplaceName) : "—"} />
       <KV label="Article title" value={order.articleTitle ?? "Custom Article"} />
       <KV label="Target URL" value={
         <a href={order.targetUrl} target="_blank" rel="noopener noreferrer" style={{ fontFamily: "monospace", fontSize: 12, color: "#0052cc", textDecoration: "none" }}>
@@ -558,7 +559,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             </h1>
             <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 6 }}>
               <span style={{ fontFamily: "monospace", color: "#374151", fontWeight: 700 }}>{order.snapshotDomain ?? "—"}</span>
-              {" · via "}{order.snapshotMarketplaceName ?? "—"}{order.createdAt ? ` · placed ${new Date(order.createdAt).toLocaleDateString()}` : ""}
+              {" · via "}{order.snapshotMarketplaceName ? prettyMarketplaceName(order.snapshotMarketplaceName) : "—"}{order.createdAt ? ` · placed ${new Date(order.createdAt).toLocaleDateString()}` : ""}
             </div>
           </div>
         </div>
