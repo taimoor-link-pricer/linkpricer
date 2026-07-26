@@ -66,8 +66,10 @@ function OfferCard({ o, onBuy }: { o: CatalogSearchOffer; onBuy: () => void }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: "1 1 260px", minWidth: 260 }}>
-        <Pill color="ink" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{o.delivery}d delivery</Pill>
-        <Pill color="ink" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{o.tat}d avg. TAT</Pill>
+        {/* Delivery pill removed 2026-07-26 — same fix as
+            app/dashboard/search/page.tsx's OfferCard: delivery/tat always
+            read the same hardcoded 14-day fallback, never differed. */}
+        <Pill color="ink" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{o.delivery}d avg. TAT</Pill>
         <Pill color={linkGood ? "green" : "amber"} style={{ whiteSpace: "nowrap", flexShrink: 0 }}><Icon name={linkGood ? "check" : "x"} size={10} /> {o.link}</Pill>
         <Pill color="ink" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{o.type === "API" ? "Live API" : o.type === "DB" ? "Synced" : "Vendor"}</Pill>
       </div>
