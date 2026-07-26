@@ -12,7 +12,7 @@
 // semantic/embeddings — see the route file for why) so match quality won't
 // match the reference screenshots exactly; that's a disclosed, known gap
 // pending an embeddings API key decision, not something faked here.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
@@ -115,9 +115,6 @@ const RS_FILTERS: Record<string, DropdownOption[]> = {
     { id: "PL", label: "Polish" }, { id: "LT", label: "Lithuanian" }, { id: "RU", label: "Russian" }, { id: "TR", label: "Turkish" },
     { id: "AR", label: "Arabic" }, { id: "HI", label: "Hindi" }, { id: "JA", label: "Japanese" }, { id: "ZH", label: "Chinese" }, { id: "KO", label: "Korean" },
   ],
-  traffic: [
-    { id: "any", label: "Any traffic" }, { id: "10000", label: "10K+" }, { id: "100000", label: "100K+" }, { id: "1000000", label: "1M+" }, { id: "10000000", label: "10M+" },
-  ],
   dr: [
     { id: "any", label: "Any DR" }, { id: "30", label: "DR 30+" }, { id: "50", label: "DR 50+" }, { id: "70", label: "DR 70+" }, { id: "90", label: "DR 90+" },
   ],
@@ -148,7 +145,7 @@ const RS_COLUMNS: { label: string; sortKey?: SortableColumn }[] = [
 ];
 const PAGE_SIZE = 25;
 
-const RS_DEFAULT_FILTERS = { country: "any", language: "any", traffic: "any", dr: "any", price: "any", niche: "any", grade: "any" };
+const RS_DEFAULT_FILTERS = { country: "any", language: "any", dr: "any", price: "any", niche: "any", grade: "any" };
 
 // ── tour (verbatim copy from RSTour/tourSteps) ───────────────────────────────
 type TourStep = { selector: string; title: string; body: string };
@@ -334,6 +331,22 @@ export default function RelatedSitesPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
   const [results, setResults] = useState<RelatedSite[]>([]);
+  // Traffic used to be a fixed-bucket dropdown (10K+/100K+/...) applied as a
+  // SQL pre-filter, so it silently zeroed out results for any query whose
+  // matches don't clear that bucket (median catalog traffic is ~100 —
+  // "10K+" alone excludes over 96% of all domains). Instead this is now a
+  // client-side threshold bounded by the *current* result set's actual
+  // min/max traffic, so it can never filter everything out.
+  const [trafficMin, setTrafficMin] = useState(0);
+  const trafficBounds = useMemo(() => {
+    if (results.length === 0) return { min: 0, max: 0 };
+    const vals = results.map((r) => r.traffic || 0);
+    return { min: Math.min(...vals), max: Math.max(...vals) };
+  }, [results]);
+  const filteredResults = useMemo(
+    () => (trafficMin > trafficBounds.min ? results.filter((r) => (r.traffic || 0) >= trafficMin) : results),
+    [results, trafficMin, trafficBounds.min]
+  );
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [lowRelevance, setLowRelevance] = useState(false);
@@ -347,7 +360,7 @@ export default function RelatedSitesPage() {
   const [tourStep, setTourStep] = useState(0);
 
   const hasSite = !!ownSite.trim();
-  const activeFilterCount = Object.entries(filters).filter(([, v]) => v !== "any").length;
+  const activeFilterCount = Object.entries(filters).filter(([, v]) => v !== "any").length + (trafficMin > trafficBounds.min ? 1 : 0);
 
   useEffect(() => {
     hydrateRates();
@@ -369,7 +382,6 @@ export default function RelatedSitesPage() {
       const parsedFilters: Record<string, string | number> = {};
       if (filters.country !== "any") parsedFilters.country = filters.country;
       if (filters.language !== "any") parsedFilters.language = filters.language;
-      if (filters.traffic !== "any") parsedFilters.minTraffic = Number(filters.traffic);
       if (filters.dr !== "any") parsedFilters.minDr = Number(filters.dr);
       if (filters.niche !== "any") parsedFilters.category = filters.niche;
       if (filters.grade !== "any") parsedFilters.grade = filters.grade;
@@ -398,6 +410,11 @@ export default function RelatedSitesPage() {
         return;
       }
       setResults(data.results);
+      // Reset the traffic slider to this query's actual floor — each search
+      // has a different result set, so a threshold carried over from the
+      // previous query could zero out the new one.
+      const newTrafficVals = (data.results as RelatedSite[]).map((r) => r.traffic || 0);
+      setTrafficMin(newTrafficVals.length ? Math.min(...newTrafficVals) : 0);
       setLowRelevance(data.lowRelevance ?? false);
       setDegradedAhrefs(data.degradedAhrefs ?? false);
       setQuota({ used: data.used, remaining: data.remaining, limit: data.limit, resetsAt: data.resetsAt });
@@ -437,13 +454,13 @@ export default function RelatedSitesPage() {
   }
 
   function exportCsv() {
-    if (results.length === 0) return;
+    if (filteredResults.length === 0) return;
     const headers = ["Domain", "Match %", "Country", "Language", "Category", "DR", "Traffic", "Keywords", "Ref Domains", "Grade", "Score", "Best Price"];
     const escape = (v: string | number | null) => {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = results.map((r) => [r.domain, r.matchPct, r.country, r.lang, r.category, r.dr, r.traffic, r.keywords, r.refDomains, r.grade, r.score, r.bestPrice].map(escape).join(","));
+    const rows = filteredResults.map((r) => [r.domain, r.matchPct, r.country, r.lang, r.category, r.dr, r.traffic, r.keywords, r.refDomains, r.grade, r.score, r.bestPrice].map(escape).join(","));
     const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -456,7 +473,8 @@ export default function RelatedSitesPage() {
     URL.revokeObjectURL(url);
   }
 
-  function clearFilters() { setFilters(RS_DEFAULT_FILTERS); }
+  function clearFilters() { setFilters(RS_DEFAULT_FILTERS); setTrafficMin(trafficBounds.min); }
+  function handleTrafficChange(v: number) { setTrafficMin(v); setPage(1); }
   function toggleRow(domain: string) { setExpanded((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
   function toggleFav(row: RelatedSite) {
     const wasFav = favorites.has(row.domain);
@@ -473,12 +491,13 @@ export default function RelatedSitesPage() {
   function addToCart(item: CartItem) { setCartItems((prev) => [...prev, item]); }
 
   // Sorting now happens server-side (lib/search/catalog-search.ts) — `results`
-  // already arrives in the correct order for the active sortBy/sortDir.
-  // Pagination is a pure client-side slice over that already-ordered array,
-  // so CSV export (which uses the full `results` array) always matches the
-  // same sequence the table is showing, page or no page.
-  const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
-  const pageResults = results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // already arrives in the correct order for the active sortBy/sortDir, and
+  // filtering by the traffic slider preserves that order (Array.filter is
+  // stable). Pagination is a pure client-side slice over `filteredResults`,
+  // so CSV export (which uses the same array) always matches the same
+  // sequence the table is showing, page or no page.
+  const totalPages = Math.max(1, Math.ceil(filteredResults.length / PAGE_SIZE));
+  const pageResults = filteredResults.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   if (loading) return <LoadingSpinner />;
 
@@ -559,7 +578,28 @@ export default function RelatedSitesPage() {
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
           <RSDropdown label="Country" value={filters.country} options={RS_FILTERS.country} onChange={(v) => setFilters((f) => ({ ...f, country: v }))} searchable />
           <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
-          <RSDropdown label="Traffic" value={filters.traffic} options={RS_FILTERS.traffic} onChange={(v) => setFilters((f) => ({ ...f, traffic: v }))} />
+          <div style={{ flex: "1 1 180px", minWidth: 180 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.mute, letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+              <span>Traffic</span>
+              <span style={{ color: C.ink3, textTransform: "none", fontWeight: 600 }}>
+                {trafficBounds.max > trafficBounds.min ? `${fmtNum(trafficMin)}+` : ""}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={trafficBounds.min}
+              max={trafficBounds.max}
+              value={Math.min(Math.max(trafficMin, trafficBounds.min), trafficBounds.max)}
+              disabled={results.length === 0 || trafficBounds.max <= trafficBounds.min}
+              onChange={(e) => handleTrafficChange(Number(e.target.value))}
+              title={
+                results.length === 0
+                  ? "Run a search to enable this filter"
+                  : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: ${fmtNum(trafficBounds.min)} – ${fmtNum(trafficBounds.max)} monthly organic traffic`
+              }
+              style={{ width: "100%", height: 34, cursor: results.length === 0 || trafficBounds.max <= trafficBounds.min ? "not-allowed" : "pointer" }}
+            />
+          </div>
           <RSDropdown label="DR range" value={filters.dr} options={RS_FILTERS.dr} onChange={(v) => setFilters((f) => ({ ...f, dr: v }))} />
           <RSDropdown label="Price range" value={filters.price} options={RS_FILTERS.price} onChange={(v) => setFilters((f) => ({ ...f, price: v }))} />
           <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
@@ -585,7 +625,7 @@ export default function RelatedSitesPage() {
           <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Related sites</h2>
-              <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{results.length} {results.length === 1 ? "result" : "results"}</span>
+              <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{filteredResults.length} {filteredResults.length === 1 ? "result" : "results"}</span>
               <span style={{ fontSize: 12, color: C.mute }}>{sortBy === "match" ? "ranked by semantic match" : `sorted by ${sortBy} (${sortDir === "desc" ? "high to low" : "low to high"})`}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
