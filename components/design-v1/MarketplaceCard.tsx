@@ -109,10 +109,10 @@ export function MarketplaceCard({
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
-        <div style={editRow}>
-          <span style={editLbl}>Delivery guarantee <InfoTip text="The number of days we hold the order open for the supplier to deliver. If there's no update from the supplier within this window, we automatically cancel the order so you're never left waiting." /></span>
-          <span style={editVal}>{o.delivery} days</span>
-        </div>
+        {/* "Delivery guarantee" removed — duplicated "Avg. TAT" (both
+        communicate turnaround time); Avg. TAT is the clearer label and
+        stays, same fix already applied to the dashboard's ExpandedPanel
+        in components/dashboard/results-shared.tsx. */}
         <div style={editRow}>
           <span style={editLbl}>Avg. TAT <InfoTip text="Average turnaround time — how long this supplier has actually taken to publish, based on our previous orders with them." /></span>
           <span style={editVal}>{o.tat} days</span>
