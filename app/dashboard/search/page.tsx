@@ -337,8 +337,18 @@ function OfferCard({
       {/* Details rows */}
       <div style={{ display: "flex", flexDirection: "column" }}>
         {[
-          { label: "Delivery guarantee", value: `${offer.delivery} days` },
-          { label: "Avg. TAT", value: `${offer.tat} days` },
+          // "Delivery guarantee" used to show alongside this as a separate
+          // row — removed 2026-07-26: both fields always read the same
+          // hardcoded 14-day fallback for every marketplace offer (confirmed
+          // via DB: delivery_time_days and tat are 100% NULL across all
+          // 2,038,551 marketplace_offers rows), so the two rows never once
+          // showed different numbers. "Avg. TAT" is the clearer label of the
+          // two (per explicit product decision); it now sources its value
+          // from offer.delivery — the field with an actual live write path
+          // (confirmed via supplier_offers, where vendors do enter real
+          // delivery_time_days values) — rather than offer.tat, which no
+          // connector or vendor flow has ever written.
+          { label: "Avg. TAT", value: `${offer.delivery} days` },
         ].map(({ label, value }) => (
           <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${C.line2}` }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: C.mute }}>{label}</span>
@@ -759,12 +769,25 @@ function ResultsTable({
   const rows = buildRows();
 
   function handleDownloadCSV() {
-    const header = "Domain,Country,Category,DR,Traffic,Keywords,Grade,Score,Best Price\n";
+    // Column order mirrors the on-screen table left-to-right: Domain, then
+    // Best Price (shown in the Actions column's "Buy $X" button) and
+    // Grade/Score (shown combined in the Value column), then Country, DR,
+    // Traffic, Keywords, Category — same order as the <th> row below. Row
+    // order already matches by construction: both this and the table read
+    // from the same `rows` (buildRows()) computed above, which already
+    // reflects the current column sort.
+    const escape = (v: string | number | null | undefined) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = "Domain,Best Price,Grade,Score,Country,DR,Traffic,Keywords,Category\n";
     const lines = rows
       .map((r) =>
         r.kind === "found"
-          ? `${r.row.domain},${r.row.country},${r.row.category},${r.row.dr},${r.row.traffic},${r.row.keywords},${r.row.grade},${r.row.score},${r.row.bestPrice}`
-          : `${r.domain},,,,,,,,not found`
+          ? [r.row.domain, r.row.bestPrice, r.row.grade, r.row.score, r.row.country, r.row.dr, r.row.traffic, r.row.keywords, r.row.category]
+              .map(escape)
+              .join(",")
+          : [r.domain, "", "", "", "", "", "", "", "not found"].map(escape).join(",")
       )
       .join("\n");
     const blob = new Blob([header + lines], { type: "text/csv" });
@@ -1590,6 +1613,8 @@ function SearchPageInner() {
   })();
 
   const [pasteValue, setPasteValue] = useState("");
+  const [csvImportError, setCsvImportError] = useState<string | null>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
   const [niche, setNiche] = useState("general");
   const [nicheOpen, setNicheOpen] = useState(false);
   const [currency, setCurrency] = useState<Currency>("USD");
@@ -1653,6 +1678,95 @@ function SearchPageInner() {
     setResults(null);
     setNotFound([]);
     setOrder([]);
+  }
+
+  // Splits one CSV line into cells, honoring double-quoted fields (so a
+  // quoted price like "1,200" or a quoted domain containing a comma isn't
+  // split apart).
+  function splitCsvLine(line: string, delimiter: string = ","): string[] {
+    const cells: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === delimiter && !inQuotes) {
+        cells.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    cells.push(cur);
+    return cells.map((c) => c.trim());
+  }
+
+  // Excel's default CSV export is semicolon-delimited in most non-US
+  // locales (comma is reserved there as the decimal separator), and
+  // copy-pasted spreadsheet data is sometimes tab-delimited. A comma-only
+  // parser silently mangles both into one unmatched blob per row ("accepts
+  // the file, 0 results"), so sniff the real delimiter from the header line.
+  function detectCsvDelimiter(sampleLine: string): string {
+    const candidates = [",", ";", "\t"];
+    let best = ",";
+    let bestCount = 0;
+    for (const d of candidates) {
+      const count = sampleLine.split(d).length - 1;
+      if (count > bestCount) { bestCount = count; best = d; }
+    }
+    return best;
+  }
+
+  async function handleCsvFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset so picking the same file again still fires this handler.
+    e.target.value = "";
+    if (!file) return;
+
+    setCsvImportError(null);
+    try {
+      const text = await file.text();
+      const rawLines = text.split(/\r\n|\r|\n/).map((l) => l.trim()).filter(Boolean);
+      if (rawLines.length === 0) {
+        setCsvImportError("That file is empty.");
+        return;
+      }
+
+      const delimiter = detectCsvDelimiter(rawLines[0]);
+      const headerFirstCell = splitCsvLine(rawLines[0], delimiter)[0]?.toLowerCase().replace(/^"|"$/g, "");
+      const looksLikeHeader = ["domain", "domains", "url", "website", "site"].includes(headerFirstCell ?? "");
+      const dataLines = looksLikeHeader ? rawLines.slice(1) : rawLines;
+
+      const symbol = LIVE_SYMS[currency] ?? "$";
+      const importedLines: string[] = [];
+      for (const line of dataLines) {
+        const cells = splitCsvLine(line, delimiter);
+        const domain = cells[0]?.trim();
+        if (!domain) continue;
+        let priceCell = cells[1]?.replace(/[$€£]/g, "").trim();
+        // Semicolon-delimited files conventionally use a comma as the
+        // decimal separator and a dot for thousands (e.g. "1.200,50").
+        if (priceCell && delimiter === ";") {
+          priceCell = priceCell.replace(/\./g, "").replace(",", ".");
+        } else if (priceCell) {
+          priceCell = priceCell.replace(/,/g, "");
+        }
+        const price = priceCell && /^\d+(\.\d+)?$/.test(priceCell) ? parseFloat(priceCell) : null;
+        importedLines.push(price != null ? `${domain} ${symbol}${price}` : domain);
+      }
+
+      if (importedLines.length === 0) {
+        setCsvImportError("No valid domains found in that file.");
+        return;
+      }
+
+      setPasteValue((prev) => (prev.trim() ? `${prev.trim()}\n${importedLines.join("\n")}` : importedLines.join("\n")));
+    } catch (err) {
+      console.error("[handleCsvFileSelected]", err);
+      setCsvImportError("Couldn't read that file. Make sure it's a plain CSV.");
+    }
   }
 
   // `domainsOverride` lets callers (the ?domain= auto-run effect below)
@@ -1926,7 +2040,16 @@ function SearchPageInner() {
               >
                 + How to use
               </button>
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvFileSelected}
+                style={{ display: "none" }}
+              />
               <button
+                onClick={() => csvInputRef.current?.click()}
+                title="Import a CSV with one domain per row (optionally followed by a price column)"
                 style={{
                   padding: "7px 14px",
                   border: `1px solid ${C.line}`,
@@ -1976,6 +2099,20 @@ function SearchPageInner() {
                 overflow: "hidden",
               }}
             >
+              {csvImportError && (
+                <div
+                  style={{
+                    padding: "8px 14px",
+                    background: "#fee2e2",
+                    borderBottom: "1px solid #fca5a5",
+                    color: C.bad,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  {csvImportError}
+                </div>
+              )}
               {/* Top bar */}
               <div
                 style={{
