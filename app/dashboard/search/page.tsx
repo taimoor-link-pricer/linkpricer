@@ -145,6 +145,51 @@ type Domain = {
 };
 
 
+// ─── Recent searches (localStorage, client-only — same pattern already used
+// for `lp_analyze_tour_seen`; no backend table exists for this) ───────────────
+type RecentSearch = {
+  id: string;
+  pasteValue: string;
+  currency: Currency;
+  niche: string;
+  domains: string[];
+  timestamp: number;
+};
+
+const RECENT_SEARCHES_KEY = "lp_recent_searches";
+const MAX_RECENT_SEARCHES = 8;
+
+function loadRecentSearches(): RecentSearch[] {
+  try {
+    if (typeof window === "undefined") return [];
+    const raw = window.localStorage.getItem(RECENT_SEARCHES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentSearches(list: RecentSearch[]) {
+  try {
+    window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list));
+  } catch {
+    /* noop — storage may be full/disabled, search still works without it */
+  }
+}
+
+function formatRecentSearchTime(ts: number): string {
+  const diffMs = Date.now() - ts;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 // ─── Cart types ───────────────────────────────────────────────────────────────
 type CartItem = {
   domain: string;
@@ -1634,6 +1679,9 @@ function SearchPageInner() {
   const [placedOrderIds, setPlacedOrderIds] = useState<string[]>([]);
   const [analyzeHover, setAnalyzeHover] = useState(false);
 
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(() => loadRecentSearches());
+  const [recentOpen, setRecentOpen] = useState(false);
+
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
   const [tourInjectedResults, setTourInjectedResults] = useState(false);
@@ -1769,6 +1817,22 @@ function SearchPageInner() {
     }
   }
 
+  // Records a completed search so it can be re-run from the "Recent
+  // searches" dropdown. Dedupes on the exact paste-box text (re-running the
+  // same search just bumps it to the top) and caps the list so it can't
+  // grow unbounded in localStorage.
+  function saveRecentSearch(entry: Omit<RecentSearch, "id" | "timestamp">) {
+    setRecentSearches((prev) => {
+      const withoutDup = prev.filter((s) => s.pasteValue !== entry.pasteValue);
+      const next: RecentSearch[] = [
+        { ...entry, id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: Date.now() },
+        ...withoutDup,
+      ].slice(0, MAX_RECENT_SEARCHES);
+      persistRecentSearches(next);
+      return next;
+    });
+  }
+
   // `domainsOverride` lets callers (the ?domain= auto-run effect below)
   // trigger analysis directly without round-tripping through `pasteValue`
   // state first — setPasteValue + an immediate handleAnalyze() call in the
@@ -1802,6 +1866,12 @@ function SearchPageInner() {
       }));
       setResults(found);
       setNotFound(data.notFound ?? []);
+
+      // Only save real paste-box searches — a ?domain= auto-run arriving
+      // from the homepage isn't something the user typed/pasted themselves.
+      if (!domainsOverride && pasteValue.trim()) {
+        saveRecentSearch({ pasteValue: pasteValue.trim(), currency, niche, domains });
+      }
     } catch (err) {
       console.error("[handleAnalyze]", err);
     } finally {
@@ -2063,20 +2133,81 @@ function SearchPageInner() {
               >
                 ↑ Import CSV
               </button>
-              <button
-                style={{
-                  padding: "7px 14px",
-                  border: `1px solid ${C.line}`,
-                  borderRadius: 8,
-                  background: "#fff",
-                  color: C.ink2,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                ⏱ Recent searches
-              </button>
+              <div style={{ position: "relative" }}>
+                <button
+                  onClick={() => setRecentOpen((v) => !v)}
+                  style={{
+                    padding: "7px 14px",
+                    border: `1px solid ${C.line}`,
+                    borderRadius: 8,
+                    background: "#fff",
+                    color: C.ink2,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  ⏱ Recent searches
+                </button>
+                {recentOpen && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 4px)",
+                      right: 0,
+                      width: 280,
+                      background: "#fff",
+                      border: `1px solid ${C.line}`,
+                      borderRadius: 9,
+                      zIndex: 50,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.10)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {recentSearches.length === 0 ? (
+                      <div style={{ padding: "14px", fontSize: 12.5, color: C.mute }}>
+                        No searches yet — run an analysis and it'll show up here.
+                      </div>
+                    ) : (
+                      recentSearches.map((s) => {
+                        const label = s.domains.length > 1
+                          ? `${s.domains[0]} +${s.domains.length - 1} more`
+                          : s.domains[0];
+                        return (
+                          <button
+                            key={s.id}
+                            onClick={() => {
+                              setPasteValue(s.pasteValue);
+                              setCurrency(s.currency);
+                              setNiche(s.niche);
+                              setRecentOpen(false);
+                            }}
+                            title="Load this search back into the paste box"
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "flex-start",
+                              gap: 2,
+                              width: "100%",
+                              padding: "9px 14px",
+                              textAlign: "left",
+                              background: "transparent",
+                              border: "none",
+                              borderBottom: `1px solid ${C.line}`,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span style={{ fontSize: 13, fontWeight: 600, color: C.ink2 }}>{label}</span>
+                            <span style={{ fontSize: 11, color: C.mute }}>
+                              {s.domains.length} domain{s.domains.length === 1 ? "" : "s"} · {s.currency} · {formatRecentSearchTime(s.timestamp)}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
