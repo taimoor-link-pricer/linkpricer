@@ -47,6 +47,22 @@ function priceFmt(usd: number | null, cur: Currency): string {
   return LIVE_SYMS[cur] + v.toLocaleString();
 }
 
+// DR hover tooltip text — domain_rating_updated_at is only ever set by the
+// live ahrefs-dr.ts job on a confirmed fetch (see lib/db/schema.ts), so a
+// null here means this domain hasn't been through that job's ~30-day rolling
+// cycle yet, not that the DR itself is wrong. Returns just the "last
+// updated" line — the "Source: Ahrefs" attribution is rendered separately
+// as a real link, not baked into this string.
+function drUpdatedText(updatedAt: string | null): string {
+  if (!updatedAt) return "DR freshness data not yet available for this domain";
+  const d = new Date(updatedAt);
+  if (Number.isNaN(d.getTime())) return "DR freshness data not yet available for this domain";
+  const formatted = d.toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+  });
+  return `Last updated ${formatted}`;
+}
+
 function withFee(p: number): number {
   // Rounding to a whole currency unit can erase the 15% margin entirely on cheap
   // prices (e.g. 1.21 * 1.15 = 1.39, which rounds down to 1 — below source price).
@@ -132,6 +148,7 @@ type Domain = {
   lang: string;
   category: string;
   dr: number;
+  drUpdatedAt: string | null;
   drTrend: "up" | "flat" | "down";
   traffic: number;
   keywords: number;
@@ -1040,6 +1057,31 @@ function DomainRow({
 }) {
   const [hover, setHover] = useState(false);
   const [buyHover, setBuyHover] = useState(false);
+  const [drTipOpen, setDrTipOpen] = useState(false);
+  const [drTipPlacement, setDrTipPlacement] = useState<"above" | "below">("below");
+  const [drTipCoords, setDrTipCoords] = useState({ top: 0, left: 0 });
+  const drRef = useRef<HTMLSpanElement>(null);
+
+  // Fixed-position (not absolute) so this escapes the results table's
+  // horizontally-scrolling wrapper — that wrapper's overflow-x: auto forces
+  // overflow-y to clip too (per the CSS spec), which silently hid an
+  // absolutely-positioned tooltip whenever it poked past the wrapper's top
+  // or bottom edge (i.e. for the first or last row). Placement flips based
+  // on actual remaining viewport space, same technique as design-v1's
+  // InfoTip component.
+  function showDrTip() {
+    const el = drRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      const placement = window.innerHeight - r.bottom < 70 ? "above" : "below";
+      setDrTipPlacement(placement);
+      setDrTipCoords({
+        top: placement === "below" ? r.bottom + 6 : r.top - 6,
+        left: Math.min(r.left, window.innerWidth - 220),
+      });
+    }
+    setDrTipOpen(true);
+  }
 
   const tdBase: React.CSSProperties = {
     padding: "12px 14px",
@@ -1183,10 +1225,57 @@ function DomainRow({
 
       {/* DR */}
       <td style={tdBase}>
-        <span style={{ fontWeight: 700, color: C.ink }}>{row.dr}</span>
+        <span
+          ref={drRef}
+          style={{ fontWeight: 700, color: C.ink }}
+          onMouseEnter={showDrTip}
+          onMouseLeave={() => setDrTipOpen(false)}
+        >
+          {row.dr}
+        </span>
         {row.drTrend === "up" && <span style={{ color: C.good, marginLeft: 4 }}>↑</span>}
         {row.drTrend === "flat" && <span style={{ color: C.mute, marginLeft: 4 }}>—</span>}
         {row.drTrend === "down" && <span style={{ color: C.bad, marginLeft: 4 }}>↓</span>}
+        {drTipOpen && (
+          <div
+            // Not pointer-events:none anymore, and mouse enter/leave repeated
+            // here too — the link below needs to actually be clickable, which
+            // means the tooltip has to stay open while the cursor travels
+            // from the DR number onto the tooltip itself.
+            onMouseEnter={() => setDrTipOpen(true)}
+            onMouseLeave={() => setDrTipOpen(false)}
+            style={{
+              position: "fixed",
+              top: drTipCoords.top,
+              left: drTipCoords.left,
+              transform: drTipPlacement === "above" ? "translateY(-100%)" : undefined,
+              zIndex: 9999,
+              width: 210,
+              background: C.ink,
+              color: "#fff",
+              fontSize: 11.5,
+              fontWeight: 600,
+              padding: "8px 10px",
+              borderRadius: 8,
+              boxShadow: "0 8px 20px rgba(0,0,0,0.18)",
+              lineHeight: 1.4,
+            }}
+          >
+            <div>{drUpdatedText(row.drUpdatedAt)}</div>
+            <div style={{ marginTop: 2 }}>
+              Source:{" "}
+              <a
+                href="https://ahrefs.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{ color: "#8ab4ff", textDecoration: "underline", fontWeight: 700 }}
+              >
+                Ahrefs
+              </a>
+            </div>
+          </div>
+        )}
       </td>
 
       {/* Traffic */}
@@ -1629,6 +1718,7 @@ const TOUR_DEMO_ROW: Domain = {
   lang: "EN",
   category: "Business / Finance",
   dr: 94,
+  drUpdatedAt: null,
   drTrend: "up",
   traffic: 71_000_000,
   keywords: 8_400_000,

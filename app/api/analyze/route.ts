@@ -93,24 +93,26 @@ export async function POST(req: NextRequest) {
       // Base/gate for `found` — every domain here shows up regardless of whether
       // it has current pricing, so a domain never gets hidden just because it
       // has no offer yet (that's handled below via noPrice, not exclusion).
-      // Only actively scraper-fed tables: `domains` (upsert.ts) and
-      // `lp_ahrefs_dr_staging` (live ahrefs-dr.ts job, 4x/day) — legacy
-      // lp_marketplace_domains/lp_domain_price/lp_domain_metrics are
-      // intentionally not queried here (see PUBLIC_API / analyze-query notes).
+      // Only actively scraper-fed table: `domains` (upsert.ts writes new rows,
+      // ahrefs-dr.ts keeps domain_rating/domain_rating_updated_at fresh on its
+      // own rolling ~30-day cycle) — legacy lp_marketplace_domains/
+      // lp_domain_price/lp_domain_metrics are intentionally not queried here
+      // (see PUBLIC_API / analyze-query notes). No JOIN needed anymore:
+      // domain_rating is written here directly, not just in the staging table.
       db.execute(sql`
         SELECT
           LOWER(d.domain) AS domain,
           d.country_main_traffic AS country,
           d.language_written_in_website AS lang,
           d.category AS category,
-          COALESCE(ads."domain_rating"::float, d.domain_rating) AS dr,
+          d.domain_rating::float AS dr,
+          d.domain_rating_updated_at AS dr_updated_at,
           d.org_traffic AS traffic,
           d.org_keywords AS keywords,
           d.ref_domains AS ref_domains,
           d.value_grade AS grade,
           d.value_score AS score
         FROM domains d
-        LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.domain)
         WHERE LOWER(d.domain) IN (${domainList})
         ORDER BY LOWER(d.domain)
       `),
@@ -286,6 +288,7 @@ export async function POST(req: NextRequest) {
         lang: (r.lang as string) ?? "en",
         category: (r.category as string) ?? "General",
         dr: dr ?? 0,
+        drUpdatedAt: (r.dr_updated_at as string | null) ?? null,
         drTrend: "flat" as const,
         traffic: traffic ?? 0,
         keywords: r.keywords != null ? Number(r.keywords) : 0,
