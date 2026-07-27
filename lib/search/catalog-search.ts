@@ -99,6 +99,7 @@ export interface CatalogSearchResult {
   lang: string;
   category: string;
   dr: number;
+  drUpdatedAt: string | null;
   drTrend: "flat";
   traffic: number;
   keywords: number;
@@ -263,7 +264,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       WITH text_matched AS MATERIALIZED (
         SELECT d.id, d.domain AS w, d.category, d.country_main_traffic AS country,
                d.language_written_in_website AS language,
-               d.domain_rating, d.org_traffic, d.org_keywords, d.ref_domains,
+               d.domain_rating, d.domain_rating_updated_at, d.org_traffic, d.org_keywords, d.ref_domains,
                ai."semanticCategory" AS semantic_category, ai."semanticSummary" AS semantic_summary,
                ai."valueGrade" AS ai_grade, ai."valueScore" AS ai_score
         FROM domains d
@@ -286,7 +287,8 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           MAX(d.category) AS raw_category,
           MAX(d.country) AS country,
           MAX(d.language) AS lang,
-          COALESCE(MAX(ads."domain_rating"::float), MAX(d.domain_rating)) AS dr,
+          MAX(d.domain_rating)::float AS dr,
+          MAX(d.domain_rating_updated_at) AS dr_updated_at,
           MAX(d.org_traffic) AS traffic,
           MAX(d.org_keywords) AS keywords,
           MAX(d.ref_domains) AS ref_domains,
@@ -300,7 +302,6 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           MAX(d.ai_grade) AS ai_grade,
           MAX(d.ai_score::float) AS ai_score
         FROM matched d
-        LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
         GROUP BY d.id, d.w
       )
       SELECT * FROM aggregated
@@ -433,6 +434,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       lang: languageDisplayLabel(r.lang as string | null),
       category: (r.raw_category as string) ?? (r.semantic_category as string) ?? "General",
       dr,
+      drUpdatedAt: (r.dr_updated_at as string | null) ?? null,
       drTrend: "flat",
       traffic,
       keywords: r.keywords != null ? Number(r.keywords) : 0,

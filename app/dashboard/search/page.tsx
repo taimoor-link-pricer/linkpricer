@@ -1061,6 +1061,7 @@ function DomainRow({
   const [drTipPlacement, setDrTipPlacement] = useState<"above" | "below">("below");
   const [drTipCoords, setDrTipCoords] = useState({ top: 0, left: 0 });
   const drRef = useRef<HTMLSpanElement>(null);
+  const drCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fixed-position (not absolute) so this escapes the results table's
   // horizontally-scrolling wrapper — that wrapper's overflow-x: auto forces
@@ -1070,6 +1071,7 @@ function DomainRow({
   // on actual remaining viewport space, same technique as design-v1's
   // InfoTip component.
   function showDrTip() {
+    if (drCloseTimer.current) { clearTimeout(drCloseTimer.current); drCloseTimer.current = null; }
     const el = drRef.current;
     if (el) {
       const r = el.getBoundingClientRect();
@@ -1081,6 +1083,18 @@ function DomainRow({
       });
     }
     setDrTipOpen(true);
+  }
+
+  // Closes on a short delay instead of immediately — there's a real gap
+  // (the `top`/`bottom` offset above) between the DR number and the tooltip
+  // box, so the cursor briefly hovers nothing while moving from one to the
+  // other. An instant close on mouseleave fires before the cursor ever
+  // reaches the tooltip, making the Ahrefs link inside it unclickable.
+  // showDrTip() above cancels this if the mouse re-enters either element
+  // in time.
+  function scheduleHideDrTip() {
+    if (drCloseTimer.current) clearTimeout(drCloseTimer.current);
+    drCloseTimer.current = setTimeout(() => setDrTipOpen(false), 200);
   }
 
   const tdBase: React.CSSProperties = {
@@ -1229,7 +1243,7 @@ function DomainRow({
           ref={drRef}
           style={{ fontWeight: 700, color: C.ink }}
           onMouseEnter={showDrTip}
-          onMouseLeave={() => setDrTipOpen(false)}
+          onMouseLeave={scheduleHideDrTip}
         >
           {row.dr}
         </span>
@@ -1241,9 +1255,11 @@ function DomainRow({
             // Not pointer-events:none anymore, and mouse enter/leave repeated
             // here too — the link below needs to actually be clickable, which
             // means the tooltip has to stay open while the cursor travels
-            // from the DR number onto the tooltip itself.
-            onMouseEnter={() => setDrTipOpen(true)}
-            onMouseLeave={() => setDrTipOpen(false)}
+            // from the DR number onto the tooltip itself. showDrTip's timer
+            // cancel + this component's own delayed close is what actually
+            // bridges the gap between the two elements.
+            onMouseEnter={showDrTip}
+            onMouseLeave={scheduleHideDrTip}
             style={{
               position: "fixed",
               top: drTipCoords.top,
