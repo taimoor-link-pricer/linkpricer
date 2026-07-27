@@ -121,13 +121,31 @@ const AssistantText = ({ text }: { text: string }) => (
     <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6, color: "var(--lp-ink-2)" }}>{text}</p>
   </div>
 );
-const TypingRow = () => (
-  <div className="msg-in" style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 5 }}>
-    {[0, 1, 2].map((i) => (
-      <span key={i} style={{ width: 6, height: 6, borderRadius: 999, background: "var(--lp-mute-2)", display: "inline-block", animation: "lp-dot 1.1s ease-in-out infinite", animationDelay: `${i * 0.15}s` }} />
-    ))}
-  </div>
-);
+const THINKING_STEPS = [
+  "Searching 60+ marketplaces…",
+  "Matching your niche and budget…",
+  "Ranking the best fits…",
+  "Comparing live prices…",
+];
+
+const TypingRow = () => {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    setStep(0);
+    const id = setInterval(() => setStep((s) => Math.min(s + 1, THINKING_STEPS.length - 1)), 2200);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="msg-in" style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        {[0, 1, 2].map((i) => (
+          <span key={i} style={{ width: 6, height: 6, borderRadius: 999, background: "var(--lp-mute-2)", display: "inline-block", animation: "lp-dot 1.1s ease-in-out infinite", animationDelay: `${i * 0.15}s` }} />
+        ))}
+      </div>
+      <span style={{ fontSize: 13.5, color: "var(--lp-mute)" }}>{THINKING_STEPS[step]}</span>
+    </div>
+  );
+};
 
 function InputBar({ docked, value, setValue, thinking, send }: { docked: boolean; value: string; setValue: (v: string) => void; thinking: boolean; send: (text?: string) => void }) {
   return (

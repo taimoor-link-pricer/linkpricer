@@ -9,9 +9,13 @@ import {
   getAdditionalUserInfo,
   signOut as firebaseSignOut,
   updateProfile,
+  sendPasswordResetEmail as firebaseSendPasswordResetEmail,
+  verifyPasswordResetCode as firebaseVerifyPasswordResetCode,
+  confirmPasswordReset as firebaseConfirmPasswordReset,
   type User,
 } from "firebase/auth";
 import { auth } from "./client";
+import { ROUTES } from "@/lib/constants";
 
 export function getAuthErrorMessage(code: string): string {
   switch (code) {
@@ -31,6 +35,12 @@ export function getAuthErrorMessage(code: string): string {
       return "Sign-in popup was closed before completing.";
     case "auth/network-request-failed":
       return "Network error. Check your connection and try again.";
+    case "auth/expired-action-code":
+      return "This reset link has expired. Request a new one.";
+    case "auth/invalid-action-code":
+      return "This reset link is invalid or has already been used. Request a new one.";
+    case "auth/user-disabled":
+      return "This account has been disabled.";
     default:
       return "Something went wrong. Please try again.";
   }
@@ -85,4 +95,29 @@ export async function finishGoogleSignIn(): Promise<{ user: User; isNewUser: boo
 export async function signOut() {
   await firebaseSignOut(auth);
   await fetch("/api/auth/session", { method: "DELETE" });
+}
+
+// `handleCodeInApp: true` + our own resetPassword URL means the emailed link
+// opens our branded page (oobCode in the query string) instead of Firebase's
+// generic hosted action page. Firebase intentionally doesn't reveal whether
+// the email exists (no error on an unknown address) — this is an anti
+// account-enumeration measure on Firebase's side, not something to work
+// around; the caller should always show the same "check your email" message.
+export async function sendPasswordResetEmail(email: string) {
+  await firebaseSendPasswordResetEmail(auth, email, {
+    url: `${window.location.origin}${ROUTES.resetPassword}`,
+    handleCodeInApp: true,
+  });
+}
+
+// Confirms the oobCode is still valid and returns the email it belongs to
+// (shown on the reset-password page so the user knows which account they're
+// resetting) — throws (auth/expired-action-code / auth/invalid-action-code)
+// if the link was already used or has expired.
+export async function verifyPasswordResetCode(oobCode: string): Promise<string> {
+  return firebaseVerifyPasswordResetCode(auth, oobCode);
+}
+
+export async function confirmPasswordReset(oobCode: string, newPassword: string): Promise<void> {
+  await firebaseConfirmPasswordReset(auth, oobCode, newPassword);
 }

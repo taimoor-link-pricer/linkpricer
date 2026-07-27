@@ -15,6 +15,7 @@ export const ROUTES = {
   compare: "/compare",
   relatedSites: "/related-sites",
   forgotPassword: "/forgot-password",
+  resetPassword: "/reset-password",
   onboarding: "/onboarding",
   dashboard: "/dashboard",
   search: "/dashboard/search",
