@@ -204,6 +204,7 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
  * the public /api/homepage-search route.
  */
 export async function searchCatalog(opts: CatalogSearchOptions): Promise<CatalogSearchOutput> {
+  const __t0 = Date.now();
   const query = opts.query.trim();
   const f = opts.filters ?? {};
   const claudeShortlistSize = opts.claudeShortlistSize ?? DEFAULT_CLAUDE_SHORTLIST_SIZE;
@@ -218,6 +219,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // usdCaseExpr's comment above for why this can't just be a JS-side toUsd()
   // call the way /api/analyze does it.
   const rates = await getUsdRates();
+  const __tRates = Date.now();
 
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
@@ -313,6 +315,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       : Promise.resolve({ excluded: new Set<string>(), degraded: false }),
   ]);
   const degradedAhrefs = exclusionResult.degraded;
+  const __tSql = Date.now();
 
   // Filtering in JS against a Set (not a SQL NOT IN) is deliberate: the
   // candidate pool is already bounded to <=400 rows above, so this is
@@ -410,7 +413,16 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         })();
   }
 
+  const __tRerank = Date.now();
   const offersMap = await fetchOffersForDomains(scored.map((s) => s.row.domain as string), rates);
+  const __tTotal = Date.now() - __t0;
+  if (__tTotal > 3000) {
+    console.log(
+      `[searchCatalog] slow search "${query}": total ${__tTotal}ms ` +
+        `(rates ${__tRates - __t0}ms, sql ${__tSql - __tRates}ms/${rows.rows.length} rows, ` +
+        `rerank ${__tRerank - __tSql}ms, offers ${__tTotal - (__tRerank - __t0)}ms)`
+    );
+  }
 
   const results: CatalogSearchResult[] = scored.map(({ row: r, matchPct }) => {
     const domain = r.domain as string;

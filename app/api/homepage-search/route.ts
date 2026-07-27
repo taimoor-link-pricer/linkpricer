@@ -66,7 +66,11 @@ export async function POST(req: NextRequest) {
   if (!query) return NextResponse.json({ error: "query is required" }, { status: 400 });
 
   try {
-    const { results, lowRelevance } = await searchCatalog({ query, finalResultSize: 1 });
+    // Only the single best match is ever shown here, so reranking the full
+    // default shortlist (80 candidates) wastes ~half the request's latency
+    // scoring domains that get thrown away. 25 is plenty for Claude to find
+    // the best of the word-overlap-prefiltered set.
+    const { results, lowRelevance } = await searchCatalog({ query, finalResultSize: 1, claudeShortlistSize: 25 });
     return NextResponse.json({ result: results[0] ?? null, lowRelevance, remaining });
   } catch (err) {
     console.error("[/api/homepage-search]", err instanceof Error ? err.message : err);
