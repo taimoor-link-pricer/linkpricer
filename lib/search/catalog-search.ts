@@ -4,14 +4,37 @@
 // (app/api/homepage-search/route.ts) without duplicating the Claude call or
 // the offers joins.
 import { db } from "@/lib/db";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { getExcludedDomains, normalizeDomain } from "@/lib/integrations/referring-domains-cache";
 import { rerankWithClaude } from "@/lib/ai/claude-rerank";
 import { normalizeLanguage, languageDisplayLabel } from "@/lib/search/language-normalize";
+import { getUsdRates, toUsd } from "@/lib/currency";
 
 const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
 const DEFAULT_FINAL_RESULT_SIZE = 30;
 const DEFAULT_CANDIDATE_POOL_LIMIT = 400;
+
+// marketplace_offers/supplier_offers store prices in whatever currency the
+// source quotes (mostly EUR, some USD, a handful of GBP — confirmed live:
+// 1,485,337 EUR / 576,550 USD / 3 GBP rows). Every price comparison/filter/
+// MIN() done in SQL must convert to USD first, or it silently ranks/filters
+// on raw mismatched-currency numbers (e.g. treats "205" EUR as cheaper than
+// "220" USD without ever checking they're not the same unit). Same `rates`
+// source /api/analyze already uses (lib/currency.ts, admin-configurable,
+// falls back to defaults, 5-min cache) — built into a SQL CASE expression
+// here since this file (unlike /api/analyze) needs to filter/sort by price
+// *inside* SQL, before results ever reach JS.
+// Neon's HTTP driver infers a parameterized CASE expression's type from
+// context — with an untyped `ELSE 1` literal, it decided the whole CASE was
+// `integer` and then rejected the bound rate parameters ("invalid input
+// syntax for type integer: \"1.14\""). Explicit ::float casts on every
+// branch (including ELSE) make the type unambiguous regardless of driver.
+function usdCaseExpr(priceExpr: SQL, currencyExpr: SQL, rates: Record<string, number>): SQL {
+  const whens = Object.entries(rates)
+    .filter(([cur]) => cur !== "USD")
+    .map(([cur, rate]) => sql`WHEN ${cur} THEN ${rate}::float`);
+  return sql`(${priceExpr} * (CASE UPPER(${currencyExpr}) ${whens.length ? sql.join(whens, sql` `) : sql``} ELSE 1::float END))`;
+}
 
 export type CatalogSortBy = "match" | "dr" | "traffic" | "price" | "keywords" | "refDomains";
 export type CatalogSortDir = "asc" | "desc";
@@ -76,6 +99,7 @@ export interface CatalogSearchResult {
   lang: string;
   category: string;
   dr: number;
+  drUpdatedAt: string | null;
   drTrend: "flat";
   traffic: number;
   keywords: number;
@@ -113,14 +137,14 @@ export interface CatalogSearchOutput {
 // Same offers join as /api/analyze — marketplace_offers + supplier_offers +
 // domain_examples, keyed by domain — so results can expand into the
 // identical compare-offers UI Domain Analysis already uses.
-async function fetchOffersForDomains(domains: string[]): Promise<Map<string, CatalogSearchOffer[]>> {
+async function fetchOffersForDomains(domains: string[], rates: Record<string, number>): Promise<Map<string, CatalogSearchOffer[]>> {
   const offersMap = new Map<string, CatalogSearchOffer[]>();
   if (domains.length === 0) return offersMap;
   const domainList = sql.join(domains.map((d) => sql`${d}`), sql`, `);
 
   const [marketplaceRows, vendorRows, exampleRows] = await Promise.all([
     db.execute(sql`
-      SELECT LOWER(d.domain) AS domain, mo.marketplace_name AS name, mo.min_price, mo.max_price,
+      SELECT LOWER(d.domain) AS domain, mo.marketplace_name AS name, mo.min_price, mo.max_price, mo.currency,
              mo.delivery_time_days, mo.quality_score, mo.link_type, mo.tat, mo.updated_at
       FROM marketplace_offers mo
       JOIN domains d ON d.id = mo.domain_id
@@ -129,7 +153,7 @@ async function fetchOffersForDomains(domains: string[]): Promise<Map<string, Cat
     `),
     db.execute(sql`
       SELECT LOWER(so.domain) AS domain, COALESCE(u.vendor_name, CONCAT(u.first_name, ' ', u.last_name), u.email) AS vendor_name,
-             so.min_price, so.max_price, so.delivery_time_days, so.updated_at, so.status
+             so.min_price, so.max_price, so.currency, so.delivery_time_days, so.updated_at, so.status
       FROM supplier_offers so
       JOIN users u ON u.id = so.vendor_user_id
       WHERE so.status = 'active' AND so.is_active = true AND so.min_price::float > 0 AND LOWER(so.domain) IN (${domainList})
@@ -147,9 +171,11 @@ async function fetchOffersForDomains(domains: string[]): Promise<Map<string, Cat
   for (const r of marketplaceRows.rows) {
     const domain = r.domain as string;
     if (!offersMap.has(domain)) offersMap.set(domain, []);
+    const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null, rates) ?? 0;
+    const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null, rates) ?? minUsd;
     offersMap.get(domain)!.push({
       name: (r.name as string) ?? "Marketplace", type: "DB", updated: fmtUpdated(r.updated_at as string | null),
-      minPrice: Number(r.min_price ?? 0), maxPrice: Number(r.max_price ?? r.min_price ?? 0),
+      minPrice: minUsd, maxPrice: maxUsd,
       quality: Math.min(5, Math.max(1, Number(r.quality_score ?? 3))), delivery: Number(r.delivery_time_days ?? 14),
       tat: Number(r.tat ?? r.delivery_time_days ?? 14), link: (r.link_type as string) ?? "Dofollow",
       example: exampleMap.get(domain) ?? null,
@@ -158,9 +184,11 @@ async function fetchOffersForDomains(domains: string[]): Promise<Map<string, Cat
   for (const r of vendorRows.rows) {
     const domain = r.domain as string;
     if (!offersMap.has(domain)) offersMap.set(domain, []);
+    const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null, rates) ?? 0;
+    const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null, rates) ?? minUsd;
     offersMap.get(domain)!.push({
       name: `Vendor: ${r.vendor_name as string}`, type: "Vendor", updated: fmtUpdated(r.updated_at as string | null),
-      minPrice: Number(r.min_price ?? 0), maxPrice: Number(r.max_price ?? r.min_price ?? 0),
+      minPrice: minUsd, maxPrice: maxUsd,
       quality: 3, delivery: Number(r.delivery_time_days ?? 14), tat: Number(r.delivery_time_days ?? 14),
       link: "Dofollow", example: exampleMap.get(domain) ?? null,
     });
@@ -183,6 +211,13 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const candidatePoolLimit = opts.candidatePoolLimit ?? DEFAULT_CANDIDATE_POOL_LIMIT;
   const sortBy: CatalogSortBy = opts.sortBy ?? "match";
   const sortDir: CatalogSortDir = opts.sortDir ?? "desc";
+
+  // Needed before the main query is built — best_price (used for SQL-level
+  // min/max price filtering below, and for the sortBy:"price" column sort)
+  // is computed in that query, and must already be USD-converted there. See
+  // usdCaseExpr's comment above for why this can't just be a JS-side toUsd()
+  // call the way /api/analyze does it.
+  const rates = await getUsdRates();
 
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
@@ -216,7 +251,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
   const wordClauses = words.map(
     (w) =>
-      sql`(d.category ILIKE ${"%" + w + "%"} OR d.w ILIKE ${"%" + w + "%"} OR ai."semanticCategory" ILIKE ${"%" + w + "%"} OR ai."semanticSummary" ILIKE ${"%" + w + "%"})`
+      sql`(d.category ILIKE ${"%" + w + "%"} OR d.domain ILIKE ${"%" + w + "%"} OR ai."semanticCategory" ILIKE ${"%" + w + "%"} OR ai."semanticSummary" ILIKE ${"%" + w + "%"})`
   );
   const matchClause = wordClauses.length
     ? sql`AND (${sql.join(wordClauses, sql` OR `)})`
@@ -226,13 +261,24 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // lookup are independent — run them concurrently rather than serially.
   const [rows, exclusionResult] = await Promise.all([
     db.execute(sql`
-      WITH matched AS (
-        SELECT DISTINCT d.id, d.w, d.category, d.country, d.language
-        FROM lp_marketplace_domains d
-        JOIN lp_domain_price p ON p."domainId" = d.id
-        LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
-        WHERE d."isActive" = true AND p."isActive" = true AND p.price::float > 0 AND d."deletedAt" IS NULL
+      WITH text_matched AS MATERIALIZED (
+        SELECT d.id, d.domain AS w, d.category, d.country_main_traffic AS country,
+               d.language_written_in_website AS language,
+               d.domain_rating, d.domain_rating_updated_at, d.org_traffic, d.org_keywords, d.ref_domains,
+               ai."semanticCategory" AS semantic_category, ai."semanticSummary" AS semantic_summary,
+               ai."valueGrade" AS ai_grade, ai."valueScore" AS ai_score
+        FROM domains d
+        LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
+        WHERE 1 = 1
           ${matchClause}
+      ),
+      matched AS (
+        SELECT t.* FROM text_matched t
+        WHERE EXISTS (
+          SELECT 1 FROM marketplace_offers mo WHERE mo.domain_id = t.id AND mo.available = true AND mo.min_price::float > 0
+          UNION ALL
+          SELECT 1 FROM supplier_offers so WHERE so.domain_id = t.id AND so.status = 'active' AND so.is_active = true AND so.min_price::float > 0
+        )
         LIMIT ${candidatePoolLimit}
       ),
       aggregated AS (
@@ -241,21 +287,22 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           MAX(d.category) AS raw_category,
           MAX(d.country) AS country,
           MAX(d.language) AS lang,
-          COALESCE(MAX(ads."domain_rating"::float), MAX(m."domainRating"::float)) AS dr,
-          MAX(m."orgTraffic") AS traffic,
-          MAX(m."orgKeywords") AS keywords,
-          MAX(m."refDomains") AS ref_domains,
-          MIN(p.price::float) AS best_price,
-          MAX(ai."semanticCategory") AS semantic_category,
-          MAX(ai."semanticSummary") AS semantic_summary,
-          MAX(ai."valueGrade") AS ai_grade,
-          MAX(ai."valueScore"::float) AS ai_score
+          MAX(d.domain_rating)::float AS dr,
+          MAX(d.domain_rating_updated_at) AS dr_updated_at,
+          MAX(d.org_traffic) AS traffic,
+          MAX(d.org_keywords) AS keywords,
+          MAX(d.ref_domains) AS ref_domains,
+          (SELECT MIN(price) FROM (
+             SELECT ${usdCaseExpr(sql`mo.min_price::float`, sql`mo.currency`, rates)} AS price FROM marketplace_offers mo WHERE mo.domain_id = d.id AND mo.available = true AND mo.min_price::float > 0
+             UNION ALL
+             SELECT ${usdCaseExpr(sql`so.min_price::float`, sql`so.currency`, rates)} AS price FROM supplier_offers so WHERE so.domain_id = d.id AND so.status = 'active' AND so.is_active = true AND so.min_price::float > 0
+           ) prices) AS best_price,
+          MAX(d.semantic_category) AS semantic_category,
+          MAX(d.semantic_summary) AS semantic_summary,
+          MAX(d.ai_grade) AS ai_grade,
+          MAX(d.ai_score::float) AS ai_score
         FROM matched d
-        JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true AND p.price::float > 0
-        LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
-        LEFT JOIN lp_ahrefs_dr_staging ads ON ads.domain = LOWER(d.w)
-        LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.w
-        GROUP BY d.w
+        GROUP BY d.id, d.w
       )
       SELECT * FROM aggregated
       WHERE 1 = 1
@@ -363,7 +410,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         })();
   }
 
-  const offersMap = await fetchOffersForDomains(scored.map((s) => s.row.domain as string));
+  const offersMap = await fetchOffersForDomains(scored.map((s) => s.row.domain as string), rates);
 
   const results: CatalogSearchResult[] = scored.map(({ row: r, matchPct }) => {
     const domain = r.domain as string;
@@ -387,6 +434,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       lang: languageDisplayLabel(r.lang as string | null),
       category: (r.raw_category as string) ?? (r.semantic_category as string) ?? "General",
       dr,
+      drUpdatedAt: (r.dr_updated_at as string | null) ?? null,
       drTrend: "flat",
       traffic,
       keywords: r.keywords != null ? Number(r.keywords) : 0,

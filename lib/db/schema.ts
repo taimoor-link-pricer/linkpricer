@@ -252,6 +252,11 @@ export const domains = pgTable("domains", {
 	languageWrittenInWebsite: text("language_written_in_website"),
 	category: text(),
 	domainRating: integer("domain_rating"),
+	// Set only when ahrefs-dr.ts's rolling job writes a *confirmed* DR here
+	// (never on a fetch failure) — lets callers tell "fresh from Ahrefs" apart
+	// from "still the old historical import" without touching the unrelated
+	// generic `updatedAt` column below.
+	domainRatingUpdatedAt: timestamp("domain_rating_updated_at", { withTimezone: true, mode: 'string' }),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	orgTraffic: bigint("org_traffic", { mode: "number" }),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations

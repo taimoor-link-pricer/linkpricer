@@ -47,6 +47,22 @@ function priceFmt(usd: number | null, cur: Currency): string {
   return LIVE_SYMS[cur] + v.toLocaleString();
 }
 
+// DR hover tooltip text — domain_rating_updated_at is only ever set by the
+// live ahrefs-dr.ts job on a confirmed fetch (see lib/db/schema.ts), so a
+// null here means this domain hasn't been through that job's ~30-day rolling
+// cycle yet, not that the DR itself is wrong. Returns just the "last
+// updated" line — the "Source: Ahrefs" attribution is rendered separately
+// as a real link, not baked into this string.
+function drUpdatedText(updatedAt: string | null): string {
+  if (!updatedAt) return "DR freshness data not yet available for this domain";
+  const d = new Date(updatedAt);
+  if (Number.isNaN(d.getTime())) return "DR freshness data not yet available for this domain";
+  const formatted = d.toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+  });
+  return `Last updated ${formatted}`;
+}
+
 function withFee(p: number): number {
   // Rounding to a whole currency unit can erase the 15% margin entirely on cheap
   // prices (e.g. 1.21 * 1.15 = 1.39, which rounds down to 1 — below source price).
@@ -132,6 +148,7 @@ type Domain = {
   lang: string;
   category: string;
   dr: number;
+  drUpdatedAt: string | null;
   drTrend: "up" | "flat" | "down";
   traffic: number;
   keywords: number;
@@ -144,6 +161,51 @@ type Domain = {
   offers: Offer[];
 };
 
+
+// ─── Recent searches (localStorage, client-only — same pattern already used
+// for `lp_analyze_tour_seen`; no backend table exists for this) ───────────────
+type RecentSearch = {
+  id: string;
+  pasteValue: string;
+  currency: Currency;
+  niche: string;
+  domains: string[];
+  timestamp: number;
+};
+
+const RECENT_SEARCHES_KEY = "lp_recent_searches";
+const MAX_RECENT_SEARCHES = 8;
+
+function loadRecentSearches(): RecentSearch[] {
+  try {
+    if (typeof window === "undefined") return [];
+    const raw = window.localStorage.getItem(RECENT_SEARCHES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentSearches(list: RecentSearch[]) {
+  try {
+    window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list));
+  } catch {
+    /* noop — storage may be full/disabled, search still works without it */
+  }
+}
+
+function formatRecentSearchTime(ts: number): string {
+  const diffMs = Date.now() - ts;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 // ─── Cart types ───────────────────────────────────────────────────────────────
 type CartItem = {
@@ -337,8 +399,18 @@ function OfferCard({
       {/* Details rows */}
       <div style={{ display: "flex", flexDirection: "column" }}>
         {[
-          { label: "Delivery guarantee", value: `${offer.delivery} days` },
-          { label: "Avg. TAT", value: `${offer.tat} days` },
+          // "Delivery guarantee" used to show alongside this as a separate
+          // row — removed 2026-07-26: both fields always read the same
+          // hardcoded 14-day fallback for every marketplace offer (confirmed
+          // via DB: delivery_time_days and tat are 100% NULL across all
+          // 2,038,551 marketplace_offers rows), so the two rows never once
+          // showed different numbers. "Avg. TAT" is the clearer label of the
+          // two (per explicit product decision); it now sources its value
+          // from offer.delivery — the field with an actual live write path
+          // (confirmed via supplier_offers, where vendors do enter real
+          // delivery_time_days values) — rather than offer.tat, which no
+          // connector or vendor flow has ever written.
+          { label: "Avg. TAT", value: `${offer.delivery} days` },
         ].map(({ label, value }) => (
           <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${C.line2}` }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: C.mute }}>{label}</span>
@@ -759,12 +831,25 @@ function ResultsTable({
   const rows = buildRows();
 
   function handleDownloadCSV() {
-    const header = "Domain,Country,Category,DR,Traffic,Keywords,Grade,Score,Best Price\n";
+    // Column order mirrors the on-screen table left-to-right: Domain, then
+    // Best Price (shown in the Actions column's "Buy $X" button) and
+    // Grade/Score (shown combined in the Value column), then Country, DR,
+    // Traffic, Keywords, Category — same order as the <th> row below. Row
+    // order already matches by construction: both this and the table read
+    // from the same `rows` (buildRows()) computed above, which already
+    // reflects the current column sort.
+    const escape = (v: string | number | null | undefined) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = "Domain,Best Price,Grade,Score,Country,DR,Traffic,Keywords,Category\n";
     const lines = rows
       .map((r) =>
         r.kind === "found"
-          ? `${r.row.domain},${r.row.country},${r.row.category},${r.row.dr},${r.row.traffic},${r.row.keywords},${r.row.grade},${r.row.score},${r.row.bestPrice}`
-          : `${r.domain},,,,,,,,not found`
+          ? [r.row.domain, r.row.bestPrice, r.row.grade, r.row.score, r.row.country, r.row.dr, r.row.traffic, r.row.keywords, r.row.category]
+              .map(escape)
+              .join(",")
+          : [r.domain, "", "", "", "", "", "", "", "not found"].map(escape).join(",")
       )
       .join("\n");
     const blob = new Blob([header + lines], { type: "text/csv" });
@@ -972,6 +1057,45 @@ function DomainRow({
 }) {
   const [hover, setHover] = useState(false);
   const [buyHover, setBuyHover] = useState(false);
+  const [drTipOpen, setDrTipOpen] = useState(false);
+  const [drTipPlacement, setDrTipPlacement] = useState<"above" | "below">("below");
+  const [drTipCoords, setDrTipCoords] = useState({ top: 0, left: 0 });
+  const drRef = useRef<HTMLSpanElement>(null);
+  const drCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fixed-position (not absolute) so this escapes the results table's
+  // horizontally-scrolling wrapper — that wrapper's overflow-x: auto forces
+  // overflow-y to clip too (per the CSS spec), which silently hid an
+  // absolutely-positioned tooltip whenever it poked past the wrapper's top
+  // or bottom edge (i.e. for the first or last row). Placement flips based
+  // on actual remaining viewport space, same technique as design-v1's
+  // InfoTip component.
+  function showDrTip() {
+    if (drCloseTimer.current) { clearTimeout(drCloseTimer.current); drCloseTimer.current = null; }
+    const el = drRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      const placement = window.innerHeight - r.bottom < 70 ? "above" : "below";
+      setDrTipPlacement(placement);
+      setDrTipCoords({
+        top: placement === "below" ? r.bottom + 6 : r.top - 6,
+        left: Math.min(r.left, window.innerWidth - 220),
+      });
+    }
+    setDrTipOpen(true);
+  }
+
+  // Closes on a short delay instead of immediately — there's a real gap
+  // (the `top`/`bottom` offset above) between the DR number and the tooltip
+  // box, so the cursor briefly hovers nothing while moving from one to the
+  // other. An instant close on mouseleave fires before the cursor ever
+  // reaches the tooltip, making the Ahrefs link inside it unclickable.
+  // showDrTip() above cancels this if the mouse re-enters either element
+  // in time.
+  function scheduleHideDrTip() {
+    if (drCloseTimer.current) clearTimeout(drCloseTimer.current);
+    drCloseTimer.current = setTimeout(() => setDrTipOpen(false), 200);
+  }
 
   const tdBase: React.CSSProperties = {
     padding: "12px 14px",
@@ -1115,10 +1239,59 @@ function DomainRow({
 
       {/* DR */}
       <td style={tdBase}>
-        <span style={{ fontWeight: 700, color: C.ink }}>{row.dr}</span>
+        <span
+          ref={drRef}
+          style={{ fontWeight: 700, color: C.ink }}
+          onMouseEnter={showDrTip}
+          onMouseLeave={scheduleHideDrTip}
+        >
+          {row.dr}
+        </span>
         {row.drTrend === "up" && <span style={{ color: C.good, marginLeft: 4 }}>↑</span>}
         {row.drTrend === "flat" && <span style={{ color: C.mute, marginLeft: 4 }}>—</span>}
         {row.drTrend === "down" && <span style={{ color: C.bad, marginLeft: 4 }}>↓</span>}
+        {drTipOpen && (
+          <div
+            // Not pointer-events:none anymore, and mouse enter/leave repeated
+            // here too — the link below needs to actually be clickable, which
+            // means the tooltip has to stay open while the cursor travels
+            // from the DR number onto the tooltip itself. showDrTip's timer
+            // cancel + this component's own delayed close is what actually
+            // bridges the gap between the two elements.
+            onMouseEnter={showDrTip}
+            onMouseLeave={scheduleHideDrTip}
+            style={{
+              position: "fixed",
+              top: drTipCoords.top,
+              left: drTipCoords.left,
+              transform: drTipPlacement === "above" ? "translateY(-100%)" : undefined,
+              zIndex: 9999,
+              width: 210,
+              background: C.ink,
+              color: "#fff",
+              fontSize: 11.5,
+              fontWeight: 600,
+              padding: "8px 10px",
+              borderRadius: 8,
+              boxShadow: "0 8px 20px rgba(0,0,0,0.18)",
+              lineHeight: 1.4,
+            }}
+          >
+            <div>{drUpdatedText(row.drUpdatedAt)}</div>
+            <div style={{ marginTop: 2 }}>
+              Source:{" "}
+              <a
+                href="https://ahrefs.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{ color: "#8ab4ff", textDecoration: "underline", fontWeight: 700 }}
+              >
+                Ahrefs
+              </a>
+            </div>
+          </div>
+        )}
       </td>
 
       {/* Traffic */}
@@ -1561,6 +1734,7 @@ const TOUR_DEMO_ROW: Domain = {
   lang: "EN",
   category: "Business / Finance",
   dr: 94,
+  drUpdatedAt: null,
   drTrend: "up",
   traffic: 71_000_000,
   keywords: 8_400_000,
@@ -1590,6 +1764,8 @@ function SearchPageInner() {
   })();
 
   const [pasteValue, setPasteValue] = useState("");
+  const [csvImportError, setCsvImportError] = useState<string | null>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
   const [niche, setNiche] = useState("general");
   const [nicheOpen, setNicheOpen] = useState(false);
   const [currency, setCurrency] = useState<Currency>("USD");
@@ -1608,6 +1784,9 @@ function SearchPageInner() {
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [placedOrderIds, setPlacedOrderIds] = useState<string[]>([]);
   const [analyzeHover, setAnalyzeHover] = useState(false);
+
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(() => loadRecentSearches());
+  const [recentOpen, setRecentOpen] = useState(false);
 
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
@@ -1655,6 +1834,111 @@ function SearchPageInner() {
     setOrder([]);
   }
 
+  // Splits one CSV line into cells, honoring double-quoted fields (so a
+  // quoted price like "1,200" or a quoted domain containing a comma isn't
+  // split apart).
+  function splitCsvLine(line: string, delimiter: string = ","): string[] {
+    const cells: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === delimiter && !inQuotes) {
+        cells.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    cells.push(cur);
+    return cells.map((c) => c.trim());
+  }
+
+  // Excel's default CSV export is semicolon-delimited in most non-US
+  // locales (comma is reserved there as the decimal separator), and
+  // copy-pasted spreadsheet data is sometimes tab-delimited. A comma-only
+  // parser silently mangles both into one unmatched blob per row ("accepts
+  // the file, 0 results"), so sniff the real delimiter from the header line.
+  function detectCsvDelimiter(sampleLine: string): string {
+    const candidates = [",", ";", "\t"];
+    let best = ",";
+    let bestCount = 0;
+    for (const d of candidates) {
+      const count = sampleLine.split(d).length - 1;
+      if (count > bestCount) { bestCount = count; best = d; }
+    }
+    return best;
+  }
+
+  async function handleCsvFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset so picking the same file again still fires this handler.
+    e.target.value = "";
+    if (!file) return;
+
+    setCsvImportError(null);
+    try {
+      const text = await file.text();
+      const rawLines = text.split(/\r\n|\r|\n/).map((l) => l.trim()).filter(Boolean);
+      if (rawLines.length === 0) {
+        setCsvImportError("That file is empty.");
+        return;
+      }
+
+      const delimiter = detectCsvDelimiter(rawLines[0]);
+      const headerFirstCell = splitCsvLine(rawLines[0], delimiter)[0]?.toLowerCase().replace(/^"|"$/g, "");
+      const looksLikeHeader = ["domain", "domains", "url", "website", "site"].includes(headerFirstCell ?? "");
+      const dataLines = looksLikeHeader ? rawLines.slice(1) : rawLines;
+
+      const symbol = LIVE_SYMS[currency] ?? "$";
+      const importedLines: string[] = [];
+      for (const line of dataLines) {
+        const cells = splitCsvLine(line, delimiter);
+        const domain = cells[0]?.trim();
+        if (!domain) continue;
+        let priceCell = cells[1]?.replace(/[$€£]/g, "").trim();
+        // Semicolon-delimited files conventionally use a comma as the
+        // decimal separator and a dot for thousands (e.g. "1.200,50").
+        if (priceCell && delimiter === ";") {
+          priceCell = priceCell.replace(/\./g, "").replace(",", ".");
+        } else if (priceCell) {
+          priceCell = priceCell.replace(/,/g, "");
+        }
+        const price = priceCell && /^\d+(\.\d+)?$/.test(priceCell) ? parseFloat(priceCell) : null;
+        importedLines.push(price != null ? `${domain} ${symbol}${price}` : domain);
+      }
+
+      if (importedLines.length === 0) {
+        setCsvImportError("No valid domains found in that file.");
+        return;
+      }
+
+      setPasteValue((prev) => (prev.trim() ? `${prev.trim()}\n${importedLines.join("\n")}` : importedLines.join("\n")));
+    } catch (err) {
+      console.error("[handleCsvFileSelected]", err);
+      setCsvImportError("Couldn't read that file. Make sure it's a plain CSV.");
+    }
+  }
+
+  // Records a completed search so it can be re-run from the "Recent
+  // searches" dropdown. Dedupes on the exact paste-box text (re-running the
+  // same search just bumps it to the top) and caps the list so it can't
+  // grow unbounded in localStorage.
+  function saveRecentSearch(entry: Omit<RecentSearch, "id" | "timestamp">) {
+    setRecentSearches((prev) => {
+      const withoutDup = prev.filter((s) => s.pasteValue !== entry.pasteValue);
+      const next: RecentSearch[] = [
+        { ...entry, id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: Date.now() },
+        ...withoutDup,
+      ].slice(0, MAX_RECENT_SEARCHES);
+      persistRecentSearches(next);
+      return next;
+    });
+  }
+
   // `domainsOverride` lets callers (the ?domain= auto-run effect below)
   // trigger analysis directly without round-tripping through `pasteValue`
   // state first — setPasteValue + an immediate handleAnalyze() call in the
@@ -1688,6 +1972,12 @@ function SearchPageInner() {
       }));
       setResults(found);
       setNotFound(data.notFound ?? []);
+
+      // Only save real paste-box searches — a ?domain= auto-run arriving
+      // from the homepage isn't something the user typed/pasted themselves.
+      if (!domainsOverride && pasteValue.trim()) {
+        saveRecentSearch({ pasteValue: pasteValue.trim(), currency, niche, domains });
+      }
     } catch (err) {
       console.error("[handleAnalyze]", err);
     } finally {
@@ -1926,7 +2216,16 @@ function SearchPageInner() {
               >
                 + How to use
               </button>
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvFileSelected}
+                style={{ display: "none" }}
+              />
               <button
+                onClick={() => csvInputRef.current?.click()}
+                title="Import a CSV with one domain per row (optionally followed by a price column)"
                 style={{
                   padding: "7px 14px",
                   border: `1px solid ${C.line}`,
@@ -1940,20 +2239,81 @@ function SearchPageInner() {
               >
                 ↑ Import CSV
               </button>
-              <button
-                style={{
-                  padding: "7px 14px",
-                  border: `1px solid ${C.line}`,
-                  borderRadius: 8,
-                  background: "#fff",
-                  color: C.ink2,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                ⏱ Recent searches
-              </button>
+              <div style={{ position: "relative" }}>
+                <button
+                  onClick={() => setRecentOpen((v) => !v)}
+                  style={{
+                    padding: "7px 14px",
+                    border: `1px solid ${C.line}`,
+                    borderRadius: 8,
+                    background: "#fff",
+                    color: C.ink2,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  ⏱ Recent searches
+                </button>
+                {recentOpen && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 4px)",
+                      right: 0,
+                      width: 280,
+                      background: "#fff",
+                      border: `1px solid ${C.line}`,
+                      borderRadius: 9,
+                      zIndex: 50,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.10)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {recentSearches.length === 0 ? (
+                      <div style={{ padding: "14px", fontSize: 12.5, color: C.mute }}>
+                        No searches yet — run an analysis and it'll show up here.
+                      </div>
+                    ) : (
+                      recentSearches.map((s) => {
+                        const label = s.domains.length > 1
+                          ? `${s.domains[0]} +${s.domains.length - 1} more`
+                          : s.domains[0];
+                        return (
+                          <button
+                            key={s.id}
+                            onClick={() => {
+                              setPasteValue(s.pasteValue);
+                              setCurrency(s.currency);
+                              setNiche(s.niche);
+                              setRecentOpen(false);
+                            }}
+                            title="Load this search back into the paste box"
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "flex-start",
+                              gap: 2,
+                              width: "100%",
+                              padding: "9px 14px",
+                              textAlign: "left",
+                              background: "transparent",
+                              border: "none",
+                              borderBottom: `1px solid ${C.line}`,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span style={{ fontSize: 13, fontWeight: 600, color: C.ink2 }}>{label}</span>
+                            <span style={{ fontSize: 11, color: C.mute }}>
+                              {s.domains.length} domain{s.domains.length === 1 ? "" : "s"} · {s.currency} · {formatRecentSearchTime(s.timestamp)}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1976,6 +2336,20 @@ function SearchPageInner() {
                 overflow: "hidden",
               }}
             >
+              {csvImportError && (
+                <div
+                  style={{
+                    padding: "8px 14px",
+                    background: "#fee2e2",
+                    borderBottom: "1px solid #fca5a5",
+                    color: C.bad,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  {csvImportError}
+                </div>
+              )}
               {/* Top bar */}
               <div
                 style={{

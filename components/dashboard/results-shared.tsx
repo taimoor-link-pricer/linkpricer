@@ -184,7 +184,9 @@ function OfferCard({
         )}
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {[{ label: "Delivery guarantee", value: `${offer.delivery} days` }, { label: "Avg. TAT", value: `${offer.tat} days` }].map(({ label, value }) => (
+        {/* "Delivery guarantee" removed 2026-07-26 — same fix as
+            app/dashboard/search/page.tsx's OfferCard, see that comment. */}
+        {[{ label: "Avg. TAT", value: `${offer.delivery} days` }].map(({ label, value }) => (
           <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${C.line2}` }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: C.mute }}>{label}</span>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.ink2 }}>{value}</span>

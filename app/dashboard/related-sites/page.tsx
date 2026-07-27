@@ -12,7 +12,7 @@
 // semantic/embeddings — see the route file for why) so match quality won't
 // match the reference screenshots exactly; that's a disclosed, known gap
 // pending an embeddings API key decision, not something faked here.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
@@ -96,6 +96,64 @@ function RSToggle({ checked, disabled, onChange }: { checked: boolean; disabled:
   );
 }
 
+// ── dual-thumb range slider ───────────────────────────────────────────────────
+// Two overlapping native <input type="range"> elements sharing one track — the
+// standard CSS-only technique for a min/max range slider (real drag physics,
+// keyboard/accessibility support, no custom hit-testing). The shared
+// `lp-range-thumb` class (styled once, globally, in the page's <style> tag)
+// makes each input's own track transparent/click-through so only its thumb is
+// interactive; the visible track + filled segment are drawn separately below.
+function DualRangeSlider({
+  label, bounds, valueMin, valueMax, onChange, disabled, formatValue, title,
+}: {
+  label: string;
+  bounds: { min: number; max: number };
+  valueMin: number;
+  valueMax: number;
+  onChange: (min: number, max: number) => void;
+  disabled: boolean;
+  formatValue: (v: number) => string;
+  title: string;
+}) {
+  const span = Math.max(1, bounds.max - bounds.min);
+  const minPct = ((valueMin - bounds.min) / span) * 100;
+  const maxPct = ((valueMax - bounds.min) / span) * 100;
+  return (
+    <div style={{ flex: "1 1 180px", minWidth: 180 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: C.mute, letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+        <span>{label}</span>
+        <span style={{ color: C.ink3, textTransform: "none", fontWeight: 600 }}>
+          {bounds.max > bounds.min ? `${formatValue(valueMin)} – ${formatValue(valueMax)}` : ""}
+        </span>
+      </div>
+      <div style={{ position: "relative", height: 20 }} title={title}>
+        <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 4, borderRadius: 2, background: C.line }} />
+        <div style={{ position: "absolute", top: 8, height: 4, borderRadius: 2, background: disabled ? C.line : C.accent, left: `${minPct}%`, right: `${100 - maxPct}%` }} />
+        <input
+          type="range"
+          className="lp-range-thumb"
+          min={bounds.min}
+          max={bounds.max}
+          value={valueMin}
+          disabled={disabled}
+          onChange={(e) => onChange(Math.min(Number(e.target.value), valueMax), valueMax)}
+          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: disabled ? "not-allowed" : "pointer" }}
+        />
+        <input
+          type="range"
+          className="lp-range-thumb"
+          min={bounds.min}
+          max={bounds.max}
+          value={valueMax}
+          disabled={disabled}
+          onChange={(e) => onChange(valueMin, Math.max(Number(e.target.value), valueMin))}
+          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: disabled ? "not-allowed" : "pointer" }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── filter option sets (verbatim from RS_FILTERS) ────────────────────────────
 const RS_FILTERS: Record<string, DropdownOption[]> = {
   country: [
@@ -115,25 +173,12 @@ const RS_FILTERS: Record<string, DropdownOption[]> = {
     { id: "PL", label: "Polish" }, { id: "LT", label: "Lithuanian" }, { id: "RU", label: "Russian" }, { id: "TR", label: "Turkish" },
     { id: "AR", label: "Arabic" }, { id: "HI", label: "Hindi" }, { id: "JA", label: "Japanese" }, { id: "ZH", label: "Chinese" }, { id: "KO", label: "Korean" },
   ],
-  traffic: [
-    { id: "any", label: "Any traffic" }, { id: "10000", label: "10K+" }, { id: "100000", label: "100K+" }, { id: "1000000", label: "1M+" }, { id: "10000000", label: "10M+" },
-  ],
-  dr: [
-    { id: "any", label: "Any DR" }, { id: "30", label: "DR 30+" }, { id: "50", label: "DR 50+" }, { id: "70", label: "DR 70+" }, { id: "90", label: "DR 90+" },
-  ],
-  price: [
-    { id: "any", label: "Any price" }, { id: "lt300", label: "Under $300" }, { id: "300-700", label: "$300 – $700" }, { id: "700-1200", label: "$700 – $1,200" }, { id: "gt1200", label: "$1,200+" },
-  ],
   niche: [
     { id: "any", label: "Any niche" }, { id: "general", label: "General" }, { id: "gambling", label: "Gambling / iGaming" }, { id: "crypto", label: "Crypto" }, { id: "cbd", label: "CBD" },
   ],
   grade: [
     { id: "any", label: "Any grade" }, { id: "A+", label: "A+ only" }, { id: "A", label: "A & above" }, { id: "B+", label: "B+ & above" }, { id: "B", label: "B & above" },
   ],
-};
-
-const RS_PRICE_MAP: Record<string, { priceMin?: number; priceMax?: number }> = {
-  any: {}, lt300: { priceMax: 300 }, "300-700": { priceMin: 300, priceMax: 700 }, "700-1200": { priceMin: 700, priceMax: 1200 }, gt1200: { priceMin: 1200 },
 };
 
 // Sortable columns mirror lib/search/catalog-search.ts's CatalogSortBy —
@@ -148,7 +193,7 @@ const RS_COLUMNS: { label: string; sortKey?: SortableColumn }[] = [
 ];
 const PAGE_SIZE = 25;
 
-const RS_DEFAULT_FILTERS = { country: "any", language: "any", traffic: "any", dr: "any", price: "any", niche: "any", grade: "any" };
+const RS_DEFAULT_FILTERS = { country: "any", language: "any", niche: "any", grade: "any" };
 
 // ── tour (verbatim copy from RSTour/tourSteps) ───────────────────────────────
 type TourStep = { selector: string; title: string; body: string };
@@ -263,10 +308,24 @@ function EmptyState({ query, hasResults, activeFilterCount, onClear }: { query: 
 
 interface RelatedSite {
   domain: string; matchPct: number; country: string; lang: string; category: string;
-  dr: number; drTrend: "up" | "flat" | "down"; traffic: number; keywords: number; refDomains: number;
+  dr: number; drUpdatedAt: string | null; drTrend: "up" | "flat" | "down"; traffic: number; keywords: number; refDomains: number;
   grade: string; score: number; bestPrice: number | null; yourPrice: number | null; offers: Offer[];
 }
 interface Quota { used: number; remaining: number; limit: number; resetsAt: string }
+
+// DR hover tooltip text — domain_rating_updated_at is only ever set by the
+// live ahrefs-dr.ts job on a confirmed fetch (see lib/db/schema.ts), so a
+// null here means this domain hasn't been through that job's ~30-day rolling
+// cycle yet, not that the DR itself is wrong.
+function drUpdatedText(updatedAt: string | null): string {
+  if (!updatedAt) return "DR freshness data not yet available for this domain";
+  const d = new Date(updatedAt);
+  if (Number.isNaN(d.getTime())) return "DR freshness data not yet available for this domain";
+  const formatted = d.toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+  });
+  return `Last updated ${formatted}`;
+}
 
 function LoadingSpinner() {
   return (
@@ -284,6 +343,41 @@ function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, on
   const gs = gradeStyle(row.grade);
   const matchStyle = row.matchPct >= 60 ? { background: "#e6f6ed", color: C.good } : { background: "#fce8c6", color: C.warn };
   const td: React.CSSProperties = { padding: "12px 14px", borderBottom: isLast && !expanded ? "none" : `1px solid ${C.line}`, fontSize: 13, verticalAlign: "middle" };
+
+  const [drTipOpen, setDrTipOpen] = useState(false);
+  const [drTipPlacement, setDrTipPlacement] = useState<"above" | "below">("below");
+  const [drTipCoords, setDrTipCoords] = useState({ top: 0, left: 0 });
+  const drRef = useRef<HTMLSpanElement>(null);
+  const drCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fixed-position (not absolute) so this escapes the results table's
+  // horizontally-scrolling wrapper — that wrapper's overflow-x: auto forces
+  // overflow-y to clip too (per the CSS spec), which would silently hide an
+  // absolutely-positioned tooltip whenever it poked past the wrapper's top
+  // or bottom edge (i.e. for the first or last row).
+  function showDrTip() {
+    if (drCloseTimer.current) { clearTimeout(drCloseTimer.current); drCloseTimer.current = null; }
+    const el = drRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      const placement = window.innerHeight - r.bottom < 70 ? "above" : "below";
+      setDrTipPlacement(placement);
+      setDrTipCoords({
+        top: placement === "below" ? r.bottom + 6 : r.top - 6,
+        left: Math.min(r.left, window.innerWidth - 220),
+      });
+    }
+    setDrTipOpen(true);
+  }
+
+  // Closes on a short delay instead of immediately — there's a real gap
+  // between the DR number and the tooltip box, so the cursor briefly hovers
+  // nothing while moving from one to the other. showDrTip() cancels this if
+  // the mouse re-enters either element in time.
+  function scheduleHideDrTip() {
+    if (drCloseTimer.current) clearTimeout(drCloseTimer.current);
+    drCloseTimer.current = setTimeout(() => setDrTipOpen(false), 200);
+  }
 
   return (
     <>
@@ -312,7 +406,52 @@ function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, on
         </td>
         <td style={td}><span style={{ background: gs.background, color: gs.color, borderRadius: 6, padding: "3px 9px", fontWeight: 700, fontSize: 13 }}>{row.grade} {row.score}</span></td>
         <td style={td}><span style={{ fontSize: 16 }}>{countryFlag(row.country)}</span><span style={{ marginLeft: 5, color: C.ink2, fontWeight: 600, fontSize: 12 }}>{row.country}</span></td>
-        <td style={td}><span style={{ fontWeight: 700, color: C.ink }}>{row.dr}</span></td>
+        <td style={td}>
+          <span
+            ref={drRef}
+            style={{ fontWeight: 700, color: C.ink }}
+            onMouseEnter={showDrTip}
+            onMouseLeave={scheduleHideDrTip}
+          >
+            {row.dr}
+          </span>
+          {drTipOpen && (
+            <div
+              onMouseEnter={showDrTip}
+              onMouseLeave={scheduleHideDrTip}
+              style={{
+                position: "fixed",
+                top: drTipCoords.top,
+                left: drTipCoords.left,
+                transform: drTipPlacement === "above" ? "translateY(-100%)" : undefined,
+                zIndex: 9999,
+                width: 210,
+                background: C.ink,
+                color: "#fff",
+                fontSize: 11.5,
+                fontWeight: 600,
+                padding: "8px 10px",
+                borderRadius: 8,
+                boxShadow: "0 8px 20px rgba(0,0,0,0.18)",
+                lineHeight: 1.4,
+              }}
+            >
+              <div>{drUpdatedText(row.drUpdatedAt)}</div>
+              <div style={{ marginTop: 2 }}>
+                Source:{" "}
+                <a
+                  href="https://ahrefs.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ color: "#8ab4ff", textDecoration: "underline", fontWeight: 700 }}
+                >
+                  Ahrefs
+                </a>
+              </div>
+            </div>
+          )}
+        </td>
         <td style={{ ...td, color: C.ink2 }}>{fmtNum(row.traffic)}</td>
         <td style={{ ...td, color: C.ink2 }}>{fmtNum(row.keywords)}</td>
         <td style={td}><span style={{ background: C.line2, color: C.ink3, borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{row.category}</span></td>
@@ -334,6 +473,63 @@ export default function RelatedSitesPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
   const [results, setResults] = useState<RelatedSite[]>([]);
+  // Traffic used to be a fixed-bucket dropdown (10K+/100K+/...) applied as a
+  // SQL pre-filter, so it silently zeroed out results for any query whose
+  // matches don't clear that bucket (median catalog traffic is ~100 —
+  // "10K+" alone excludes over 96% of all domains). Instead this is now a
+  // real min-max range, bounded to the *current* result set's actual
+  // min/max traffic (so it can never filter everything out) and filtered
+  // client-side.
+  const [trafficMin, setTrafficMin] = useState(0);
+  const [trafficMax, setTrafficMax] = useState(0);
+  const trafficBounds = useMemo(() => {
+    if (results.length === 0) return { min: 0, max: 0 };
+    const vals = results.map((r) => r.traffic || 0);
+    return { min: Math.min(...vals), max: Math.max(...vals) };
+  }, [results]);
+  // Same fix, same reason as traffic: "DR 30+/50+/70+/90+" buckets were
+  // hardcoded and applied server-side, so a query whose matches all sit
+  // under the lowest bucket returned nothing. Bounded to the current
+  // result set's actual min/max DR instead, filtered client-side.
+  const [drMin, setDrMin] = useState(0);
+  const [drMax, setDrMax] = useState(0);
+  const drBounds = useMemo(() => {
+    if (results.length === 0) return { min: 0, max: 0 };
+    const vals = results.map((r) => r.dr || 0);
+    return { min: Math.min(...vals), max: Math.max(...vals) };
+  }, [results]);
+  // Same fix again: "$300-$700"-style buckets were fixed dollar amounts
+  // applied server-side against `best_price`, so a query whose matches all
+  // sit outside that bucket returned nothing. NOTE for whoever picks up
+  // ticket #5 (splitting guest-post vs. link-insertion pricing): this
+  // filters on `bestPrice` — currently the single, undifferentiated
+  // marketplace/supplier price (see catalog-search.ts's `best_price`
+  // subquery, which only reads the base min_price columns, not
+  // link_insertion_min_price) — once that split lands, this will need a
+  // second range or an explicit toggle for which price type it targets.
+  const [priceMin, setPriceMin] = useState(0);
+  const [priceMax, setPriceMax] = useState(0);
+  const priceBounds = useMemo(() => {
+    const vals = results.map((r) => r.bestPrice).filter((p): p is number => p != null);
+    if (vals.length === 0) return { min: 0, max: 0 };
+    return { min: Math.min(...vals), max: Math.max(...vals) };
+  }, [results]);
+  const filteredResults = useMemo(
+    () =>
+      results.filter((r) => {
+        const traffic = r.traffic || 0;
+        const dr = r.dr || 0;
+        const trafficOk = (trafficMin <= trafficBounds.min || traffic >= trafficMin) && (trafficMax >= trafficBounds.max || traffic <= trafficMax);
+        const drOk = (drMin <= drBounds.min || dr >= drMin) && (drMax >= drBounds.max || dr <= drMax);
+        // A price filter narrower than the full bounds excludes no-price
+        // rows too — matches the old server-side behavior, where
+        // `best_price >= x` on a NULL price is never true in SQL.
+        const priceFilterActive = priceMin > priceBounds.min || priceMax < priceBounds.max;
+        const priceOk = !priceFilterActive || (r.bestPrice != null && r.bestPrice >= priceMin && r.bestPrice <= priceMax);
+        return trafficOk && drOk && priceOk;
+      }),
+    [results, trafficMin, trafficMax, trafficBounds.min, trafficBounds.max, drMin, drMax, drBounds.min, drBounds.max, priceMin, priceMax, priceBounds.min, priceBounds.max]
+  );
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [lowRelevance, setLowRelevance] = useState(false);
@@ -347,7 +543,11 @@ export default function RelatedSitesPage() {
   const [tourStep, setTourStep] = useState(0);
 
   const hasSite = !!ownSite.trim();
-  const activeFilterCount = Object.entries(filters).filter(([, v]) => v !== "any").length;
+  const activeFilterCount =
+    Object.entries(filters).filter(([, v]) => v !== "any").length +
+    (trafficMin > trafficBounds.min || trafficMax < trafficBounds.max ? 1 : 0) +
+    (drMin > drBounds.min || drMax < drBounds.max ? 1 : 0) +
+    (priceMin > priceBounds.min || priceMax < priceBounds.max ? 1 : 0);
 
   useEffect(() => {
     hydrateRates();
@@ -369,13 +569,8 @@ export default function RelatedSitesPage() {
       const parsedFilters: Record<string, string | number> = {};
       if (filters.country !== "any") parsedFilters.country = filters.country;
       if (filters.language !== "any") parsedFilters.language = filters.language;
-      if (filters.traffic !== "any") parsedFilters.minTraffic = Number(filters.traffic);
-      if (filters.dr !== "any") parsedFilters.minDr = Number(filters.dr);
       if (filters.niche !== "any") parsedFilters.category = filters.niche;
       if (filters.grade !== "any") parsedFilters.grade = filters.grade;
-      const priceRange = RS_PRICE_MAP[filters.price];
-      if (priceRange.priceMin != null) parsedFilters.minPrice = priceRange.priceMin;
-      if (priceRange.priceMax != null) parsedFilters.maxPrice = priceRange.priceMax;
 
       const res = await fetch("/api/related-sites", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -398,6 +593,19 @@ export default function RelatedSitesPage() {
         return;
       }
       setResults(data.results);
+      // Reset the traffic/DR ranges to this query's actual min-max — each
+      // search has a different result set, so a range carried over from the
+      // previous query could zero out the new one (or leave it needlessly
+      // narrower than the full new result set).
+      const newTrafficVals = (data.results as RelatedSite[]).map((r) => r.traffic || 0);
+      setTrafficMin(newTrafficVals.length ? Math.min(...newTrafficVals) : 0);
+      setTrafficMax(newTrafficVals.length ? Math.max(...newTrafficVals) : 0);
+      const newDrVals = (data.results as RelatedSite[]).map((r) => r.dr || 0);
+      setDrMin(newDrVals.length ? Math.min(...newDrVals) : 0);
+      setDrMax(newDrVals.length ? Math.max(...newDrVals) : 0);
+      const newPriceVals = (data.results as RelatedSite[]).map((r) => r.bestPrice).filter((p): p is number => p != null);
+      setPriceMin(newPriceVals.length ? Math.min(...newPriceVals) : 0);
+      setPriceMax(newPriceVals.length ? Math.max(...newPriceVals) : 0);
       setLowRelevance(data.lowRelevance ?? false);
       setDegradedAhrefs(data.degradedAhrefs ?? false);
       setQuota({ used: data.used, remaining: data.remaining, limit: data.limit, resetsAt: data.resetsAt });
@@ -437,13 +645,13 @@ export default function RelatedSitesPage() {
   }
 
   function exportCsv() {
-    if (results.length === 0) return;
+    if (filteredResults.length === 0) return;
     const headers = ["Domain", "Match %", "Country", "Language", "Category", "DR", "Traffic", "Keywords", "Ref Domains", "Grade", "Score", "Best Price"];
     const escape = (v: string | number | null) => {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = results.map((r) => [r.domain, r.matchPct, r.country, r.lang, r.category, r.dr, r.traffic, r.keywords, r.refDomains, r.grade, r.score, r.bestPrice].map(escape).join(","));
+    const rows = filteredResults.map((r) => [r.domain, r.matchPct, r.country, r.lang, r.category, r.dr, r.traffic, r.keywords, r.refDomains, r.grade, r.score, r.bestPrice].map(escape).join(","));
     const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -456,7 +664,18 @@ export default function RelatedSitesPage() {
     URL.revokeObjectURL(url);
   }
 
-  function clearFilters() { setFilters(RS_DEFAULT_FILTERS); }
+  function clearFilters() {
+    setFilters(RS_DEFAULT_FILTERS);
+    setTrafficMin(trafficBounds.min);
+    setTrafficMax(trafficBounds.max);
+    setDrMin(drBounds.min);
+    setDrMax(drBounds.max);
+    setPriceMin(priceBounds.min);
+    setPriceMax(priceBounds.max);
+  }
+  function handleTrafficChange(min: number, max: number) { setTrafficMin(min); setTrafficMax(max); setPage(1); }
+  function handleDrChange(min: number, max: number) { setDrMin(min); setDrMax(max); setPage(1); }
+  function handlePriceChange(min: number, max: number) { setPriceMin(min); setPriceMax(max); setPage(1); }
   function toggleRow(domain: string) { setExpanded((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
   function toggleFav(row: RelatedSite) {
     const wasFav = favorites.has(row.domain);
@@ -473,12 +692,13 @@ export default function RelatedSitesPage() {
   function addToCart(item: CartItem) { setCartItems((prev) => [...prev, item]); }
 
   // Sorting now happens server-side (lib/search/catalog-search.ts) — `results`
-  // already arrives in the correct order for the active sortBy/sortDir.
-  // Pagination is a pure client-side slice over that already-ordered array,
-  // so CSV export (which uses the full `results` array) always matches the
-  // same sequence the table is showing, page or no page.
-  const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
-  const pageResults = results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // already arrives in the correct order for the active sortBy/sortDir, and
+  // filtering by the traffic slider preserves that order (Array.filter is
+  // stable). Pagination is a pure client-side slice over `filteredResults`,
+  // so CSV export (which uses the same array) always matches the same
+  // sequence the table is showing, page or no page.
+  const totalPages = Math.max(1, Math.ceil(filteredResults.length / PAGE_SIZE));
+  const pageResults = filteredResults.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   if (loading) return <LoadingSpinner />;
 
@@ -486,7 +706,42 @@ export default function RelatedSitesPage() {
 
   return (
     <div style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto" }}>
-      <style>{`* { box-sizing: border-box; }`}</style>
+      <style>{`
+        * { box-sizing: border-box; }
+        input.lp-range-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          background: transparent;
+          pointer-events: none;
+        }
+        input.lp-range-thumb::-webkit-slider-runnable-track { background: transparent; }
+        input.lp-range-thumb::-moz-range-track { background: transparent; border: none; }
+        input.lp-range-thumb::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          pointer-events: auto;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: #fff;
+          border: 2px solid ${C.accent};
+          box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+          cursor: pointer;
+          margin-top: 6px;
+        }
+        input.lp-range-thumb::-moz-range-thumb {
+          pointer-events: auto;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: #fff;
+          border: 2px solid ${C.accent};
+          box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+          cursor: pointer;
+        }
+        input.lp-range-thumb:disabled::-webkit-slider-thumb { border-color: ${C.line}; cursor: not-allowed; }
+        input.lp-range-thumb:disabled::-moz-range-thumb { border-color: ${C.line}; cursor: not-allowed; }
+      `}</style>
 
       {tourActive && <Tour stepIndex={tourStep} setStepIndex={setTourStep} onClose={() => setTourActive(false)} />}
 
@@ -559,9 +814,51 @@ export default function RelatedSitesPage() {
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
           <RSDropdown label="Country" value={filters.country} options={RS_FILTERS.country} onChange={(v) => setFilters((f) => ({ ...f, country: v }))} searchable />
           <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
-          <RSDropdown label="Traffic" value={filters.traffic} options={RS_FILTERS.traffic} onChange={(v) => setFilters((f) => ({ ...f, traffic: v }))} />
-          <RSDropdown label="DR range" value={filters.dr} options={RS_FILTERS.dr} onChange={(v) => setFilters((f) => ({ ...f, dr: v }))} />
-          <RSDropdown label="Price range" value={filters.price} options={RS_FILTERS.price} onChange={(v) => setFilters((f) => ({ ...f, price: v }))} />
+          <DualRangeSlider
+            label="Traffic"
+            bounds={trafficBounds}
+            valueMin={Math.min(Math.max(trafficMin, trafficBounds.min), trafficBounds.max)}
+            valueMax={Math.min(Math.max(trafficMax, trafficBounds.min), trafficBounds.max)}
+            onChange={handleTrafficChange}
+            disabled={results.length === 0 || trafficBounds.max <= trafficBounds.min}
+            formatValue={fmtNum}
+            title={
+              results.length === 0
+                ? "Run a search to enable this filter"
+                : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: ${fmtNum(trafficBounds.min)} – ${fmtNum(trafficBounds.max)} monthly organic traffic`
+            }
+          />
+          <DualRangeSlider
+            label="DR range"
+            bounds={drBounds}
+            valueMin={Math.min(Math.max(drMin, drBounds.min), drBounds.max)}
+            valueMax={Math.min(Math.max(drMax, drBounds.min), drBounds.max)}
+            onChange={handleDrChange}
+            disabled={results.length === 0 || drBounds.max <= drBounds.min}
+            formatValue={(v) => String(v)}
+            title={
+              results.length === 0
+                ? "Run a search to enable this filter"
+                : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: DR ${drBounds.min} – ${drBounds.max}`
+            }
+          />
+          <DualRangeSlider
+            label="Price range"
+            bounds={priceBounds}
+            valueMin={Math.min(Math.max(priceMin, priceBounds.min), priceBounds.max)}
+            valueMax={Math.min(Math.max(priceMax, priceBounds.min), priceBounds.max)}
+            onChange={handlePriceChange}
+            disabled={results.length === 0 || priceBounds.max <= priceBounds.min}
+            formatValue={(v) => `$${Math.round(v).toLocaleString()}`}
+            title={
+              results.length === 0
+                ? "Run a search to enable this filter"
+                // Raw marketplace/supplier price (USD), same number the old
+                // fixed buckets filtered on — not the fee-inclusive "Buy $"
+                // price shown in the Actions column.
+                : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: $${Math.round(priceBounds.min).toLocaleString()} – $${Math.round(priceBounds.max).toLocaleString()} (marketplace price, before fee)`
+            }
+          />
           <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
           <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
           {activeFilterCount > 0 && (
@@ -585,7 +882,7 @@ export default function RelatedSitesPage() {
           <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Related sites</h2>
-              <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{results.length} {results.length === 1 ? "result" : "results"}</span>
+              <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{filteredResults.length} {filteredResults.length === 1 ? "result" : "results"}</span>
               <span style={{ fontSize: 12, color: C.mute }}>{sortBy === "match" ? "ranked by semantic match" : `sorted by ${sortBy} (${sortDir === "desc" ? "high to low" : "low to high"})`}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
