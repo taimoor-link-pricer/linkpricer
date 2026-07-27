@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { updateProfile, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
+import { updateProfile, updatePassword, EmailAuthProvider, reauthenticateWithCredential, linkWithCredential } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 
@@ -121,6 +121,9 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordMsg, setPasswordMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [hasPasswordProvider, setHasPasswordProvider] = useState(
+    () => auth.currentUser?.providerData.some((p) => p.providerId === "password") ?? true
+  );
 
   const [saveBtnHover, setSaveBtnHover] = useState(false);
   const [pwBtnHover, setPwBtnHover] = useState(false);
@@ -172,6 +175,43 @@ export default function SettingsPage() {
         setPasswordMsg({ type: "error", text: "Current password is incorrect." });
       } else {
         setPasswordMsg({ type: "error", text: "Failed to change password. Please try again." });
+      }
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
+
+  async function handleAddPassword() {
+    const user = auth.currentUser;
+    if (!user || !user.email) return;
+
+    if (newPassword !== confirmPassword) {
+      setPasswordMsg({ type: "error", text: "Passwords do not match." });
+      return;
+    }
+    if (newPassword.length < 6) {
+      setPasswordMsg({ type: "error", text: "Password must be at least 6 characters." });
+      return;
+    }
+
+    setPasswordSaving(true);
+    setPasswordMsg(null);
+
+    try {
+      const credential = EmailAuthProvider.credential(user.email, newPassword);
+      await linkWithCredential(user, credential);
+      setHasPasswordProvider(true);
+      setPasswordMsg({ type: "success", text: "Password added. You can now also log in with your email and password." });
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === "auth/requires-recent-login") {
+        setPasswordMsg({ type: "error", text: "Please sign out and sign back in with Google, then try again." });
+      } else if (code === "auth/credential-already-in-use" || code === "auth/email-already-in-use") {
+        setPasswordMsg({ type: "error", text: "This email is already linked to a password on another account." });
+      } else {
+        setPasswordMsg({ type: "error", text: "Failed to add password. Please try again." });
       }
     } finally {
       setPasswordSaving(false);
@@ -317,68 +357,131 @@ export default function SettingsPage() {
 
       {/* Security section */}
       <SectionCard title="Security">
-        <FormField label="Current Password">
-          <input
-            type="password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            placeholder="Enter current password"
-            style={inputStyle}
-          />
-        </FormField>
-        <FormField label="New Password">
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            placeholder="Min. 6 characters"
-            style={inputStyle}
-          />
-        </FormField>
-        <FormField label="Confirm New Password">
-          <input
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            placeholder="Repeat new password"
-            style={inputStyle}
-          />
-        </FormField>
+        {hasPasswordProvider ? (
+          <>
+            <FormField label="Current Password">
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                style={inputStyle}
+              />
+            </FormField>
+            <FormField label="New Password">
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Min. 6 characters"
+                style={inputStyle}
+              />
+            </FormField>
+            <FormField label="Confirm New Password">
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repeat new password"
+                style={inputStyle}
+              />
+            </FormField>
 
-        {passwordMsg && (
-          <div
-            style={{
-              padding: "10px 14px",
-              borderRadius: 8,
-              marginBottom: 16,
-              fontSize: 13,
-              background: passwordMsg.type === "success" ? "#dcfce7" : "#fee2e2",
-              color: passwordMsg.type === "success" ? "#166534" : "#991b1b",
-            }}
-          >
-            {passwordMsg.text}
-          </div>
+            {passwordMsg && (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  marginBottom: 16,
+                  fontSize: 13,
+                  background: passwordMsg.type === "success" ? "#dcfce7" : "#fee2e2",
+                  color: passwordMsg.type === "success" ? "#166534" : "#991b1b",
+                }}
+              >
+                {passwordMsg.text}
+              </div>
+            )}
+
+            <button
+              onClick={handlePasswordChange}
+              onMouseEnter={() => setPwBtnHover(true)}
+              onMouseLeave={() => setPwBtnHover(false)}
+              disabled={passwordSaving}
+              style={{
+                padding: "10px 24px",
+                background: passwordSaving ? "#6b9fdb" : pwBtnHover ? "#003a99" : "#0052cc",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: 8,
+                fontWeight: 600,
+                cursor: passwordSaving ? "not-allowed" : "pointer",
+                fontSize: 14,
+                transition: "background 0.15s",
+              }}
+            >
+              {passwordSaving ? "Changing..." : "Change password"}
+            </button>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 16px" }}>
+              Your account currently signs in with Google only. Add a password to also be able to log in with your email address.
+            </p>
+            <FormField label="New Password">
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Min. 6 characters"
+                style={inputStyle}
+              />
+            </FormField>
+            <FormField label="Confirm Password">
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repeat password"
+                style={inputStyle}
+              />
+            </FormField>
+
+            {passwordMsg && (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  marginBottom: 16,
+                  fontSize: 13,
+                  background: passwordMsg.type === "success" ? "#dcfce7" : "#fee2e2",
+                  color: passwordMsg.type === "success" ? "#166534" : "#991b1b",
+                }}
+              >
+                {passwordMsg.text}
+              </div>
+            )}
+
+            <button
+              onClick={handleAddPassword}
+              onMouseEnter={() => setPwBtnHover(true)}
+              onMouseLeave={() => setPwBtnHover(false)}
+              disabled={passwordSaving}
+              style={{
+                padding: "10px 24px",
+                background: passwordSaving ? "#6b9fdb" : pwBtnHover ? "#003a99" : "#0052cc",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: 8,
+                fontWeight: 600,
+                cursor: passwordSaving ? "not-allowed" : "pointer",
+                fontSize: 14,
+                transition: "background 0.15s",
+              }}
+            >
+              {passwordSaving ? "Adding..." : "Add password"}
+            </button>
+          </>
         )}
-
-        <button
-          onClick={handlePasswordChange}
-          onMouseEnter={() => setPwBtnHover(true)}
-          onMouseLeave={() => setPwBtnHover(false)}
-          disabled={passwordSaving}
-          style={{
-            padding: "10px 24px",
-            background: passwordSaving ? "#6b9fdb" : pwBtnHover ? "#003a99" : "#0052cc",
-            color: "#ffffff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: 600,
-            cursor: passwordSaving ? "not-allowed" : "pointer",
-            fontSize: 14,
-            transition: "background 0.15s",
-          }}
-        >
-          {passwordSaving ? "Changing..." : "Change password"}
-        </button>
       </SectionCard>
 
       {/* Danger zone */}
