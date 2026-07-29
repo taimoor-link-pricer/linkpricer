@@ -39,7 +39,7 @@ function ExpandedPanel({
           </button>
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }} className="lp-demo-grid">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }} className="lp-demo-grid">
         {visible.map((o, i) => (
           <MarketplaceCard key={i} o={o} bestPrice={offers[0].minPrice} yourPrice={d.yourPrice} currency={currency} onBuy={onBuy} d={d} />
         ))}

@@ -84,7 +84,7 @@ export function MarketplaceCard({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: yourPrice ? "1fr 1fr 1fr" : "1fr 1fr",
+          gridTemplateColumns: yourPrice ? "repeat(3, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))",
           gap: 1, background: "var(--lp-line-2)", border: "1px solid var(--lp-line-2)",
           borderRadius: 10, overflow: "hidden",
         }}

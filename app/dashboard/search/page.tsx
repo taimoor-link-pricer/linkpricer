@@ -267,7 +267,7 @@ function ExpandedPanel({
       </div>
 
       {/* Cards grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
         {offers.map((offer) => (
           <OfferCard
             key={offer.name}
@@ -367,7 +367,7 @@ function OfferCard({
       </div>
 
       {/* Price grid: 2 or 3 columns */}
-      <div style={{ display: "grid", gridTemplateColumns: yourPrice != null ? "1fr 1fr 1fr" : "1fr 1fr", gap: 1, background: C.line2, border: `1px solid ${C.line2}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: yourPrice != null ? "repeat(3, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 1, background: C.line2, border: `1px solid ${C.line2}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ background: "#fff", padding: "9px 10px" }}>
           <div style={{ fontSize: 9.5, fontWeight: 800, color: C.mute, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 2 }}>Marketplace price</div>
           <div style={{ fontSize: 16, fontWeight: 900, color: C.ink, letterSpacing: -0.5 }}>
@@ -1955,7 +1955,7 @@ function SearchPageInner() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domains: domains.slice(0, MAX_DOMAINS) }),
+        body: JSON.stringify({ domains: domains.slice(0, MAX_DOMAINS), niche }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Analysis failed");
