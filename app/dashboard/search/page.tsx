@@ -1955,7 +1955,7 @@ function SearchPageInner() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domains: domains.slice(0, MAX_DOMAINS) }),
+        body: JSON.stringify({ domains: domains.slice(0, MAX_DOMAINS), niche }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Analysis failed");
