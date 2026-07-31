@@ -52,13 +52,19 @@ export async function GET() {
     const planKey = (userRow.stripe_plan as PlanKey) ?? null;
     const planInfo = planKey && PLANS[planKey] ? PLANS[planKey] : null;
 
+    // Manually-granted keys (no Stripe subscription) still get a sensible display —
+    // derive a monthly figure from the key's own daily limit rather than showing "no plan".
+    const isPartnerKey = !planInfo && !!keyRow;
+    const planName = planInfo?.name ?? (isPartnerKey ? "Partner access" : null);
+    const monthlyQuota = planInfo?.monthlyQuota ?? (isPartnerKey ? keyRow.daily_limit * 30 : null);
+
     return NextResponse.json({
       user: {
         email: userRow.email,
         name: [userRow.first_name, userRow.last_name].filter(Boolean).join(" ") || null,
         plan: planKey,
-        planName: planInfo?.name ?? null,
-        monthlyQuota: planInfo?.monthlyQuota ?? null,
+        planName,
+        monthlyQuota,
       },
       apiKey: keyRow
         ? {
@@ -73,7 +79,7 @@ export async function GET() {
         : null,
       usage: {
         used: monthlyUsed,
-        limit: planInfo?.monthlyQuota ?? 0,
+        limit: monthlyQuota ?? 0,
       },
     });
   } catch {

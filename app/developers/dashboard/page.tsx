@@ -416,7 +416,7 @@ function DashboardContent() {
             <div className="db-card-label">Billing</div>
             <div className="db-billing-row">
               <span className="db-billing-label">Status</span>
-              {currentPlanKey
+              {data?.apiKey
                 ? <span className="db-billing-status">Active</span>
                 : <span className="db-billing-none">No subscription</span>}
             </div>
