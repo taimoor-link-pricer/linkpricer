@@ -4,17 +4,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe, PLANS, type PlanKey } from "@/lib/stripe";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
-import { createHash, randomBytes } from "crypto";
+import { generateApiKey } from "@/lib/api-keys";
 import type Stripe from "stripe";
 
 // Must be raw body for signature verification — disable Next.js body parsing
 export const runtime = "nodejs";
-
-function generateApiKey(): { plain: string; hash: string } {
-  const plain = "lp_live_" + randomBytes(20).toString("hex");
-  const hash = createHash("sha256").update(plain).digest("hex");
-  return { plain, hash };
-}
 
 function planLimits(plan: PlanKey) {
   const p = PLANS[plan];
