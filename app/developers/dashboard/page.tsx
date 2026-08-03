@@ -67,7 +67,13 @@ function DashboardContent() {
   const fetchMe = useCallback(async () => {
     setDataLoading(true);
     try {
-      const res = await fetch("/api/developers/me");
+      // Transient 401s occasionally happen on the first request to a cold
+      // serverless instance — retry a couple times before giving up.
+      let res = await fetch("/api/developers/me");
+      for (let attempt = 0; !res.ok && attempt < 2; attempt++) {
+        await new Promise((r) => setTimeout(r, 700));
+        res = await fetch("/api/developers/me");
+      }
       if (res.ok) {
         const d: MeData = await res.json();
         setData(d);
