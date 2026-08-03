@@ -82,7 +82,8 @@ export async function GET() {
         limit: monthlyQuota ?? 0,
       },
     });
-  } catch {
+  } catch (err) {
+    console.error("[/api/developers/me]", err);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 }
