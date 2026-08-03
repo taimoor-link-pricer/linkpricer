@@ -58,7 +58,6 @@ function DashboardContent() {
   const [data, setData] = useState<MeData | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [newKeyModal, setNewKeyModal] = useState(false);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
@@ -71,7 +70,6 @@ function DashboardContent() {
       if (res.ok) {
         const d: MeData = await res.json();
         setData(d);
-        if (d.apiKey?.plainKeyTemp) setNewKeyModal(true);
       }
     } finally {
       setDataLoading(false);
@@ -87,10 +85,7 @@ function DashboardContent() {
       if (res.ok) {
         const d: MeData = await res.json();
         setData(d);
-        if (d.apiKey?.plainKeyTemp) {
-          setNewKeyModal(true);
-          return;
-        }
+        if (d.apiKey) return;
       }
       if (attempts < 8) {
         pollingRef.current = setTimeout(poll, 2500);
@@ -151,12 +146,6 @@ function DashboardContent() {
     await signOut();
     setFirebaseUser(null);
     setData(null);
-  }
-
-  async function dismissNewKeyModal() {
-    setNewKeyModal(false);
-    await fetch("/api/developers/key-revealed", { method: "POST" });
-    setData((prev) => prev ? { ...prev, apiKey: prev.apiKey ? { ...prev.apiKey, plainKeyTemp: null } : null } : prev);
   }
 
   async function openBillingPortal() {
@@ -271,21 +260,6 @@ function DashboardContent() {
         .db-logout { font-size: 13px; color: #9ca3af; cursor: pointer; background: none; border: none; font-family: inherit; }
         .db-logout:hover { color: #ef4444; }
 
-        /* One-time key modal */
-        .key-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
-        .key-modal { background: #fff; border-radius: 16px; padding: 36px; max-width: 540px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
-        .key-modal-icon { width: 48px; height: 48px; background: #dcfce7; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
-        .key-modal-title { font-size: 20px; font-weight: 800; color: #111827; margin: 0 0 6px; }
-        .key-modal-sub { font-size: 14px; color: #6b7280; margin: 0 0 24px; line-height: 1.5; }
-        .key-modal-warn { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #92400e; margin-bottom: 20px; display: flex; gap: 8px; }
-        .key-modal-key-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 9px; padding: 14px 16px; font-family: "JetBrains Mono", monospace; font-size: 13px; color: #111827; word-break: break-all; margin-bottom: 16px; }
-        .key-modal-actions { display: flex; gap: 12px; }
-        .key-modal-copy { flex: 1; padding: 12px; background: #0052cc; color: #fff; border: none; border-radius: 9px; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
-        .key-modal-copy:hover { background: #003a99; }
-        .key-modal-copy.copied { background: #16a34a; }
-        .key-modal-done { padding: 12px 20px; background: #fff; color: #374151; border: 1px solid #e5e7eb; border-radius: 9px; font-weight: 600; font-size: 14px; cursor: pointer; }
-        .key-modal-done:hover { background: #f3f4f6; }
-
         @media (max-width: 768px) {
           .db-grid { grid-template-columns: 1fr; }
           .db-plans-grid { grid-template-columns: 1fr; }
@@ -294,41 +268,8 @@ function DashboardContent() {
         }
       `}</style>
 
-      {/* One-time key reveal modal */}
-      {newKeyModal && data?.apiKey?.plainKeyTemp && (
-        <div className="key-modal-overlay">
-          <div className="key-modal">
-            <div className="key-modal-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            </div>
-            <div className="key-modal-title">Your API key is ready</div>
-            <div className="key-modal-sub">Copy this key and store it safely. For security reasons, it will only be shown once.</div>
-            <div className="key-modal-warn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{flexShrink:0,marginTop:1}}>
-                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-              Never share this key or expose it in client-side code. Pass it as the <strong>x-api-key</strong> header in server-to-server requests only.
-            </div>
-            <div className="key-modal-key-box">{data.apiKey.plainKeyTemp}</div>
-            <div className="key-modal-actions">
-              <button
-                className={`key-modal-copy${copied ? " copied" : ""}`}
-                onClick={() => copyKey(data.apiKey!.plainKeyTemp!)}
-              >
-                {copied ? "Copied!" : "Copy API key"}
-              </button>
-              <button className="key-modal-done" onClick={dismissNewKeyModal}>
-                I've saved it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="db-wrap">
-        {sessionId && !newKeyModal && (
+        {sessionId && (
           <div className="db-success-banner">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <polyline points="20 6 9 17 4 12"/>
@@ -357,17 +298,33 @@ function DashboardContent() {
           <div className="db-card db-card-full">
             <div className="db-card-label">Your API Key</div>
             {data?.apiKey ? (
-              <>
-                <div className="db-key-row">
-                  <span className="db-key-text">{maskedKey}</span>
-                  <span style={{ fontSize: 12, color: "#9ca3af", flexShrink: 0 }}>Shown once on activation</span>
-                </div>
-                <div className="db-key-warn">
-                  Your key was displayed once when your subscription activated. Pass it as{" "}
-                  <code style={{ background: "#f3f4f6", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>x-api-key</code>{" "}
-                  in every server-to-server request. If you lost it, contact support to regenerate.
-                </div>
-              </>
+              data.apiKey.plainKeyTemp ? (
+                <>
+                  <div className="db-key-row">
+                    <span className="db-key-text">{data.apiKey.plainKeyTemp}</span>
+                    <button
+                      className={`db-key-btn${copied ? " success" : ""}`}
+                      onClick={() => copyKey(data.apiKey!.plainKeyTemp!)}
+                    >
+                      {copied ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="db-key-warn">
+                    Never share this key or expose it in client-side code. Pass it as{" "}
+                    <code style={{ background: "#f3f4f6", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>x-api-key</code>{" "}
+                    in every server-to-server request.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="db-key-row">
+                    <span className="db-key-text">{maskedKey}</span>
+                  </div>
+                  <div className="db-key-warn">
+                    This key was issued before we started keeping it visible here. Contact support to regenerate it.
+                  </div>
+                </>
+              )
             ) : (
               <div className="db-no-key">
                 <p>You don't have an API key yet. Subscribe to a plan to get one.</p>
