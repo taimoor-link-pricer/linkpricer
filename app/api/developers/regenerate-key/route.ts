@@ -1,16 +1,15 @@
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { adminAuth } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
-import { cookies } from "next/headers";
 import { generateApiKey } from "@/lib/api-keys";
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const session = cookieStore.get("session")?.value;
+    // Read the cookie off the request directly — see /api/developers/me for why.
+    const session = req.cookies.get("session")?.value;
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const decoded = await adminAuth.verifySessionCookie(session, true);

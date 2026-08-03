@@ -1,16 +1,18 @@
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { adminAuth } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
-import { cookies } from "next/headers";
 import { PLANS, type PlanKey } from "@/lib/stripe";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const session = cookieStore.get("session")?.value;
+    // Read the cookie directly off the request instead of next/headers'
+    // cookies() — that async helper has been intermittently failing to see
+    // a cookie that's demonstrably present on the request (0 external calls,
+    // no thrown error, just missing). req.cookies is a plain sync read.
+    const session = req.cookies.get("session")?.value;
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const decoded = await adminAuth.verifySessionCookie(session, true);
