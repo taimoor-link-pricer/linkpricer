@@ -67,11 +67,14 @@ function DashboardContent() {
   const fetchMe = useCallback(async () => {
     setDataLoading(true);
     try {
-      // Transient 401s occasionally happen on the first request to a cold
-      // serverless instance — retry a couple times before giving up.
+      // Transient 401s happen in clusters (same warm serverless instance
+      // failing back-to-back), so retries need real spacing to land on a
+      // different instance rather than hitting the same cluster.
+      const delays = [1500, 3000, 5000];
       let res = await fetch("/api/developers/me");
-      for (let attempt = 0; !res.ok && attempt < 2; attempt++) {
-        await new Promise((r) => setTimeout(r, 700));
+      for (const delay of delays) {
+        if (res.ok) break;
+        await new Promise((r) => setTimeout(r, delay));
         res = await fetch("/api/developers/me");
       }
       if (res.ok) {
