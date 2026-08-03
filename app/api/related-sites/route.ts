@@ -44,13 +44,20 @@ async function getUserId(): Promise<string | null> {
 async function getQuota(userId: string) {
   const weekStart = startOfWeekUTC();
   const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const rows = await db.execute(sql`
-    SELECT COUNT(*)::int AS n FROM user_activity_events
-    WHERE user_id = ${userId} AND event_type = ${EVENT_TYPE}
-      AND timestamp >= ${weekStart.toISOString()} AND timestamp < ${weekEnd.toISOString()}
-  `);
-  const used = Number(rows.rows[0]?.n ?? 0);
-  return { used, remaining: Math.max(0, WEEKLY_LIMIT - used), limit: WEEKLY_LIMIT, resetsAt: weekEnd.toISOString() };
+  const [usedRows, overrideRows] = await Promise.all([
+    db.execute(sql`
+      SELECT COUNT(*)::int AS n FROM user_activity_events
+      WHERE user_id = ${userId} AND event_type = ${EVENT_TYPE}
+        AND timestamp >= ${weekStart.toISOString()} AND timestamp < ${weekEnd.toISOString()}
+    `),
+    db.execute(sql`
+      SELECT related_sites_quota_override AS n FROM users WHERE id = ${userId}
+    `),
+  ]);
+  const used = Number(usedRows.rows[0]?.n ?? 0);
+  const overrideRaw = overrideRows.rows[0]?.n;
+  const limit = overrideRaw != null ? Number(overrideRaw) : WEEKLY_LIMIT;
+  return { used, remaining: Math.max(0, limit - used), limit, resetsAt: weekEnd.toISOString() };
 }
 
 export async function GET() {
