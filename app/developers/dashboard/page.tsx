@@ -61,6 +61,7 @@ function DashboardContent() {
   const [usageRefreshing, setUsageRefreshing] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchMe = useCallback(async () => {
@@ -146,6 +147,22 @@ function DashboardContent() {
     await signOut();
     setFirebaseUser(null);
     setData(null);
+  }
+
+  async function regenerateKey() {
+    if (!window.confirm("This immediately invalidates your current key — anything using it will stop working. Continue?")) return;
+    setRegenerating(true);
+    try {
+      const res = await fetch("/api/developers/regenerate-key", { method: "POST" });
+      if (res.ok) {
+        await fetchMe();
+      } else {
+        const { error } = await res.json();
+        alert(error ?? "Could not regenerate key.");
+      }
+    } finally {
+      setRegenerating(false);
+    }
   }
 
   async function openBillingPortal() {
@@ -308,6 +325,9 @@ function DashboardContent() {
                     >
                       {copied ? "Copied!" : "Copy"}
                     </button>
+                    <button className="db-key-btn" onClick={regenerateKey} disabled={regenerating}>
+                      {regenerating ? "Regenerating…" : "Regenerate"}
+                    </button>
                   </div>
                   <div className="db-key-warn">
                     Never share this key or expose it in client-side code. Pass it as{" "}
@@ -319,9 +339,12 @@ function DashboardContent() {
                 <>
                   <div className="db-key-row">
                     <span className="db-key-text">{maskedKey}</span>
+                    <button className="db-key-btn" onClick={regenerateKey} disabled={regenerating}>
+                      {regenerating ? "Regenerating…" : "Regenerate key"}
+                    </button>
                   </div>
                   <div className="db-key-warn">
-                    This key was issued before we started keeping it visible here. Contact support to regenerate it.
+                    This key was issued before we started keeping it visible here. Regenerate it to get a copyable key.
                   </div>
                 </>
               )
