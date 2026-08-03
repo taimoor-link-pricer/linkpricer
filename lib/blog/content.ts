@@ -54,6 +54,51 @@ export function sanitizePostBody(html: string, contentType: string): string {
     .replace(/<\/table>/g, "</table></div>");
 }
 
+export interface TocHeading {
+  id: string;
+  text: string;
+  level: 2 | 3;
+}
+
+function slugifyHeadingText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+/**
+ * Runs after sanitizePostBody, on already-sanitized HTML: finds every h2/h3,
+ * strips its inner tags to get plain text, and stamps on a unique slug id
+ * (de-duped against repeat headings like "Conclusion"). Returns the patched
+ * HTML alongside the flat heading list the TableOfContents component walks
+ * to render real #anchor links — those are what let Google surface jump-to
+ * links for the article in search results.
+ */
+export function injectHeadingIds(html: string): { html: string; headings: TocHeading[] } {
+  const headings: TocHeading[] = [];
+  const seen = new Map<string, number>();
+
+  const patched = html.replace(/<(h[23])((?:\s[^>]*)?)>([\s\S]*?)<\/\1>/gi, (match, tag: string, attrs: string, inner: string) => {
+    const level = (tag.toLowerCase() === "h2" ? 2 : 3) as 2 | 3;
+    const text = inner.replace(/<[^>]*>/g, "").trim();
+    if (!text) return match;
+
+    const base = slugifyHeadingText(text) || `section-${headings.length + 1}`;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    const id = count === 0 ? base : `${base}-${count}`;
+    headings.push({ id, text, level });
+
+    const hasId = /\sid=/.test(attrs);
+    const newAttrs = hasId ? attrs.replace(/\sid="[^"]*"/, ` id="${id}"`) : `${attrs} id="${id}"`;
+    return `<${tag}${newAttrs}>${inner}</${tag}>`;
+  });
+
+  return { html: patched, headings };
+}
+
 export function computeReadingTime(rawContent: string): string {
   const wordsPerMinute = 200;
   const stripped = rawContent.replace(/<[^>]*>/g, " ");
