@@ -831,32 +831,42 @@ function ResultsTable({
   const rows = buildRows();
 
   function handleDownloadCSV() {
-    // Column order mirrors the on-screen table left-to-right: Domain, then
-    // Best Price (shown in the Actions column's "Buy $X" button) and
-    // Grade/Score (shown combined in the Value column), then Country, DR,
-    // Traffic, Keywords, Category — same order as the <th> row below. Row
-    // order already matches by construction: both this and the table read
-    // from the same `rows` (buildRows()) computed above, which already
-    // reflects the current column sort.
+    // Matches the old app's export format exactly (client/src/components/DomainsTable.tsx
+    // handleExportCSV) — same column set/order and filename pattern, so anyone who has
+    // scripts/spreadsheets built against the old export doesn't need to change anything.
     const escape = (v: string | number | null | undefined) => {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const header = "Domain,Best Price,Grade,Score,Country,DR,Traffic,Keywords,Category\n";
+    const header = "Domain,Category,DR,Traffic,Keywords,Country,Lowest Price,Cheapest Marketplace,Marketplace Count,Value Grade,Value Score\n";
     const lines = rows
-      .map((r) =>
-        r.kind === "found"
-          ? [r.row.domain, r.row.bestPrice, r.row.grade, r.row.score, r.row.country, r.row.dr, r.row.traffic, r.row.keywords, r.row.category]
-              .map(escape)
-              .join(",")
-          : [r.domain, "", "", "", "", "", "", "", "not found"].map(escape).join(",")
-      )
+      .map((r) => {
+        if (r.kind === "notfound") {
+          return [r.domain, "", "", "", "", "Not Found", "", "", "0", "", ""].map(escape).join(",");
+        }
+        const cheapest = [...r.row.offers].sort((a, b) => a.minPrice - b.minPrice)[0];
+        return [
+          r.row.domain,
+          r.row.category || "-",
+          r.row.dr ?? "-",
+          r.row.traffic ?? "-",
+          r.row.keywords ?? "-",
+          r.row.country || "-",
+          cheapest ? cheapest.minPrice : r.row.bestPrice ?? "-",
+          cheapest ? cheapest.name : "-",
+          r.row.offers.length,
+          r.row.grade || "-",
+          r.row.score ?? "-",
+        ]
+          .map(escape)
+          .join(",");
+      })
       .join("\n");
-    const blob = new Blob([header + lines], { type: "text/csv" });
+    const blob = new Blob([header + lines], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "linkpricer-results.csv";
+    a.download = `domain-analysis-${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }

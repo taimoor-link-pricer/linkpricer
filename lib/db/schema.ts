@@ -815,6 +815,9 @@ export const users = pgTable("users", {
 	stripeCustomerId: varchar("stripe_customer_id"),
 	stripeSubscriptionId: varchar("stripe_subscription_id"),
 	stripePlan: varchar("stripe_plan"),
+	// NULL = use the global WEEKLY_LIMIT default (see app/api/related-sites/route.ts);
+	// set to give this specific user a different weekly Related Sites search quota.
+	relatedSitesQuotaOverride: integer("related_sites_quota_override"),
 }, (table) => [
 	foreignKey({
 			columns: [table.companyId],

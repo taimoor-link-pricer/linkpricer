@@ -308,7 +308,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       )
       SELECT * FROM aggregated
       WHERE 1 = 1
-        ${sql.join(outerFilterClauses, sql``)}
+        ${sql.join(outerFilterClauses, sql` `)}
     `),
     opts.hideLinked && opts.ownSite?.trim()
       ? getExcludedDomains(opts.ownSite.trim())

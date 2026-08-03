@@ -112,7 +112,11 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
           {showAll ? "Show top 3" : `Show all (${sortedOffers.length})`}
         </button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+      {/* max 320px per card — plain 1fr stretches to fill the row when there are
+      only 3 cards in a wide container (e.g. related-sites' table, which sets
+      minWidth:1180 for its extra Match column), making each card much wider
+      than intended even though the same grid looks fine on narrower tables. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 320px))", gap: 14 }}>
         {offers.map((offer) => (
           <OfferCard
             key={offer.name}

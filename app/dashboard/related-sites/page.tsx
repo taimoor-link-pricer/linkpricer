@@ -12,7 +12,7 @@
 // semantic/embeddings — see the route file for why) so match quality won't
 // match the reference screenshots exactly; that's a disclosed, known gap
 // pending an embeddings API key decision, not something faked here.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
@@ -104,52 +104,68 @@ function RSToggle({ checked, disabled, onChange }: { checked: boolean; disabled:
 // makes each input's own track transparent/click-through so only its thumb is
 // interactive; the visible track + filled segment are drawn separately below.
 function DualRangeSlider({
-  label, bounds, valueMin, valueMax, onChange, disabled, formatValue, title,
+  label, bounds, valueMin, valueMax, onChange, formatValue, title,
 }: {
   label: string;
+  // `bounds` only sizes the drag range of the slider thumbs — it's a fixed,
+  // generous default (see RS_TRAFFIC_BOUNDS etc. below), not something
+  // derived from search results. The number inputs beside the slider accept
+  // any value, including ones outside `bounds`, so the slider never caps
+  // what the user can actually search for.
   bounds: { min: number; max: number };
   valueMin: number;
   valueMax: number;
   onChange: (min: number, max: number) => void;
-  disabled: boolean;
   formatValue: (v: number) => string;
   title: string;
 }) {
   const span = Math.max(1, bounds.max - bounds.min);
-  const minPct = ((valueMin - bounds.min) / span) * 100;
-  const maxPct = ((valueMax - bounds.min) / span) * 100;
+  const clampPct = (v: number) => Math.min(100, Math.max(0, ((v - bounds.min) / span) * 100));
+  const minPct = clampPct(valueMin);
+  const maxPct = clampPct(valueMax);
   return (
-    <div style={{ flex: "1 1 180px", minWidth: 180 }}>
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: C.mute, letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
-        <span>{label}</span>
-        <span style={{ color: C.ink3, textTransform: "none", fontWeight: 600 }}>
-          {bounds.max > bounds.min ? `${formatValue(valueMin)} – ${formatValue(valueMax)}` : ""}
-        </span>
+    <div style={{ flex: "1 1 220px", minWidth: 220 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: C.mute, letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 6 }}>
+        {label}
       </div>
-      <div style={{ position: "relative", height: 20 }} title={title}>
+      <div style={{ position: "relative", height: 20, marginBottom: 8 }} title={title}>
         <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 4, borderRadius: 2, background: C.line }} />
-        <div style={{ position: "absolute", top: 8, height: 4, borderRadius: 2, background: disabled ? C.line : C.accent, left: `${minPct}%`, right: `${100 - maxPct}%` }} />
+        <div style={{ position: "absolute", top: 8, height: 4, borderRadius: 2, background: C.accent, left: `${minPct}%`, right: `${100 - maxPct}%` }} />
         <input
           type="range"
           className="lp-range-thumb"
           min={bounds.min}
           max={bounds.max}
-          value={valueMin}
-          disabled={disabled}
+          value={Math.min(Math.max(valueMin, bounds.min), bounds.max)}
           onChange={(e) => onChange(Math.min(Number(e.target.value), valueMax), valueMax)}
-          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: disabled ? "not-allowed" : "pointer" }}
+          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: "pointer" }}
         />
         <input
           type="range"
           className="lp-range-thumb"
           min={bounds.min}
           max={bounds.max}
-          value={valueMax}
-          disabled={disabled}
+          value={Math.min(Math.max(valueMax, bounds.min), bounds.max)}
           onChange={(e) => onChange(valueMin, Math.max(Number(e.target.value), valueMin))}
-          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: disabled ? "not-allowed" : "pointer" }}
+          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: "pointer" }}
         />
       </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input
+          type="number"
+          value={valueMin}
+          onChange={(e) => onChange(Number(e.target.value), valueMax)}
+          style={{ width: 0, flex: 1, minWidth: 0, padding: "5px 7px", borderRadius: 6, border: `1px solid ${C.line}`, fontSize: 12, color: C.ink2 }}
+        />
+        <span style={{ color: C.mute2, fontSize: 12 }}>–</span>
+        <input
+          type="number"
+          value={valueMax}
+          onChange={(e) => onChange(valueMin, Number(e.target.value))}
+          style={{ width: 0, flex: 1, minWidth: 0, padding: "5px 7px", borderRadius: 6, border: `1px solid ${C.line}`, fontSize: 12, color: C.ink2 }}
+        />
+      </div>
+      <div style={{ marginTop: 3, color: C.ink3, fontSize: 11, fontWeight: 600 }}>{formatValue(valueMin)} – {formatValue(valueMax)}</div>
     </div>
   );
 }
@@ -473,63 +489,49 @@ export default function RelatedSitesPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
   const [results, setResults] = useState<RelatedSite[]>([]);
-  // Traffic used to be a fixed-bucket dropdown (10K+/100K+/...) applied as a
-  // SQL pre-filter, so it silently zeroed out results for any query whose
-  // matches don't clear that bucket (median catalog traffic is ~100 —
-  // "10K+" alone excludes over 96% of all domains). Instead this is now a
-  // real min-max range, bounded to the *current* result set's actual
-  // min/max traffic (so it can never filter everything out) and filtered
-  // client-side.
-  const [trafficMin, setTrafficMin] = useState(0);
-  const [trafficMax, setTrafficMax] = useState(0);
-  const trafficBounds = useMemo(() => {
-    if (results.length === 0) return { min: 0, max: 0 };
-    const vals = results.map((r) => r.traffic || 0);
-    return { min: Math.min(...vals), max: Math.max(...vals) };
-  }, [results]);
-  // Same fix, same reason as traffic: "DR 30+/50+/70+/90+" buckets were
-  // hardcoded and applied server-side, so a query whose matches all sit
-  // under the lowest bucket returned nothing. Bounded to the current
-  // result set's actual min/max DR instead, filtered client-side.
-  const [drMin, setDrMin] = useState(0);
-  const [drMax, setDrMax] = useState(0);
-  const drBounds = useMemo(() => {
-    if (results.length === 0) return { min: 0, max: 0 };
-    const vals = results.map((r) => r.dr || 0);
-    return { min: Math.min(...vals), max: Math.max(...vals) };
-  }, [results]);
-  // Same fix again: "$300-$700"-style buckets were fixed dollar amounts
-  // applied server-side against `best_price`, so a query whose matches all
-  // sit outside that bucket returned nothing. NOTE for whoever picks up
-  // ticket #5 (splitting guest-post vs. link-insertion pricing): this
-  // filters on `bestPrice` — currently the single, undifferentiated
-  // marketplace/supplier price (see catalog-search.ts's `best_price`
-  // subquery, which only reads the base min_price columns, not
-  // link_insertion_min_price) — once that split lands, this will need a
-  // second range or an explicit toggle for which price type it targets.
-  const [priceMin, setPriceMin] = useState(0);
-  const [priceMax, setPriceMax] = useState(0);
-  const priceBounds = useMemo(() => {
-    const vals = results.map((r) => r.bestPrice).filter((p): p is number => p != null);
-    if (vals.length === 0) return { min: 0, max: 0 };
-    return { min: Math.min(...vals), max: Math.max(...vals) };
-  }, [results]);
-  const filteredResults = useMemo(
-    () =>
-      results.filter((r) => {
-        const traffic = r.traffic || 0;
-        const dr = r.dr || 0;
-        const trafficOk = (trafficMin <= trafficBounds.min || traffic >= trafficMin) && (trafficMax >= trafficBounds.max || traffic <= trafficMax);
-        const drOk = (drMin <= drBounds.min || dr >= drMin) && (drMax >= drBounds.max || dr <= drMax);
-        // A price filter narrower than the full bounds excludes no-price
-        // rows too — matches the old server-side behavior, where
-        // `best_price >= x` on a NULL price is never true in SQL.
-        const priceFilterActive = priceMin > priceBounds.min || priceMax < priceBounds.max;
-        const priceOk = !priceFilterActive || (r.bestPrice != null && r.bestPrice >= priceMin && r.bestPrice <= priceMax);
-        return trafficOk && drOk && priceOk;
-      }),
-    [results, trafficMin, trafficMax, trafficBounds.min, trafficBounds.max, drMin, drMax, drBounds.min, drBounds.max, priceMin, priceMax, priceBounds.min, priceBounds.max]
-  );
+  // Traffic/DR/price used to be fixed-bucket dropdowns (10K+/100K+/...,
+  // DR 30+/50+/70+/90+, $300-$700) applied as SQL pre-filters, so any query
+  // whose matches didn't clear that bucket silently returned nothing.
+  // They're real min-max ranges now — search options the customer sets
+  // however they like (drag the slider or just type a number), not
+  // something clamped to whatever a prior search happened to return. The
+  // slider's drag range (RS_*_BOUNDS below) is just a sane default width;
+  // the number inputs beside it accept any value, including ones outside
+  // that range.
+  const RS_TRAFFIC_BOUNDS = { min: 0, max: 5_000_000 };
+  const RS_DR_BOUNDS = { min: 0, max: 100 };
+  const RS_PRICE_BOUNDS = { min: 0, max: 10_000 };
+  const [trafficMin, setTrafficMin] = useState(RS_TRAFFIC_BOUNDS.min);
+  const [trafficMax, setTrafficMax] = useState(RS_TRAFFIC_BOUNDS.max);
+  const trafficBounds = RS_TRAFFIC_BOUNDS;
+  const [drMin, setDrMin] = useState(RS_DR_BOUNDS.min);
+  const [drMax, setDrMax] = useState(RS_DR_BOUNDS.max);
+  const drBounds = RS_DR_BOUNDS;
+  // NOTE for whoever picks up ticket #5 (splitting guest-post vs.
+  // link-insertion pricing): this filters on `bestPrice` — currently the
+  // single, undifferentiated marketplace/supplier price (see
+  // catalog-search.ts's `best_price` subquery, which only reads the base
+  // min_price columns, not link_insertion_min_price) — once that split
+  // lands, this will need a second range or an explicit toggle for which
+  // price type it targets.
+  const [priceMin, setPriceMin] = useState(RS_PRICE_BOUNDS.min);
+  const [priceMax, setPriceMax] = useState(RS_PRICE_BOUNDS.max);
+  const priceBounds = RS_PRICE_BOUNDS;
+  // Whether the user has actually dragged a slider — deliberately NOT
+  // derived from comparing e.g. drMin > drBounds.min: once a filter is
+  // applied server-side, `results` (and therefore drBounds, which is a
+  // useMemo off `results`) already sits inside that filter, so the values
+  // trivially equal their own bounds again on the very next render and a
+  // bounds-comparison "is this active" check would silently go blind after
+  // one search. These flags are the actual source of truth for what to send
+  // as search options on the next request; they're cleared only by Clear.
+  const [trafficFilterActive, setTrafficFilterActive] = useState(false);
+  const [drFilterActive, setDrFilterActive] = useState(false);
+  const [priceFilterActive, setPriceFilterActive] = useState(false);
+  // Traffic/DR/price are now sent to the server as real SQL filters (see
+  // runSearch) instead of trimmed client-side after the fact, so `results`
+  // already reflects them by the time it lands here.
+  const filteredResults = results;
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [lowRelevance, setLowRelevance] = useState(false);
@@ -545,9 +547,9 @@ export default function RelatedSitesPage() {
   const hasSite = !!ownSite.trim();
   const activeFilterCount =
     Object.entries(filters).filter(([, v]) => v !== "any").length +
-    (trafficMin > trafficBounds.min || trafficMax < trafficBounds.max ? 1 : 0) +
-    (drMin > drBounds.min || drMax < drBounds.max ? 1 : 0) +
-    (priceMin > priceBounds.min || priceMax < priceBounds.max ? 1 : 0);
+    (trafficFilterActive ? 1 : 0) +
+    (drFilterActive ? 1 : 0) +
+    (priceFilterActive ? 1 : 0);
 
   useEffect(() => {
     hydrateRates();
@@ -558,19 +560,48 @@ export default function RelatedSitesPage() {
       .catch(() => {});
   }, []);
 
-  async function runSearch(overrides?: { sortBy?: SortableColumn; sortDir?: SortDir; countAsSearch?: boolean }) {
+  async function runSearch(overrides?: {
+    sortBy?: SortableColumn; sortDir?: SortDir; countAsSearch?: boolean;
+    trafficMin?: number; trafficMax?: number; drMin?: number; drMax?: number; priceMin?: number; priceMax?: number;
+    filters?: typeof RS_DEFAULT_FILTERS;
+    trafficFilterActive?: boolean; drFilterActive?: boolean; priceFilterActive?: boolean;
+  }) {
     if (!query.trim() || searching) return;
     const useSortBy = overrides?.sortBy ?? sortBy;
     const useSortDir = overrides?.sortDir ?? sortDir;
     const countAsSearch = overrides?.countAsSearch ?? true;
+    // Overrides let callers (e.g. clearFilters) pass the post-clear values
+    // explicitly rather than reading state that a just-fired setState hasn't
+    // committed yet.
+    const useFilters = overrides?.filters ?? filters;
+    const useTrafficMin = overrides?.trafficMin ?? trafficMin;
+    const useTrafficMax = overrides?.trafficMax ?? trafficMax;
+    const useDrMin = overrides?.drMin ?? drMin;
+    const useDrMax = overrides?.drMax ?? drMax;
+    const usePriceMin = overrides?.priceMin ?? priceMin;
+    const usePriceMax = overrides?.priceMax ?? priceMax;
+    const useTrafficFilterActive = overrides?.trafficFilterActive ?? trafficFilterActive;
+    const useDrFilterActive = overrides?.drFilterActive ?? drFilterActive;
+    const usePriceFilterActive = overrides?.priceFilterActive ?? priceFilterActive;
     setSearching(true);
     setError(null);
     try {
+      // These become real SQL WHERE-clause filters in catalog-search.ts, not
+      // a post-fetch trim — so the result set (and quota-limited page size)
+      // actually reflects them, instead of the top-N match results getting
+      // filtered down further client-side. Gated on the explicit *FilterActive
+      // flags (not a bounds comparison — see their declaration) so a filter
+      // keeps being sent on every subsequent search/sort/re-search until the
+      // user hits Clear, and a fresh, never-touched slider never sends a
+      // spurious constraint that could zero out a differently-scoped query.
       const parsedFilters: Record<string, string | number> = {};
-      if (filters.country !== "any") parsedFilters.country = filters.country;
-      if (filters.language !== "any") parsedFilters.language = filters.language;
-      if (filters.niche !== "any") parsedFilters.category = filters.niche;
-      if (filters.grade !== "any") parsedFilters.grade = filters.grade;
+      if (useFilters.country !== "any") parsedFilters.country = useFilters.country;
+      if (useFilters.language !== "any") parsedFilters.language = useFilters.language;
+      if (useFilters.niche !== "any") parsedFilters.category = useFilters.niche;
+      if (useFilters.grade !== "any") parsedFilters.grade = useFilters.grade;
+      if (useTrafficFilterActive) parsedFilters.minTraffic = useTrafficMin;
+      if (useDrFilterActive) { parsedFilters.minDr = useDrMin; parsedFilters.maxDr = useDrMax; }
+      if (usePriceFilterActive) { parsedFilters.minPrice = usePriceMin; parsedFilters.maxPrice = usePriceMax; }
 
       const res = await fetch("/api/related-sites", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -593,19 +624,10 @@ export default function RelatedSitesPage() {
         return;
       }
       setResults(data.results);
-      // Reset the traffic/DR ranges to this query's actual min-max — each
-      // search has a different result set, so a range carried over from the
-      // previous query could zero out the new one (or leave it needlessly
-      // narrower than the full new result set).
-      const newTrafficVals = (data.results as RelatedSite[]).map((r) => r.traffic || 0);
-      setTrafficMin(newTrafficVals.length ? Math.min(...newTrafficVals) : 0);
-      setTrafficMax(newTrafficVals.length ? Math.max(...newTrafficVals) : 0);
-      const newDrVals = (data.results as RelatedSite[]).map((r) => r.dr || 0);
-      setDrMin(newDrVals.length ? Math.min(...newDrVals) : 0);
-      setDrMax(newDrVals.length ? Math.max(...newDrVals) : 0);
-      const newPriceVals = (data.results as RelatedSite[]).map((r) => r.bestPrice).filter((p): p is number => p != null);
-      setPriceMin(newPriceVals.length ? Math.min(...newPriceVals) : 0);
-      setPriceMax(newPriceVals.length ? Math.max(...newPriceVals) : 0);
+      // Traffic/DR/price are search options the customer sets directly (drag
+      // or type), not something the app should silently readjust based on
+      // what a search happened to return — so, unlike the old behavior, they
+      // are NOT reset here. They only change via user input or Clear.
       setLowRelevance(data.lowRelevance ?? false);
       setDegradedAhrefs(data.degradedAhrefs ?? false);
       setQuota({ used: data.used, remaining: data.remaining, limit: data.limit, resetsAt: data.resetsAt });
@@ -646,18 +668,35 @@ export default function RelatedSitesPage() {
 
   function exportCsv() {
     if (filteredResults.length === 0) return;
-    const headers = ["Domain", "Match %", "Country", "Language", "Category", "DR", "Traffic", "Keywords", "Ref Domains", "Grade", "Score", "Best Price"];
+    // Matches the old app's export format exactly (client/src/components/
+    // RelatedWebsites.tsx handleExportCSV) — same column set/order and
+    // filename pattern.
+    const headers = ["Domain", "Category", "Match %", "DR", "Traffic", "Keywords", "Country", "Lowest Price", "Cheapest Marketplace", "Marketplace Count"];
     const escape = (v: string | number | null) => {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = filteredResults.map((r) => [r.domain, r.matchPct, r.country, r.lang, r.category, r.dr, r.traffic, r.keywords, r.refDomains, r.grade, r.score, r.bestPrice].map(escape).join(","));
+    const rows = filteredResults.map((r) => {
+      const cheapest = [...r.offers].sort((a, b) => a.minPrice - b.minPrice)[0];
+      return [
+        r.domain,
+        r.category || "",
+        `${r.matchPct}%`,
+        r.dr,
+        r.traffic,
+        r.keywords,
+        r.country || "",
+        cheapest ? cheapest.minPrice : r.bestPrice,
+        cheapest ? cheapest.name : "",
+        r.offers.length,
+      ].map(escape).join(",");
+    });
     const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `related-sites-${query.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40) || "export"}.csv`;
+    a.download = `related-websites-${query.trim().replace(/[^a-z0-9]/gi, "-")}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -672,10 +711,23 @@ export default function RelatedSitesPage() {
     setDrMax(drBounds.max);
     setPriceMin(priceBounds.min);
     setPriceMax(priceBounds.max);
+    setTrafficFilterActive(false);
+    setDrFilterActive(false);
+    setPriceFilterActive(false);
+    // Filters are now applied server-side (see runSearch), so clearing them
+    // has to re-run the search to actually get the unfiltered set back —
+    // explicit overrides sidestep the stale-closure trap of reading state
+    // set moments ago in this same handler.
+    if (hasSearched && query.trim()) {
+      runSearch({
+        filters: RS_DEFAULT_FILTERS,
+        trafficFilterActive: false, drFilterActive: false, priceFilterActive: false,
+      });
+    }
   }
-  function handleTrafficChange(min: number, max: number) { setTrafficMin(min); setTrafficMax(max); setPage(1); }
-  function handleDrChange(min: number, max: number) { setDrMin(min); setDrMax(max); setPage(1); }
-  function handlePriceChange(min: number, max: number) { setPriceMin(min); setPriceMax(max); setPage(1); }
+  function handleTrafficChange(min: number, max: number) { setTrafficMin(min); setTrafficMax(max); setTrafficFilterActive(true); setPage(1); }
+  function handleDrChange(min: number, max: number) { setDrMin(min); setDrMax(max); setDrFilterActive(true); setPage(1); }
+  function handlePriceChange(min: number, max: number) { setPriceMin(min); setPriceMax(max); setPriceFilterActive(true); setPage(1); }
   function toggleRow(domain: string) { setExpanded((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
   function toggleFav(row: RelatedSite) {
     const wasFav = favorites.has(row.domain);
@@ -817,47 +869,32 @@ export default function RelatedSitesPage() {
           <DualRangeSlider
             label="Traffic"
             bounds={trafficBounds}
-            valueMin={Math.min(Math.max(trafficMin, trafficBounds.min), trafficBounds.max)}
-            valueMax={Math.min(Math.max(trafficMax, trafficBounds.min), trafficBounds.max)}
+            valueMin={trafficMin}
+            valueMax={trafficMax}
             onChange={handleTrafficChange}
-            disabled={results.length === 0 || trafficBounds.max <= trafficBounds.min}
             formatValue={fmtNum}
-            title={
-              results.length === 0
-                ? "Run a search to enable this filter"
-                : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: ${fmtNum(trafficBounds.min)} – ${fmtNum(trafficBounds.max)} monthly organic traffic`
-            }
+            title="Minimum monthly organic traffic — drag or type an exact value"
           />
           <DualRangeSlider
             label="DR range"
             bounds={drBounds}
-            valueMin={Math.min(Math.max(drMin, drBounds.min), drBounds.max)}
-            valueMax={Math.min(Math.max(drMax, drBounds.min), drBounds.max)}
+            valueMin={drMin}
+            valueMax={drMax}
             onChange={handleDrChange}
-            disabled={results.length === 0 || drBounds.max <= drBounds.min}
             formatValue={(v) => String(v)}
-            title={
-              results.length === 0
-                ? "Run a search to enable this filter"
-                : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: DR ${drBounds.min} – ${drBounds.max}`
-            }
+            title="Domain Rating range — drag or type an exact value"
           />
           <DualRangeSlider
             label="Price range"
             bounds={priceBounds}
-            valueMin={Math.min(Math.max(priceMin, priceBounds.min), priceBounds.max)}
-            valueMax={Math.min(Math.max(priceMax, priceBounds.min), priceBounds.max)}
+            valueMin={priceMin}
+            valueMax={priceMax}
             onChange={handlePriceChange}
-            disabled={results.length === 0 || priceBounds.max <= priceBounds.min}
+            // Raw marketplace/supplier price (USD), same number the old
+            // fixed buckets filtered on — not the fee-inclusive "Buy $"
+            // price shown in the Actions column.
             formatValue={(v) => `$${Math.round(v).toLocaleString()}`}
-            title={
-              results.length === 0
-                ? "Run a search to enable this filter"
-                // Raw marketplace/supplier price (USD), same number the old
-                // fixed buckets filtered on — not the fee-inclusive "Buy $"
-                // price shown in the Actions column.
-                : `Range reflects this search's ${results.length} result${results.length === 1 ? "" : "s"}: $${Math.round(priceBounds.min).toLocaleString()} – $${Math.round(priceBounds.max).toLocaleString()} (marketplace price, before fee)`
-            }
+            title="Marketplace price range (before fee) — drag or type an exact value"
           />
           <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
           <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
