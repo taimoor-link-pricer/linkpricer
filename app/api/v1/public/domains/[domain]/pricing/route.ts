@@ -316,17 +316,22 @@ export async function GET(
     return jsonError("internal_error", "An internal error occurred. Please retry.", 500);
   } finally {
     const latencyMs = Date.now() - startMs;
-    db.execute(sql`
-      INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
-      VALUES (${k.id}, ${k.user_id}, ${domain}, ${httpStatus}, ${latencyMs})
-    `).catch(() => {});
-
-    db.execute(sql`
-      UPDATE api_keys
-      SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
-          usage_date    = ${today},
-          last_used_at  = NOW()
-      WHERE id = ${k.id}
-    `).catch(() => {});
+    // Must be awaited — in a serverless function the execution context can be
+    // frozen right after the response is returned, silently dropping any
+    // fire-and-forget writes (this previously left request_count/usage_date
+    // stuck at their defaults, so daily rate limiting never actually engaged).
+    await Promise.all([
+      db.execute(sql`
+        INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
+        VALUES (${k.id}, ${k.user_id}, ${domain}, ${httpStatus}, ${latencyMs})
+      `).catch(() => {}),
+      db.execute(sql`
+        UPDATE api_keys
+        SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
+            usage_date    = ${today},
+            last_used_at  = NOW()
+        WHERE id = ${k.id}
+      `).catch(() => {}),
+    ]);
   }
 }
