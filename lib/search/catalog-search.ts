@@ -84,6 +84,7 @@ export interface CatalogSearchFilters {
   country?: string;
   language?: string;
   minTraffic?: number;
+  maxTraffic?: number;
   minDr?: number;
   maxDr?: number;
   minPrice?: number;
@@ -234,6 +235,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const outerFilterClauses = [
     f.country ? sql`AND LOWER(country) = LOWER(${f.country})` : sql``,
     f.minTraffic != null ? sql`AND COALESCE(traffic, 0) >= ${f.minTraffic}` : sql``,
+    f.maxTraffic != null ? sql`AND COALESCE(traffic, 0) <= ${f.maxTraffic}` : sql``,
     f.minDr != null ? sql`AND COALESCE(dr, 0) >= ${f.minDr}` : sql``,
     f.maxDr != null ? sql`AND COALESCE(dr, 0) <= ${f.maxDr}` : sql``,
     f.minPrice != null ? sql`AND best_price >= ${f.minPrice}` : sql``,

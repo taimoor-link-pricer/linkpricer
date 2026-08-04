@@ -599,7 +599,7 @@ export default function RelatedSitesPage() {
       if (useFilters.language !== "any") parsedFilters.language = useFilters.language;
       if (useFilters.niche !== "any") parsedFilters.category = useFilters.niche;
       if (useFilters.grade !== "any") parsedFilters.grade = useFilters.grade;
-      if (useTrafficFilterActive) parsedFilters.minTraffic = useTrafficMin;
+      if (useTrafficFilterActive) { parsedFilters.minTraffic = useTrafficMin; parsedFilters.maxTraffic = useTrafficMax; }
       if (useDrFilterActive) { parsedFilters.minDr = useDrMin; parsedFilters.maxDr = useDrMax; }
       if (usePriceFilterActive) { parsedFilters.minPrice = usePriceMin; parsedFilters.maxPrice = usePriceMax; }
 
