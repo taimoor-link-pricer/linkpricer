@@ -5,6 +5,13 @@ import { sql } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { searchCatalog, type CatalogSearchFilters, type CatalogSortBy, type CatalogSortDir } from "@/lib/search/catalog-search";
 
+// searchCatalog's Claude rerank alone carries a 20s internal timeout
+// (lib/ai/claude-rerank.ts), on top of the SQL prefilter + offers joins —
+// observed totals up to ~29s. Without this, the route inherited Vercel's
+// platform-default function timeout and 504'd (FUNCTION_INVOCATION_TIMEOUT)
+// on any slow Claude response, independent of which filters were applied.
+export const maxDuration = 60;
+
 // ── Weekly search quota ──────────────────────────────────────────────────────
 // Reuses the existing generic `user_activity_events` log (eventType +
 // userId + timestamp, already indexed) rather than a new table/migration.

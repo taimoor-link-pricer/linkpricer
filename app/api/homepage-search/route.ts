@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchCatalog } from "@/lib/search/catalog-search";
 
+// See app/api/related-sites/route.ts for why this is needed — same
+// searchCatalog pipeline, same risk of exceeding the platform-default
+// function timeout on a slow Claude rerank.
+export const maxDuration = 60;
+
 // Public, unauthenticated search backing the homepage AI chat
 // (components/marketing/ai-search-home.tsx). No user session, so quota is
 // an in-memory per-IP counter rather than the DB-backed weekly quota
