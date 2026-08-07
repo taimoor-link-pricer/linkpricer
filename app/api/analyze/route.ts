@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { getUsdRates, toUsd as toUsdWithRates } from "@/lib/currency";
 import { normalizeDomain } from "@/lib/normalize-domain";
+import { getCurrentUser } from "@/lib/get-current-user";
 
 function computeGrade(dr: number | null, traffic: number | null): string {
   if (dr == null) return "C";
@@ -58,6 +59,9 @@ function nichePrice(row: Record<string, unknown>, niche: string): { min: unknown
 }
 
 export async function POST(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
   let body: { domains: string[]; niche?: string };
   try {
     body = await req.json();
