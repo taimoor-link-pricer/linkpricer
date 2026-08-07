@@ -305,7 +305,7 @@ export default function DocsPage() {
                   ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic."],
                   ["metrics.ref_domains", "number | null", "Number of referring domains."],
                   ["metrics.country", "string | null", "Primary traffic country, full name (e.g. \"United States\") — not an ISO code."],
-                  ["last_updated", "string", "ISO date of the most recent price update."],
+                  ["last_updated", "string | null", "ISO date of the most recent price update. null when found is false (no pricing to date)."],
                 ].map(([field, type, desc]) => (
                   <tr key={field}>
                     <td><code className="docs-inline-code">{field}</code></td>
