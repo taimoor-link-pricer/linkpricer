@@ -60,6 +60,26 @@ export interface TocHeading {
   level: 2 | 3;
 }
 
+// Runs after tags are stripped from heading inner-HTML below — decodes the
+// handful of entities TipTap/rich-text editors actually emit (ampersands,
+// angle brackets, quotes, curly punctuation) so the TOC shows "Tips & Tricks"
+// instead of the raw "Tips &amp; Tricks" markup source.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+  ndash: "–", mdash: "—", hellip: "…",
+  lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”",
+};
+
+function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, code: string) => {
+    if (code[0] === "#") {
+      const codePoint = code[1]?.toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    }
+    return NAMED_ENTITIES[code] ?? match;
+  });
+}
+
 function slugifyHeadingText(text: string): string {
   return text
     .toLowerCase()
@@ -82,7 +102,7 @@ export function injectHeadingIds(html: string): { html: string; headings: TocHea
 
   const patched = html.replace(/<(h[23])((?:\s[^>]*)?)>([\s\S]*?)<\/\1>/gi, (match, tag: string, attrs: string, inner: string) => {
     const level = (tag.toLowerCase() === "h2" ? 2 : 3) as 2 | 3;
-    const text = inner.replace(/<[^>]*>/g, "").trim();
+    const text = decodeHtmlEntities(inner.replace(/<[^>]*>/g, "").trim());
     if (!text) return match;
 
     const base = slugifyHeadingText(text) || `section-${headings.length + 1}`;

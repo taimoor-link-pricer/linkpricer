@@ -65,3 +65,36 @@ export async function GET() {
     return NextResponse.json(null, { status: 401 });
   }
 }
+
+// Updates the caller's own display name. This is the only writer of
+// firstName/lastName after account creation — the settings page previously
+// only called Firebase's client-side updateProfile(), which never reached
+// these columns, so a "successful" name change was invisible everywhere
+// else in the app (header, admin) that reads the name from here.
+export async function PATCH(req: Request) {
+  try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get("session")?.value;
+    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const decoded = await adminAuth.verifySessionCookie(session, true);
+
+    let body: { displayName?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+
+    const trimmed = (body.displayName ?? "").trim();
+    const parts = trimmed.split(/\s+/).filter(Boolean);
+    const firstName = parts[0] ?? null;
+    const lastName = parts.slice(1).join(" ") || null;
+
+    await db.update(users).set({ firstName, lastName }).where(eq(users.id, decoded.uid));
+
+    return NextResponse.json({ firstName, lastName });
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+}

@@ -22,9 +22,9 @@ const DEFAULT_CTA = {
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
   const post = await getPublishedPostBySlug(slug);
-  if (!post) return { title: "Blog · Linkpricer" };
+  if (!post) return { title: "Blog" };
 
-  const title = post.metaTitle || `${post.title} · Linkpricer`;
+  const title = post.metaTitle || post.title;
   const description = post.metaDescription || post.excerpt;
   const url = `https://linkpricer.com/blog/${post.slug}`;
   const image = post.coverImageUrl ?? "/logo.png";

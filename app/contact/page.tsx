@@ -4,7 +4,7 @@ import { MarketingLayout } from "@/components/marketing/marketing-layout";
 import { ROUTES } from "@/lib/constants";
 
 export const metadata: Metadata = {
-  title: "Contact us · Linkpricer",
+  title: "Contact us",
   description: "Get in touch with Linkpricer, UAB — company details, email and registered address in Kaunas, Lithuania.",
   openGraph: {
     type: "website",

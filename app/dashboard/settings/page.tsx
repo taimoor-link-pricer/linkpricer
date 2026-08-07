@@ -109,7 +109,7 @@ const readonlyInputStyle: React.CSSProperties = {
 };
 
 export default function SettingsPage() {
-  const { profile, loading } = useAuthContext();
+  const { profile, loading, refreshProfile } = useAuthContext();
 
   const [displayName, setDisplayName] = useState(profile?.displayName ?? "");
   const [currency, setCurrency] = useState("USD");
@@ -136,7 +136,17 @@ export default function SettingsPage() {
     setProfileSaving(true);
     setProfileMsg(null);
     try {
-      await updateProfile(user, { displayName: displayName.trim() || null });
+      const res = await fetch("/api/user/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: displayName.trim() }),
+      });
+      if (!res.ok) throw new Error("save failed");
+      // Keep Firebase's own copy in sync too (used as a fallback display name
+      // and by some auth-provider UI), but the PATCH above is what actually
+      // makes the change visible elsewhere in the app.
+      await updateProfile(user, { displayName: displayName.trim() || null }).catch(() => {});
+      await refreshProfile();
       setProfileMsg({ type: "success", text: "Profile updated successfully." });
     } catch {
       setProfileMsg({ type: "error", text: "Failed to update profile. Please try again." });

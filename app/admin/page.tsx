@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ROUTES } from "@/lib/constants";
@@ -31,12 +31,11 @@ function LoadingSpinner() {
   );
 }
 
-const STAT_CARDS = [
-  { label: "Total Users", icon: "👥", value: "—", color: "#0052cc" },
-  { label: "Total Orders", icon: "📋", value: "—", color: "#0052cc" },
-  { label: "Active Marketplaces", icon: "🏪", value: "60+", color: "#006621" },
-  { label: "Revenue", icon: "💰", value: "—", color: "#0052cc" },
-];
+type OverviewStats = { totalUsers: number; totalOrders: number; revenue: number };
+
+function fmtUsd(n: number) {
+  return "$" + Math.round(n).toLocaleString("en-US");
+}
 
 const QUICK_ACTIONS = [
   {
@@ -55,6 +54,14 @@ const QUICK_ACTIONS = [
 
 export default function AdminPage() {
   const { profile, loading } = useAuthContext();
+  const [stats, setStats] = useState<OverviewStats | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/overview-stats")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => data && setStats(data))
+      .catch(() => {});
+  }, []);
 
   if (loading) return <LoadingSpinner />;
 
@@ -63,6 +70,13 @@ export default function AdminPage() {
     month: "long",
     day: "numeric",
   });
+
+  const STAT_CARDS = [
+    { label: "Total Users", icon: "👥", value: stats ? stats.totalUsers.toLocaleString("en-US") : "—", color: "#0052cc" },
+    { label: "Total Orders", icon: "📋", value: stats ? stats.totalOrders.toLocaleString("en-US") : "—", color: "#0052cc" },
+    { label: "Active Marketplaces", icon: "🏪", value: "60+", color: "#006621" },
+    { label: "Revenue", icon: "💰", value: stats ? fmtUsd(stats.revenue) : "—", color: "#0052cc" },
+  ];
 
   return (
     <><style>{`.rp{padding:32px 40px;max-width:1200px;margin:0 auto}.stats-g{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.qa-g{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}@media(max-width:1024px){.stats-g{grid-template-columns:repeat(2,1fr)}}@media(max-width:768px){.rp{padding:20px 16px}.stats-g{grid-template-columns:repeat(2,1fr);gap:12px}.qa-g{grid-template-columns:1fr}}`}</style><div className="rp">

@@ -7,7 +7,7 @@ import { DOC_SECTIONS, docArticleBySlug } from "@/lib/design-v1/docs-data";
 import { articleHref } from "@/lib/design-v1/docs-links";
 
 export const metadata: Metadata = {
-  title: "Documentation · Linkpricer",
+  title: "Documentation",
   description:
     "Linkpricer documentation — guides and reference for domain comparison, related sites, favorites, orders, billing and support.",
   openGraph: {

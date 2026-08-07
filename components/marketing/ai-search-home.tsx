@@ -158,6 +158,7 @@ function InputBar({ docked, value, setValue, thinking, send }: { docked: boolean
         autoFocus={!docked}
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); send(); } }}
         placeholder="Describe what you're looking for… e.g. “SaaS website about VPN, budget $300–500”"
         style={{ flex: 1, border: "none", outline: "none", fontSize: 14.5, fontFamily: "inherit", color: "var(--lp-ink)", background: "transparent", minWidth: 0 }}
       />

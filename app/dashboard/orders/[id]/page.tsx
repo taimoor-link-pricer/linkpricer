@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ROUTES } from "@/lib/constants";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
-import { ORDER_STATUSES, type OrderStatus, type ClientOrderAction } from "@/lib/orders/types";
+import { ORDER_STATUSES, type OrderStatus, type ClientOrderAction, currencySymbol } from "@/lib/orders/types";
 import type { OrderStatusChangedMeta, OrderMessageMeta } from "@/lib/orders/events";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
@@ -163,7 +163,7 @@ function DetailsCard({ order }: { order: ApiOrder }) {
   const contentPrice = parseFloat(order.contentPrice ?? "0");
   const total = parseFloat(order.totalAmount);
   const fee = Math.max(0, total - gpPrice - contentPrice);
-  const currencySign = order.snapshotCurrency === "EUR" ? "€" : "$";
+  const currencySign = currencySymbol(order.snapshotCurrency);
 
   return (
     <div style={{ background: "#fff", border: "1px solid #e8eaed", borderRadius: 14, padding: 22 }}>

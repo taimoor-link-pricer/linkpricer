@@ -35,7 +35,11 @@ export async function GET(req: NextRequest) {
         de.example_url,
         de.example_title,
         de.updated_at AS example_updated_at,
-        COUNT(DISTINCT p.id) AS offer_count
+        MAX(
+          (CASE WHEN p.price IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN p."secondPrice" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN p."thirdPrice" IS NOT NULL THEN 1 ELSE 0 END)
+        ) AS offer_count
       FROM lp_marketplace_domains d
       LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
       LEFT JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true

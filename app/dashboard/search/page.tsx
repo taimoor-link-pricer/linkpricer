@@ -1365,6 +1365,21 @@ type BriefItem = CartItem & {
   selectedFile: File | null; uploadError: string | null;
 };
 
+// Single source of truth for "is this placement ready to submit" — used by
+// both the header's readyCount and each card's own status badge, so they
+// can't disagree the way they used to (the badge had its own separate check
+// that ignored contentMode entirely, always requiring title+brief even for
+// modes that don't use them, and never checking selectedFile for "upload"
+// mode — so a freshly-switched-to-upload item with no file could show a
+// false "✓ Ready" while a fully-valid "url"-mode item showed "Brief needed"
+// forever).
+function isBriefItemReady(item: BriefItem): boolean {
+  if (!item.targetUrl || !item.anchorText) return false;
+  if (item.contentMode === "linkpricer") return !!item.title && !!item.brief;
+  if (item.contentMode === "url") return !!item.articleUrl;
+  return !!item.selectedFile;
+}
+
 const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 const UPLOAD_ACCEPT_EXT = [".docx", ".md", ".pdf"];
 
@@ -1401,7 +1416,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   const subtotal = items.reduce((s, i) => s + i.price + i.contentPrice, 0);
   const fee = Math.round(items.filter(i => i.orderType === "managed").reduce((s, i) => s + i.price + i.contentPrice, 0) * 0.15);
   const total = subtotal + fee;
-  const readyCount = items.filter(i => i.contentMode === "linkpricer" ? (!!i.title && !!i.targetUrl && !!i.anchorText && !!i.brief) : i.contentMode === "url" ? (!!i.targetUrl && !!i.anchorText && !!i.articleUrl) : (!!i.targetUrl && !!i.anchorText && !!i.selectedFile)).length;
+  const readyCount = items.filter(isBriefItemReady).length;
   const [placeError, setPlaceError] = useState<string | null>(null);
 
   function change(idx: number, patch: Partial<BriefItem>) {
@@ -1508,9 +1523,19 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", overflowY: "auto" }}>
-      <div style={{ minHeight: "100vh", background: C.bg, padding: "20px 32px 60px" }}>
+      <style>{`
+        @media (max-width: 768px) {
+          .checkout-root { padding: 14px 12px 40px !important; }
+          .checkout-root, .checkout-root * { min-width: 0 !important; max-width: 100%; }
+          .checkout-2col { grid-template-columns: 1fr !important; }
+          .checkout-2col > * { width: 100% !important; position: static !important; }
+          .checkout-brief-grid { grid-template-columns: 1fr !important; }
+          .checkout-trust-badge { display: none; }
+        }
+      `}</style>
+      <div className="checkout-root" style={{ minHeight: "100vh", background: C.bg, padding: "20px 32px 60px" }}>
         {/* Header */}
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0 18px" }}>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0 18px", flexWrap: "wrap", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
             <span style={{ marginLeft: 14, fontSize: 12, color: C.mute }}>
@@ -1520,7 +1545,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <span style={{ fontSize: 12, color: C.mute, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span className="checkout-trust-badge" style={{ fontSize: 12, color: C.mute, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span style={{ color: C.good }}>✓</span> Secure checkout · escrow protected
             </span>
             <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${C.line}`, background: "#fff", cursor: "pointer", fontSize: 18, color: C.mute, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
@@ -1528,7 +1553,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
         </header>
 
         {/* Stepper */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 24, flexWrap: "wrap" }}>
           {["Cart", "Article briefs", "Confirm order"].map((s, i) => (
             <React.Fragment key={s}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px", borderRadius: 999, fontSize: 12, fontWeight: 700, background: i === 1 ? C.accent : i < 1 ? "#fff" : C.bg3, color: i === 1 ? "#fff" : i < 1 ? C.ink2 : C.mute, border: i < 1 ? `1px solid ${C.line}` : "none" }}>
@@ -1540,7 +1565,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
           ))}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px", gap: 18, alignItems: "flex-start" }}>
+        <div className="checkout-2col" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px", gap: 18, alignItems: "flex-start" }}>
           {/* LEFT — briefs */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 20px" }}>
@@ -1552,7 +1577,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
             </div>
 
             {items.map((item, i) => {
-              const ready = !!(item.title && item.targetUrl && item.anchorText && item.brief);
+              const ready = isBriefItemReady(item);
               return (
               <div key={item.domain + i} style={{ background: "#fff", border: `1px solid ${expandedIdx === i ? C.accent : C.line}`, borderRadius: 14, overflow: "hidden", boxShadow: expandedIdx === i ? `0 0 0 3px ${C.accent50}` : "none" }}>
                 {/* Card header row */}
@@ -1575,7 +1600,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
                 {/* Expanded form */}
                 {expandedIdx === i && (
-                  <div style={{ padding: "18px 22px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div className="checkout-brief-grid" style={{ padding: "18px 22px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                     {/* Left column */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       {[
@@ -1601,7 +1626,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       <div>
                         <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Who writes the article?</label>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                        <div className="checkout-brief-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                           {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${CONTENT_FEE_USD.toFixed(2)} · ${DEFAULT_CONTENT_WORD_COUNT} words`, cp: CONTENT_FEE_USD }, { mode: "upload", title: "I'll upload content", sub: "Free · .docx, .md, .pdf", cp: 0 }].map(opt => (
                             <button key={opt.mode} onClick={() => change(i, { contentMode: opt.mode as BriefItem["contentMode"], contentPrice: opt.cp })} style={{ padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === opt.mode ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === opt.mode ? C.accent : C.line}` }}>
                               <div style={{ fontWeight: 700, fontSize: 12.5, color: item.contentMode === opt.mode ? C.accent : C.ink2 }}>{opt.title}</div>
@@ -2243,6 +2268,17 @@ function SearchPageInner() {
       <style>{`
         @keyframes lp-spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
+        @media (max-width: 768px) {
+          .search-root { padding: 12px 12px 32px !important; }
+          .search-root, .search-root * { min-width: 0 !important; }
+          .search-header { flex-wrap: wrap; gap: 10px; }
+          .search-header-brand { order: 1; }
+          .search-nav { order: 2; flex-wrap: wrap; width: 100%; gap: 2px !important; }
+          .search-nav a, .search-nav span:not(.search-breadcrumb) { padding: 6px 8px !important; font-size: 12.5px !important; }
+          .search-breadcrumb { display: none; }
+          .search-2col { grid-template-columns: 1fr !important; }
+          .search-hero-actions { flex-shrink: 1 !important; width: 100%; }
+        }
       `}</style>
 
       {tourActive && (
@@ -2279,15 +2315,15 @@ function SearchPageInner() {
         <OrderPlacedModal orders={placedOrders} onClose={() => setOrderPlaced(false)} />
       )}
 
-      <div style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
+      <div className="search-root" style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
 
         {/* ── TopBar ── */}
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <header className="search-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
+          <div className="search-header-brand" style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
-            <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / analyze</span>
+            <span className="search-breadcrumb" style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / analyze</span>
           </div>
-          <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <nav className="search-nav" style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {([
               { label: "Analyze", href: null },
               { label: "Related Sites", href: "/dashboard/related-sites" },
@@ -2364,9 +2400,10 @@ function SearchPageInner() {
               justifyContent: "space-between",
               marginBottom: 20,
               gap: 16,
+              flexWrap: "wrap",
             }}
           >
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.mute, fontSize: 12, fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 }}>
                 ⚡ Domain Analysis
               </div>
@@ -2377,7 +2414,7 @@ function SearchPageInner() {
                 Upload up to 200 domains and compare prices &amp; conditions across every marketplace that stocks them.
               </p>
             </div>
-            <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            <div className="search-hero-actions" style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
               <button
                 onClick={startTour}
                 style={{
@@ -2496,6 +2533,7 @@ function SearchPageInner() {
 
           {/* 2-col grid */}
           <div
+            className="search-2col"
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 320px",

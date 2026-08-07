@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ROUTES } from "@/lib/constants";
+import { ROUTES, validRedirect } from "@/lib/constants";
 import {
   signUpWithEmail,
   startGoogleSignIn,
@@ -34,14 +34,6 @@ const labelStyle: React.CSSProperties = {
   marginBottom: 8,
 };
 
-// Only accept an internal path (starts with "/", not "//") as a post-signup
-// redirect target — anything else is either malformed or a potential
-// open-redirect and falls back to the default route instead.
-function validRedirect(raw: string | null): string | null {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
-  return raw;
-}
-
 export function SignupForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +48,9 @@ export function SignupForm() {
       if (res.ok) {
         const data = await res.json();
         if (data.role === "vendor") return ROUTES.admin;
-        if (!data.hasCompletedOnboarding) return ROUTES.onboarding;
+        if (!data.hasCompletedOnboarding) {
+          return redirect ? `${ROUTES.onboarding}?redirect=${encodeURIComponent(redirect)}` : ROUTES.onboarding;
+        }
       }
     } catch {}
     return redirect ?? ROUTES.search;

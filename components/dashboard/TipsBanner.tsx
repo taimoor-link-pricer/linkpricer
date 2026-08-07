@@ -91,7 +91,7 @@ export function TipsBanner() {
       </div>
 
       {/* Scrolling track */}
-      <div style={{ flex: 1, overflow: "hidden", display: "flex", alignItems: "center" }}>
+      <div style={{ flex: 1, minWidth: 0, overflow: "hidden", display: "flex", alignItems: "center" }}>
         <div className="lp-tips-track">
           {[...TIPS, ...TIPS].map((tip, idx) => (
             <span key={idx} style={{ flexShrink: 0, color: "#374151", display: "inline-flex", alignItems: "center" }}>

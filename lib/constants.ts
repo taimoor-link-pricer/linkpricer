@@ -33,6 +33,18 @@ export const ROUTES = {
   checkout: "/dashboard/checkout",
 } as const;
 
+// Only accept an internal path (starts with "/", not "//") as a post-auth
+// redirect target — anything else is either malformed or a potential
+// open-redirect and falls back to the caller's own default instead. Shared
+// by signup-form/login-form (building the redirect into the onboarding URL)
+// and the onboarding wizard (consuming it once onboarding completes) so a
+// user who arrived with clear intent — e.g. "buy this specific domain" —
+// doesn't get dropped onto a generic dashboard after signup + onboarding.
+export function validRedirect(raw: string | null | undefined): string | null {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
 export const LEGAL_LINKS = [
   { label: "Privacy Policy", href: "/privacy" },
   { label: "Terms of Service", href: "/terms" },

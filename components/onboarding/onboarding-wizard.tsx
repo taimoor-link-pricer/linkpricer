@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { ROUTES } from "@/lib/constants";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ROUTES, validRedirect } from "@/lib/constants";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -151,6 +151,8 @@ export function OnboardingWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirect = validRedirect(searchParams.get("redirect"));
 
   function update(patch: Partial<FormData>) {
     setData(prev => ({ ...prev, ...patch }));
@@ -197,7 +199,7 @@ export function OnboardingWizard() {
         setSubmitting(false);
         return;
       }
-      router.push(ROUTES.search);
+      router.push(redirect ?? ROUTES.search);
     }
   }
 

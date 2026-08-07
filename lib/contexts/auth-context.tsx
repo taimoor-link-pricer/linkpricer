@@ -10,7 +10,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
 import { signOut } from "@/lib/firebase/auth-client";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
 import { PageLoader } from "@/components/page-loader";
 
@@ -28,6 +28,7 @@ interface AuthContextValue {
   profile: UserProfile | null;
   loading: boolean;
   handleSignOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -41,6 +42,7 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -78,7 +80,13 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
             return;
           }
 
-          if (!requireAdmin && resolved.role !== "vendor" && !resolved.hasCompletedOnboarding) {
+          // Skip if already on /onboarding — this effect re-runs on every
+          // fresh page load (including the onboarding page itself right
+          // after signup), and router.replace(ROUTES.onboarding) with no
+          // query string would otherwise silently strip a `?redirect=`
+          // the signup/login flow attached, before the wizard ever gets a
+          // chance to read it.
+          if (!requireAdmin && resolved.role !== "vendor" && !resolved.hasCompletedOnboarding && pathname !== ROUTES.onboarding) {
             router.replace(ROUTES.onboarding);
             return;
           }
@@ -126,10 +134,38 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
     router.push(ROUTES.home);
   }
 
+  // Re-fetches /api/user/me and merges the result into the existing profile —
+  // for callers (e.g. the settings page after a profile save) that changed
+  // server-side state and need the header/avatar/etc. to reflect it without
+  // waiting for the next onAuthStateChanged firing (login, token refresh).
+  // Deliberately skips the role/onboarding redirect checks above — those only
+  // make sense on initial load, not on a same-page refresh.
+  async function refreshProfile() {
+    const user = auth.currentUser;
+    if (!user) return;
+    try {
+      const res = await fetch("/api/user/me");
+      if (!res.ok) return;
+      const data = await res.json();
+      setProfile((prev) => ({
+        ...prev,
+        uid: user.uid,
+        email: data.email ?? user.email,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        displayName: [data.firstName, data.lastName].filter(Boolean).join(" ") || user.displayName || null,
+        role: data.role as "client" | "vendor",
+        hasCompletedOnboarding: data.hasCompletedOnboarding,
+      }));
+    } catch {
+      // best-effort — the next full auth-state refresh will still pick it up
+    }
+  }
+
   if (loading) return <PageLoader />;
 
   return (
-    <AuthContext.Provider value={{ profile, loading, handleSignOut }}>
+    <AuthContext.Provider value={{ profile, loading, handleSignOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

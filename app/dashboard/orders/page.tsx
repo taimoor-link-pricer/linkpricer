@@ -19,6 +19,7 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import type { ClientOrderAction } from "@/lib/orders/types";
+import { currencySymbol } from "@/lib/orders/types";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
 const C = {
@@ -48,6 +49,7 @@ interface Order {
   id: string; domain: string; marketplace: string; status: OrderStatus; title: string;
   targetUrl: string; anchorText: string; price: number; newPrice?: number; wordCount: number;
   draftUrl?: string; articleUrl?: string; daysLive?: number; notes?: string | null; placedAt?: string;
+  currency: string;
 }
 
 // Raw shape returned by GET /api/orders (a row of the `orders` table).
@@ -56,6 +58,7 @@ type ApiOrder = {
   status: string;
   snapshotDomain: string | null;
   snapshotMarketplaceName: string | null;
+  snapshotCurrency: string | null;
   articleTitle: string | null;
   targetUrl: string;
   anchorText: string | null;
@@ -84,12 +87,13 @@ function mapApiOrder(row: ApiOrder): Order {
     articleUrl: row.liveUrl ?? undefined,
     notes: row.reviewNotes ?? ext.pendingPriceReason ?? null,
     placedAt: row.createdAt ?? undefined,
+    currency: row.snapshotCurrency ?? "USD",
   };
 }
 
-function fmtPrice(n?: number) {
+function fmtPrice(n: number | undefined, currency: string) {
   if (n == null) return "—";
-  return "€" + Math.round(n).toLocaleString("en-US");
+  return currencySymbol(currency) + Math.round(n).toLocaleString("en-US");
 }
 
 // ── Icons (ported from the source's inline Icon component) ─────────────────
@@ -397,7 +401,7 @@ function OrderCard({
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Marketplace</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{prettyMarketplaceName(order.marketplace)}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Status</div><div style={{ display: "inline-block", padding: "4px 12px", borderRadius: 6, background: config.bg, color: config.color, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{config.label}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Words</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{order.wordCount.toLocaleString()}</div></div>
-        <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Amount</div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtPrice(order.newPrice ?? order.price)}</div></div>
+        <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Amount</div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtPrice(order.newPrice ?? order.price, order.currency)}</div></div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }} {...tourAttr("tools")}>
           <button onClick={(e) => { e.stopPropagation(); setChatOpen(true); }} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.ink3 }}><Icon name="chat" size={18} /></button>
           {(order.status === "published" || order.status === "complete") && (
@@ -449,8 +453,8 @@ function OrderCard({
               <div style={{ fontSize: 12, fontWeight: 700, color: "#8b5900", textTransform: "uppercase", marginBottom: 8 }}>💰 Price Increase Request</div>
               <div style={{ fontSize: 13, color: "#6b4423", lineHeight: 1.5, marginBottom: 12 }}>{order.notes}</div>
               <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-                <div><div style={{ fontSize: 11, fontWeight: 700, color: "#8b5900", textTransform: "uppercase", marginBottom: 4 }}>Original Price</div><div style={{ fontSize: 14, fontWeight: 700, textDecoration: "line-through", color: C.mute }}>{fmtPrice(order.price)}</div></div>
-                <div><div style={{ fontSize: 11, fontWeight: 700, color: "#8b5900", textTransform: "uppercase", marginBottom: 4 }}>New Price</div><div style={{ fontSize: 14, fontWeight: 700, color: "#8b5900" }}>{fmtPrice(order.newPrice)}</div></div>
+                <div><div style={{ fontSize: 11, fontWeight: 700, color: "#8b5900", textTransform: "uppercase", marginBottom: 4 }}>Original Price</div><div style={{ fontSize: 14, fontWeight: 700, textDecoration: "line-through", color: C.mute }}>{fmtPrice(order.price, order.currency)}</div></div>
+                <div><div style={{ fontSize: 11, fontWeight: 700, color: "#8b5900", textTransform: "uppercase", marginBottom: 4 }}>New Price</div><div style={{ fontSize: 14, fontWeight: 700, color: "#8b5900" }}>{fmtPrice(order.newPrice, order.currency)}</div></div>
               </div>
             </div>
           )}

@@ -73,6 +73,15 @@ export const CLIENT_ACTION_TRANSITIONS: Record<
   },
 };
 
+// Single source of truth for rendering an order's currency symbol — used by
+// both the order list and order detail pages so they can't show two
+// different symbols for the same order the way they used to (list page had
+// its own hardcoded "€" that ignored the order's actual snapshotCurrency).
+export const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "€", GBP: "£" };
+export function currencySymbol(currency: string | null | undefined): string {
+  return CURRENCY_SYMBOLS[(currency ?? "USD").toUpperCase()] ?? (currency ?? "$");
+}
+
 export const REPORT_CATEGORIES = [
   "late_delivery",
   "quality_below_brief",

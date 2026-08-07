@@ -12,9 +12,9 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
   const article = docArticleBySlug(slug);
-  if (!article) return { title: "Documentation · Linkpricer" };
+  if (!article) return { title: "Documentation" };
   return {
-    title: `${article.title} · Linkpricer Docs`,
+    title: `${article.title} · Docs`,
     description: article.desc,
   };
 }

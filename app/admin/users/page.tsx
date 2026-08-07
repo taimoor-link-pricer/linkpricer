@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 
 function LoadingSpinner() {
@@ -44,17 +44,54 @@ interface AdminUser {
 export default function AdminUsersPage() {
   const { loading } = useAuthContext();
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("All");
+  const [search, setSearch] = useState("");
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setDataLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page) });
+      if (search.trim()) params.set("search", search.trim());
+      if (roleFilter === "Clients") params.set("role", "client");
+      if (roleFilter === "Admins") params.set("role", "vendor");
+      const res = await fetch(`/api/admin/users?${params}`);
+      const data = await res.json();
+      setUsers(data.users ?? []);
+      setTotal(data.total ?? 0);
+      setTotalPages(data.totalPages ?? 1);
+    } finally {
+      setDataLoading(false);
+    }
+  }, [page, search, roleFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function handleFilterChange(next: RoleFilter) {
+    setRoleFilter(next);
+    setPage(1);
+  }
+
+  async function toggleSuspend(user: AdminUser) {
+    const nextSuspended = user.status !== "Suspended";
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, status: nextSuspended ? "Suspended" : "Active" } : u)));
+    const res = await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id, suspended: nextSuspended }),
+    });
+    if (!res.ok) {
+      // Revert on failure
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, status: user.status } : u)));
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Failed to update user.");
+    }
+  }
 
   if (loading) return <LoadingSpinner />;
-
-  // No users loaded yet — empty state
-  const users: AdminUser[] = [];
-
-  const filtered = users.filter((u) => {
-    if (roleFilter === "Clients") return u.role === "client";
-    if (roleFilter === "Admins") return u.role === "admin";
-    return true;
-  });
 
   return (
     <>
@@ -96,32 +133,48 @@ export default function AdminUsersPage() {
             padding: "8px 16px",
           }}
         >
-          Total: {users.length} users
+          Total: {total} users
         </div>
       </div>
 
-      {/* Filter tabs */}
-      <div
-        style={{
-          display: "flex",
-          gap: 4,
-          marginBottom: 20,
-          background: "#ffffff",
-          border: "1px solid #e8eaed",
-          borderRadius: 10,
-          padding: 4,
-          width: "fit-content",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-        }}
-      >
-        {ROLE_FILTERS.map((tab) => (
-          <TabButton
-            key={tab}
-            label={tab}
-            active={roleFilter === tab}
-            onClick={() => setRoleFilter(tab)}
-          />
-        ))}
+      {/* Filter tabs + search */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 4,
+            background: "#ffffff",
+            border: "1px solid #e8eaed",
+            borderRadius: 10,
+            padding: 4,
+            width: "fit-content",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+          }}
+        >
+          {ROLE_FILTERS.map((tab) => (
+            <TabButton
+              key={tab}
+              label={tab}
+              active={roleFilter === tab}
+              onClick={() => handleFilterChange(tab)}
+            />
+          ))}
+        </div>
+        <input
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          placeholder="Search by name or email…"
+          style={{
+            flex: "1 1 240px",
+            maxWidth: 320,
+            padding: "9px 14px",
+            borderRadius: 8,
+            border: "1px solid #e8eaed",
+            fontSize: 13,
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
       </div>
 
       {/* Table */}
@@ -134,7 +187,9 @@ export default function AdminUsersPage() {
           overflow: "hidden",
         }}
       >
-        {filtered.length === 0 ? (
+        {dataLoading ? (
+          <div style={{ textAlign: "center", padding: "64px 20px", color: "#9ca3af", fontSize: 13 }}>Loading users…</div>
+        ) : users.length === 0 ? (
           <div style={{ textAlign: "center", padding: "64px 20px" }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>👥</div>
             <p
@@ -148,8 +203,8 @@ export default function AdminUsersPage() {
               No users found
             </p>
             <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>
-              {roleFilter !== "All"
-                ? `No ${roleFilter.toLowerCase()} found`
+              {roleFilter !== "All" || search
+                ? "Try a different filter or search term"
                 : "Users will appear here once they sign up"}
             </p>
           </div>
@@ -179,10 +234,10 @@ export default function AdminUsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((user, idx) => {
-                  const isLast = idx === filtered.length - 1;
+                {users.map((user, idx) => {
+                  const isLast = idx === users.length - 1;
                   return (
-                    <UserRow key={user.id} user={user} isLast={isLast} />
+                    <UserRow key={user.id} user={user} isLast={isLast} onToggleSuspend={() => toggleSuspend(user)} />
                   );
                 })}
               </tbody>
@@ -190,6 +245,26 @@ export default function AdminUsersPage() {
           </div>
         )}
       </div>
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 16 }}>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #e8eaed", background: "#fff", cursor: page <= 1 ? "default" : "pointer", fontSize: 13, color: page <= 1 ? "#d1d5db" : "#374151" }}
+          >
+            ← Prev
+          </button>
+          <span style={{ fontSize: 13, color: "#6b7280", padding: "6px 4px" }}>Page {page} of {totalPages}</span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #e8eaed", background: "#fff", cursor: page >= totalPages ? "default" : "pointer", fontSize: 13, color: page >= totalPages ? "#d1d5db" : "#374151" }}
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
     </>
   );
@@ -198,13 +273,15 @@ export default function AdminUsersPage() {
 function UserRow({
   user,
   isLast,
+  onToggleSuspend,
 }: {
   user: AdminUser;
   isLast: boolean;
+  onToggleSuspend: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const [suspended, setSuspended] = useState(user.status === "Suspended");
   const [suspendHover, setSuspendHover] = useState(false);
+  const suspended = user.status === "Suspended";
 
   return (
     <tr
@@ -283,21 +360,7 @@ function UserRow({
       >
         <div style={{ display: "flex", gap: 8 }}>
           <button
-            style={{
-              padding: "5px 12px",
-              background: "transparent",
-              border: "1px solid #e8eaed",
-              borderRadius: 6,
-              cursor: "pointer",
-              fontSize: 12,
-              color: "#0052cc",
-              fontWeight: 500,
-            }}
-          >
-            View
-          </button>
-          <button
-            onClick={() => setSuspended((s) => !s)}
+            onClick={onToggleSuspend}
             onMouseEnter={() => setSuspendHover(true)}
             onMouseLeave={() => setSuspendHover(false)}
             style={{
