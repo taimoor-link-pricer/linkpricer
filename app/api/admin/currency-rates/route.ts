@@ -3,9 +3,13 @@ import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { ensureCurrencyRatesTable, invalidateRatesCache } from "@/lib/currency";
 import { getCurrentUser } from "@/lib/get-current-user";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 // GET — list all admin-configured currency rates
 export async function GET() {
+  const admin = await requireAdminSession();
+  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
   try {
     await ensureCurrencyRatesTable();
     const rows = await db.execute(sql`
@@ -22,6 +26,9 @@ export async function GET() {
 
 // POST — upsert a currency rate. `usd_rate` is "1 unit of currency = usd_rate USD".
 export async function POST(req: NextRequest) {
+  const admin = await requireAdminSession();
+  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
   let body: { currency: string; usd_rate: number };
   try {
     body = await req.json();
@@ -64,6 +71,9 @@ export async function POST(req: NextRequest) {
 
 // DELETE — remove a currency rate (falls back to hardcoded default, if any, once removed)
 export async function DELETE(req: NextRequest) {
+  const admin = await requireAdminSession();
+  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
   const { searchParams } = new URL(req.url);
   const currency = searchParams.get("currency")?.trim().toUpperCase();
   if (!currency) return NextResponse.json({ error: "currency required" }, { status: 400 });

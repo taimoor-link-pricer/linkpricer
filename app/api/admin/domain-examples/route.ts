@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 async function ensureTable() {
   await db.execute(sql`
@@ -13,8 +14,18 @@ async function ensureTable() {
   `);
 }
 
-// GET — list all LP domains with their example URLs
+// GET — list all LP domains with their example URLs. Reads from
+// admin_domain_examples_agg, a materialized view pre-aggregating dr/traffic/
+// offer_count per domain — querying lp_marketplace_domains (2.3M rows) with
+// live joins+GROUP BY on every request took ~10.7s (full seq scans across
+// all 3 tables to sort/paginate a global top-N) and 504'd on Vercel. The
+// view trades near-realtime freshness for a sub-millisecond query; it needs
+// a periodic `REFRESH MATERIALIZED VIEW CONCURRENTLY admin_domain_examples_agg`
+// wired into the existing scrapper sync cadence to stay current.
 export async function GET(req: NextRequest) {
+  const admin = await requireAdminSession();
+  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("q")?.toLowerCase() ?? "";
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
@@ -24,37 +35,30 @@ export async function GET(req: NextRequest) {
   try {
     await ensureTable();
 
-    const searchClause = search ? sql`AND LOWER(d.w) LIKE ${"%" + search + "%"}` : sql``;
+    const searchClause = search ? sql`AND a.domain LIKE ${"%" + search + "%"}` : sql``;
 
     const rows = await db.execute(sql`
       SELECT
-        LOWER(d.w) AS domain,
-        MAX(m."domainRating"::float) AS dr,
-        MAX(m."orgTraffic") AS traffic,
-        MAX(d.category) AS category,
+        a.domain,
+        a.dr,
+        a.traffic,
+        a.category,
+        a.offer_count,
         de.example_url,
         de.example_title,
-        de.updated_at AS example_updated_at,
-        MAX(
-          (CASE WHEN p.price IS NOT NULL THEN 1 ELSE 0 END) +
-          (CASE WHEN p."secondPrice" IS NOT NULL THEN 1 ELSE 0 END) +
-          (CASE WHEN p."thirdPrice" IS NOT NULL THEN 1 ELSE 0 END)
-        ) AS offer_count
-      FROM lp_marketplace_domains d
-      LEFT JOIN lp_domain_metrics m ON m."domainId" = d.id
-      LEFT JOIN lp_domain_price p ON p."domainId" = d.id AND p."isActive" = true
-      LEFT JOIN domain_examples de ON de.domain = LOWER(d.w)
-      WHERE d."isActive" = true AND d."deletedAt" IS NULL
+        de.updated_at AS example_updated_at
+      FROM admin_domain_examples_agg a
+      LEFT JOIN domain_examples de ON de.domain = a.domain
+      WHERE 1=1
       ${searchClause}
-      GROUP BY LOWER(d.w), de.example_url, de.example_title, de.updated_at
-      ORDER BY MAX(m."domainRating"::float) DESC NULLS LAST
+      ORDER BY a.dr DESC NULLS LAST
       LIMIT ${limit} OFFSET ${offset}
     `);
 
     const countRow = await db.execute(sql`
-      SELECT COUNT(DISTINCT LOWER(d.w)) AS total
-      FROM lp_marketplace_domains d
-      WHERE d."isActive" = true AND d."deletedAt" IS NULL
+      SELECT COUNT(*) AS total
+      FROM admin_domain_examples_agg a
+      WHERE 1=1
       ${searchClause}
     `);
 
@@ -72,6 +76,9 @@ export async function GET(req: NextRequest) {
 
 // POST — upsert example URL for a domain
 export async function POST(req: NextRequest) {
+  const admin = await requireAdminSession();
+  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
   let body: { domain: string; example_url: string; example_title?: string };
   try {
     body = await req.json();
