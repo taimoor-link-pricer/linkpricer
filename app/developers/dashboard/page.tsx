@@ -41,6 +41,22 @@ const PLAN_DETAILS = {
   scale:   { label: "Scale",   price: "$50/mo", queries: "10,000 queries", rate: "60 req/min",  planKey: "scale" as PlanKey },
 };
 
+type PlanDetails = (typeof PLAN_DETAILS)[PlanKey];
+
+function switchPlanMessage(data: MeData | null, target: PlanDetails): { subject: string; body: string } {
+  const currentLabel = data?.user.planName ?? "unknown";
+  const email = data?.user.email ?? "";
+  const subject = `Switch my Linkpricer API plan: ${currentLabel} → ${target.label}`;
+  const body = [
+    `Account email: ${email}`,
+    `Current plan: ${currentLabel}`,
+    `Requested plan: ${target.label} (${target.price}, ${target.queries}/mo, ${target.rate})`,
+    "",
+    "Please switch my subscription to the plan above.",
+  ].join("\n");
+  return { subject, body };
+}
+
 export default function DeveloperDashboardPage() {
   return (
     <Suspense fallback={<CenteredSpinner />}>
@@ -62,9 +78,31 @@ function DashboardContent() {
   const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+  const [switchPlanTarget, setSwitchPlanTarget] = useState<PlanDetails | null>(null);
+  const [switchSending, setSwitchSending] = useState(false);
+  const [switchSendError, setSwitchSendError] = useState("");
+  const [switchSent, setSwitchSent] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // fetchMe (initial load), pollForKey (post-checkout polling), and
+  // refreshUsage (manual refresh) all hit GET /api/developers/me
+  // independently and each used to overwrite `data` wholesale with whatever
+  // it got back. With no ordering guarantee between them, a slow response
+  // from an earlier call could land after a newer one and stomp fresher
+  // state with stale numbers (e.g. usage briefly regressing, or the just-
+  // revealed key flipping back to masked). requestSeq tags every outgoing
+  // call and setData calls only apply if their tag is still the latest.
+  const requestSeq = useRef(0);
+  const ackedKeyRef = useRef(false);
+
+  const applyIfLatest = useCallback((seq: number, d: MeData) => {
+    if (seq !== requestSeq.current) return; // a newer request has since started — drop this stale response
+    setData(d);
+  }, []);
+
   const fetchMe = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setDataLoading(true);
     try {
       // Transient 401s happen in clusters (same warm serverless instance
@@ -79,22 +117,23 @@ function DashboardContent() {
       }
       if (res.ok) {
         const d: MeData = await res.json();
-        setData(d);
+        applyIfLatest(seq, d);
       }
     } finally {
       setDataLoading(false);
     }
-  }, []);
+  }, [applyIfLatest]);
 
   // Poll after checkout until the key appears (webhook is async)
   const pollForKey = useCallback(() => {
     let attempts = 0;
     const poll = async () => {
       attempts++;
+      const seq = ++requestSeq.current;
       const res = await fetch("/api/developers/me");
       if (res.ok) {
         const d: MeData = await res.json();
-        setData(d);
+        applyIfLatest(seq, d);
         if (d.apiKey) return;
       }
       if (attempts < 8) {
@@ -102,7 +141,7 @@ function DashboardContent() {
       }
     };
     pollingRef.current = setTimeout(poll, 2000);
-  }, []);
+  }, [applyIfLatest]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -140,17 +179,31 @@ function DashboardContent() {
   }, [firebaseUser, sessionId, fetchMe, pollForKey]);
 
   async function refreshUsage() {
+    const seq = ++requestSeq.current;
     setUsageRefreshing(true);
     try {
       const res = await fetch("/api/developers/me");
       if (res.ok) {
         const d: MeData = await res.json();
+        if (seq !== requestSeq.current) return; // superseded by a newer request — drop
         setData((prev) => prev ? { ...prev, usage: d.usage } : d);
       }
     } finally {
       setUsageRefreshing(false);
     }
   }
+
+  // Once a plaintext key has actually rendered on screen, tell the server it's
+  // been shown so it can clear the one-time reveal — deliberately, exactly
+  // once, instead of as a side effect of every background /me read.
+  useEffect(() => {
+    if (data?.apiKey?.plainKeyTemp && !ackedKeyRef.current) {
+      ackedKeyRef.current = true;
+      fetch("/api/developers/ack-key-reveal", { method: "POST" }).catch(() => {
+        ackedKeyRef.current = false; // allow retry on the next render if the ack failed
+      });
+    }
+  }, [data?.apiKey?.plainKeyTemp]);
 
   async function handleSignOut() {
     await signOut();
@@ -159,7 +212,7 @@ function DashboardContent() {
   }
 
   async function regenerateKey() {
-    if (!window.confirm("This immediately invalidates your current key — anything using it will stop working. Continue?")) return;
+    ackedKeyRef.current = false; // the new key will need its own reveal acked once shown
     setRegenerating(true);
     try {
       const res = await fetch("/api/developers/regenerate-key", { method: "POST" });
@@ -178,11 +231,7 @@ function DashboardContent() {
     if (!firebaseUser) return;
     setBillingLoading(true);
     try {
-      const res = await fetch("/api/developers/billing-portal", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: firebaseUser.uid }),
-      });
+      const res = await fetch("/api/developers/billing-portal", { method: "POST" });
       const { url, error } = await res.json();
       if (url) window.location.href = url;
       else alert(error ?? "Could not open billing portal.");
@@ -198,7 +247,7 @@ function DashboardContent() {
       const res = await fetch("/api/developers/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: firebaseUser.uid, email: firebaseUser.email, plan }),
+        body: JSON.stringify({ plan }),
       });
       const { url, error } = await res.json();
       if (url) window.location.href = url;
@@ -292,7 +341,98 @@ function DashboardContent() {
           .db-wrap { padding: 24px 16px 60px; }
           .db-card-full { grid-column: 1; }
         }
+
+        .db-modal-overlay { position: fixed; inset: 0; background: rgba(17,24,39,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+        .db-modal { background: #fff; border-radius: 14px; padding: 28px; max-width: 400px; width: 100%; box-shadow: 0 20px 50px rgba(0,0,0,0.2); }
+        .db-modal h3 { margin: 0 0 10px; font-size: 17px; font-weight: 800; color: #111827; }
+        .db-modal p { margin: 0 0 22px; font-size: 14px; color: #6b7280; line-height: 1.5; }
+        .db-modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+        .db-modal-btn { padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; border: 1px solid #e5e7eb; background: #fff; color: #374151; }
+        .db-modal-btn:hover { background: #f3f4f6; }
+        .db-modal-btn.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+        .db-modal-btn.danger:hover { background: #b91c1c; }
+        .db-modal-btn.primary { background: #0052cc; border-color: #0052cc; color: #fff; }
+        .db-modal-btn.primary:hover { background: #003a99; }
+        .db-modal-wide { max-width: 460px; }
+        .db-modal-msg { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; color: #111827; margin-bottom: 18px; max-height: 240px; overflow-y: auto; }
       `}</style>
+
+      {switchPlanTarget && (
+        <div className="db-modal-overlay" onClick={() => setSwitchPlanTarget(null)}>
+          <div className="db-modal db-modal-wide" onClick={(e) => e.stopPropagation()}>
+            {switchSent ? (
+              <>
+                <h3>Request sent</h3>
+                <p>We&apos;ve got your request to switch to {switchPlanTarget.label} — our team will follow up by email shortly.</p>
+                <div className="db-modal-actions">
+                  <button className="db-modal-btn primary" onClick={() => setSwitchPlanTarget(null)}>Done</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3>Switch to {switchPlanTarget.label}</h3>
+                <p>Plan changes go through our team right now, not self-service. Send the request below and we&apos;ll follow up by email.</p>
+                <div className="db-modal-msg">
+                  {`Subject: ${switchPlanMessage(data, switchPlanTarget).subject}\n\n${switchPlanMessage(data, switchPlanTarget).body}`}
+                </div>
+                {switchSendError && <div className="signup-error" style={{ marginBottom: 16 }}>{switchSendError}</div>}
+                <div className="db-modal-actions">
+                  <button className="db-modal-btn" onClick={() => setSwitchPlanTarget(null)}>Cancel</button>
+                  <button
+                    className="db-modal-btn primary"
+                    disabled={switchSending}
+                    onClick={async () => {
+                      const { subject, body } = switchPlanMessage(data, switchPlanTarget);
+                      setSwitchSending(true);
+                      setSwitchSendError("");
+                      try {
+                        const res = await fetch("/api/developers/support-request", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ topic: "plan_change", subject, message: body }),
+                        });
+                        if (res.ok) {
+                          setSwitchSent(true);
+                        } else {
+                          const { error } = await res.json().catch(() => ({ error: null }));
+                          setSwitchSendError(error ?? "Could not send request. Please try again.");
+                        }
+                      } catch {
+                        setSwitchSendError("Could not send request. Please try again.");
+                      } finally {
+                        setSwitchSending(false);
+                      }
+                    }}
+                  >
+                    {switchSending ? "Sending…" : "Send request"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {confirmRegen && (
+        <div className="db-modal-overlay" onClick={() => setConfirmRegen(false)}>
+          <div className="db-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Regenerate API key?</h3>
+            <p>This immediately invalidates your current key — anything using it will stop working.</p>
+            <div className="db-modal-actions">
+              <button className="db-modal-btn" onClick={() => setConfirmRegen(false)}>Cancel</button>
+              <button
+                className="db-modal-btn danger"
+                onClick={() => {
+                  setConfirmRegen(false);
+                  regenerateKey();
+                }}
+              >
+                Regenerate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="db-wrap">
         {sessionId && (
@@ -327,14 +467,18 @@ function DashboardContent() {
               data.apiKey.plainKeyTemp ? (
                 <>
                   <div className="db-key-row">
-                    <span className="db-key-text">{data.apiKey.plainKeyTemp}</span>
+                    {/* The real value only ever leaves the client via the Copy
+                        button's clipboard write — it's never rendered as text,
+                        so it can't be shoulder-surfed or captured in a
+                        screenshot/recording. */}
+                    <span className="db-key-text">{maskedKey}</span>
                     <button
                       className={`db-key-btn${copied ? " success" : ""}`}
                       onClick={() => copyKey(data.apiKey!.plainKeyTemp!)}
                     >
                       {copied ? "Copied!" : "Copy"}
                     </button>
-                    <button className="db-key-btn" onClick={regenerateKey} disabled={regenerating}>
+                    <button className="db-key-btn" onClick={() => setConfirmRegen(true)} disabled={regenerating}>
                       {regenerating ? "Regenerating…" : "Regenerate"}
                     </button>
                   </div>
@@ -348,7 +492,7 @@ function DashboardContent() {
                 <>
                   <div className="db-key-row">
                     <span className="db-key-text">{maskedKey}</span>
-                    <button className="db-key-btn" onClick={regenerateKey} disabled={regenerating}>
+                    <button className="db-key-btn" onClick={() => setConfirmRegen(true)} disabled={regenerating}>
                       {regenerating ? "Regenerating…" : "Regenerate key"}
                     </button>
                   </div>
@@ -442,13 +586,36 @@ function DashboardContent() {
                     <div className="db-plan-price">{plan.price}</div>
                     <div className="db-plan-queries">{plan.queries}/mo</div>
                     <div className="db-plan-rate">{plan.rate}</div>
-                    <button
-                      className={`db-plan-btn ${isCurrent ? "db-plan-btn-disabled" : "db-plan-btn-outline"}`}
-                      disabled={isCurrent || !!checkoutLoading}
-                      onClick={() => !isCurrent && startCheckout(plan.planKey)}
-                    >
-                      {isCurrent ? "Current" : checkoutLoading === plan.planKey ? "Redirecting…" : currentPlanKey ? "Switch plan" : "Get started"}
-                    </button>
+                    {isCurrent ? (
+                      <button className="db-plan-btn db-plan-btn-disabled" disabled>Current</button>
+                    ) : currentPlanKey ? (
+                      // Plan changes aren't self-service yet — switching would
+                      // start a second Stripe subscription alongside the
+                      // existing one instead of replacing it. Route to support
+                      // until in-place, prorated plan changes are built.
+                      // Pre-fill the account's email/current plan/target plan
+                      // so support has everything needed to act. A bare
+                      // mailto: link silently does nothing when the browser
+                      // has no registered mail handler (common — e.g. Gmail
+                      // used via the web, not as the OS default) — so this
+                      // opens an in-app modal with the same content plus a
+                      // Copy button, and mailto is offered only as a bonus
+                      // shortcut for people who do have one configured.
+                      <button
+                        className="db-plan-btn db-plan-btn-outline"
+                        onClick={() => { setSwitchSent(false); setSwitchSendError(""); setSwitchPlanTarget(plan); }}
+                      >
+                        Contact us to switch
+                      </button>
+                    ) : (
+                      <button
+                        className="db-plan-btn db-plan-btn-outline"
+                        disabled={!!checkoutLoading}
+                        onClick={() => startCheckout(plan.planKey)}
+                      >
+                        {checkoutLoading === plan.planKey ? "Redirecting…" : "Get started"}
+                      </button>
+                    )}
                   </div>
                 );
               })}

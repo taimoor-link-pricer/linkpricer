@@ -13,6 +13,7 @@ const ADMIN_NAV = [
   { label: "Marketplaces", href: "/admin/marketplaces", icon: "🏪" },
   { label: "Domain Examples", href: "/admin/domain-examples", icon: "🔗" },
   { label: "Currency Rates", href: "/admin/currency-rates", icon: "💱" },
+  { label: "Support Tickets", href: ROUTES.adminSupportTickets, icon: "🎫" },
 ];
 
 const SUPER_ADMIN_NAV = [

@@ -75,9 +75,40 @@ export async function GET(
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // 3. Daily limit
-  const dailyUsed = k.usage_date === today ? (k.request_count ?? 0) : 0;
-  if (dailyUsed >= k.daily_limit) {
+  // 3. Normalize domain
+  const { domain: rawDomain } = await params;
+  const domain = normalizeDomain(decodeURIComponent(rawDomain));
+
+  if (!domain || domain.length < 3 || !domain.includes(".")) {
+    return jsonError("invalid_domain", "Domain parameter is missing or malformed.", 422);
+  }
+
+  // 4. Optional niche filter
+  const VALID_NICHES = ["standard", "gambling", "adult", "cbd", "loan", "dating", "crypto", "trading_forex"] as const;
+  type Niche = typeof VALID_NICHES[number];
+  const nicheParam = req.nextUrl.searchParams.get("niche");
+  if (nicheParam && !VALID_NICHES.includes(nicheParam as Niche)) {
+    return jsonError(
+      "invalid_niche",
+      `Invalid niche. Valid values are: ${VALID_NICHES.join(", ")}`,
+      422
+    );
+  }
+  const nicheFilter = nicheParam as Niche | null;
+
+  // 5. Daily limit — atomic check-and-increment. Previously the count was read
+  // once up front and only written back in `finally`, so concurrent requests
+  // could all pass the check before any of them incremented it (TOCTOU). This
+  // does both in one statement, serialized by Postgres's row lock on the key.
+  const dailyUpdate = await db.execute(sql`
+    UPDATE api_keys
+    SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
+        usage_date    = ${today}
+    WHERE id = ${k.id}
+      AND (usage_date IS DISTINCT FROM ${today} OR request_count < daily_limit)
+    RETURNING request_count
+  `);
+  if (!dailyUpdate.rows.length) {
     return jsonError(
       "rate_limit_exceeded",
       "Daily request limit reached. Resets at midnight UTC.",
@@ -86,7 +117,7 @@ export async function GET(
     );
   }
 
-  // 4. Per-minute limit
+  // 6. Per-minute limit
   const minuteRows = await db.execute(sql`
     SELECT COUNT(*) AS cnt
     FROM api_request_logs
@@ -103,27 +134,16 @@ export async function GET(
     );
   }
 
-  // 5. Normalize domain
-  const { domain: rawDomain } = await params;
-  const domain = normalizeDomain(decodeURIComponent(rawDomain));
-
-  if (!domain || domain.length < 3 || !domain.includes(".")) {
-    return jsonError("invalid_domain", "Domain parameter is missing or malformed.", 422);
-  }
-
-  // 6. Optional niche filter
-  const VALID_NICHES = ["standard", "gambling", "adult", "cbd", "loan", "dating", "crypto", "trading_forex"] as const;
-  type Niche = typeof VALID_NICHES[number];
-  const nicheParam = req.nextUrl.searchParams.get("niche");
-  if (nicheParam && !VALID_NICHES.includes(nicheParam as Niche)) {
-    return jsonError(
-      "invalid_niche",
-      `Invalid niche. Valid values are: ${VALID_NICHES.join(", ")}`,
-      422
-    );
-  }
-  const nicheFilter = nicheParam as Niche | null;
-  const showMarketplace = req.nextUrl.searchParams.get("showmarketplace") === "true";
+  // Reserve this request's log row now, before the downstream pricing work,
+  // so concurrent requests see it in their own per-minute count immediately —
+  // previously the log row was only written in `finally`, after all downstream
+  // work, leaving a wide window where concurrent requests undercounted.
+  const logInsert = await db.execute(sql`
+    INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
+    VALUES (${k.id}, ${k.user_id}, ${domain}, 0, 0)
+    RETURNING id
+  `);
+  const logId = logInsert.rows[0]?.id as string | undefined;
 
   let httpStatus = 200;
 
@@ -132,127 +152,81 @@ export async function GET(
     const toUsd = (amount: number, currency: string | null | undefined): number =>
       toUsdWithRates(amount, currency, rates) as number;
 
-    // 6. Check cache first
-    const cacheRows = await db.execute(sql`
+    // Query domains + marketplace_offers directly — no cache layer. This used
+    // to check `marketplace_price_cache` first (a 24h-TTL table fed by this
+    // same endpoint), but nothing else in the codebase ever reads or writes
+    // it, Analyze queries the same source tables live with no cache at all,
+    // and the cache was the reason a currency bug (see below) could persist
+    // for up to a day after being fixed at the source — dropping the layer
+    // removes that whole failure mode rather than just patching it once.
+    // One row per (domain_id, marketplace_name) — that pair is unique — so
+    // no GROUP BY is needed; each marketplace's own currency is read
+    // alongside its prices so every niche column can be converted to USD
+    // before any cross-marketplace comparison happens (previously this
+    // wasn't done at all — a raw EUR/GBP/etc. number was returned labeled
+    // "USD" outright).
+    const sourceRows = await db.execute(sql`
       SELECT
-        MIN(min_price::float)               AS standard_lowest,
-        MIN(gambling_min_price::float)      AS gambling_lowest,
-        MIN(adult_min_price::float)         AS adult_lowest,
-        MIN(cbd_min_price::float)           AS cbd_lowest,
-        MIN(loan_min_price::float)          AS loan_lowest,
-        MIN(dating_min_price::float)        AS dating_lowest,
-        MIN(crypto_min_price::float)        AS crypto_lowest,
-        MIN(trading_forex_min_price::float) AS forex_lowest,
-        MAX(fetched_at)                     AS last_updated
-      FROM marketplace_price_cache
-      WHERE domain = ${domain}
-        AND available = true
-        AND expires_at > NOW()
+        o.currency,
+        o.min_price::float              AS min_price,
+        o.gambling_min_price::float     AS gambling_min,
+        o.adult_min_price::float        AS adult_min,
+        o.cbd_min_price::float          AS cbd_min,
+        o.loan_min_price::float         AS loan_min,
+        o.dating_min_price::float       AS dating_min,
+        o.crypto_min_price::float       AS crypto_min,
+        o.trading_forex_min_price::float AS trading_forex_min
+      FROM domains d
+      JOIN marketplace_offers o ON o.domain_id = d.id
+      WHERE d.domain = ${domain}
+        AND o.available = true
     `);
 
-    const cached = cacheRows.rows[0] ?? null;
-    const cacheHit = cached?.last_updated != null && !showMarketplace;
-
-    // 7. If no cache, fetch from source tables
     let pr: Record<string, unknown> | null = null;
-    let lastUpdated: string | null = null;
 
-    if (cacheHit) {
-      pr = cached;
-      lastUpdated = cached.last_updated as string;
-    } else {
-      // Query domains + marketplace_offers (new scraper tables)
-      const sourceRows = await db.execute(sql`
-        SELECT
-          o.marketplace_name,
-          MIN(o.min_price::float)              AS min_price,
-          MIN(o.gambling_min_price::float)     AS gambling_min,
-          MIN(o.adult_min_price::float)        AS adult_min,
-          MIN(o.cbd_min_price::float)          AS cbd_min,
-          MIN(o.loan_min_price::float)         AS loan_min,
-          MIN(o.dating_min_price::float)       AS dating_min,
-          MIN(o.crypto_min_price::float)       AS crypto_min,
-          MIN(o.trading_forex_min_price::float) AS trading_forex_min
-        FROM domains d
-        JOIN marketplace_offers o ON o.domain_id = d.id
-        WHERE d.domain = ${domain}
-          AND o.available = true
-        GROUP BY o.marketplace_name
-      `);
+    if (sourceRows.rows.length > 0) {
+      const agg: Record<string, number | null> = {
+        standard_lowest: null,
+        gambling_lowest: null,
+        adult_lowest: null,
+        cbd_lowest: null,
+        loan_lowest: null,
+        dating_lowest: null,
+        crypto_lowest: null,
+        forex_lowest: null,
+      };
+      const pick = (cur: number | null, next: number | null) =>
+        next == null ? cur : cur == null || next < cur ? next : cur;
 
-      if (sourceRows.rows.length > 0) {
-        const agg: Record<string, number | null> = {
-          standard_lowest: null,
-          gambling_lowest: null,
-          adult_lowest: null,
-          cbd_lowest: null,
-          loan_lowest: null,
-          dating_lowest: null,
-          crypto_lowest: null,
-          forex_lowest: null,
+      for (const row of sourceRows.rows as any[]) {
+        const currency = row.currency as string | null;
+        const usd = (raw: unknown) => {
+          const n = toPrice(raw);
+          return n == null ? null : toUsd(n, currency);
         };
-        const marketplaceFor: Record<string, string | null> = {
-          standard_lowest: null,
-          gambling_lowest: null,
-          adult_lowest: null,
-          cbd_lowest: null,
-          loan_lowest: null,
-          dating_lowest: null,
-          crypto_lowest: null,
-          forex_lowest: null,
-        };
-
-        for (const row of sourceRows.rows as any[]) {
-          const pick = (key: string, cur: number | null, next: unknown) => {
-            const n = toPrice(next);
-            if (n == null) return cur;
-            if (cur == null || n < cur) { marketplaceFor[key] = row.marketplace_name; return n; }
-            return cur;
-          };
-          agg.standard_lowest  = pick("standard_lowest",  agg.standard_lowest,  row.min_price);
-          agg.gambling_lowest  = pick("gambling_lowest",  agg.gambling_lowest,  row.gambling_min);
-          agg.adult_lowest     = pick("adult_lowest",     agg.adult_lowest,     row.adult_min);
-          agg.cbd_lowest       = pick("cbd_lowest",       agg.cbd_lowest,       row.cbd_min);
-          agg.loan_lowest      = pick("loan_lowest",      agg.loan_lowest,      row.loan_min);
-          agg.dating_lowest    = pick("dating_lowest",    agg.dating_lowest,    row.dating_min);
-          agg.crypto_lowest    = pick("crypto_lowest",    agg.crypto_lowest,    row.crypto_min);
-          agg.forex_lowest     = pick("forex_lowest",     agg.forex_lowest,     row.trading_forex_min);
-        }
-
-        pr = { ...agg, ...Object.fromEntries(Object.entries(marketplaceFor).map(([k, v]) => [`${k}_mp`, v])) };
-        lastUpdated = new Date().toISOString();
-
-        // Write to cache asynchronously (one row per marketplace, 24h TTL)
-        for (const row of sourceRows.rows as any[]) {
-          db.execute(sql`
-            INSERT INTO marketplace_price_cache (
-              domain, marketplace_name, min_price, currency,
-              gambling_min_price, adult_min_price, cbd_min_price,
-              loan_min_price, dating_min_price, crypto_min_price,
-              trading_forex_min_price, available, fetched_at, expires_at
-            ) VALUES (
-              ${domain}, ${row.marketplace_name}, ${row.min_price}, 'USD',
-              ${row.gambling_min}, ${row.adult_min}, ${row.cbd_min},
-              ${row.loan_min}, ${row.dating_min}, ${row.crypto_min},
-              ${row.trading_forex_min}, true, NOW(), NOW() + INTERVAL '24 hours'
-            )
-            ON CONFLICT (domain, marketplace_name) DO UPDATE SET
-              min_price               = EXCLUDED.min_price,
-              currency                = EXCLUDED.currency,
-              gambling_min_price      = EXCLUDED.gambling_min_price,
-              adult_min_price         = EXCLUDED.adult_min_price,
-              cbd_min_price           = EXCLUDED.cbd_min_price,
-              loan_min_price          = EXCLUDED.loan_min_price,
-              dating_min_price        = EXCLUDED.dating_min_price,
-              crypto_min_price        = EXCLUDED.crypto_min_price,
-              trading_forex_min_price = EXCLUDED.trading_forex_min_price,
-              available               = true,
-              fetched_at              = NOW(),
-              expires_at              = NOW() + INTERVAL '24 hours'
-          `).catch(() => {});
-        }
+        // Base price for this offer — every niche falls back to this when
+        // the offer has no price set for that specific niche, exactly like
+        // Analyze's nichePrice(): a niche filter changes which number shows,
+        // it never hides an offer just because it lacks niche-specific
+        // pricing. Previously a niche column with no value was excluded
+        // from that niche's comparison entirely instead of falling back,
+        // which understated (or hid) how cheap a domain actually was for
+        // that niche.
+        const base = usd(row.min_price);
+        agg.standard_lowest = pick(agg.standard_lowest, base);
+        agg.gambling_lowest = pick(agg.gambling_lowest, usd(row.gambling_min) ?? base);
+        agg.adult_lowest    = pick(agg.adult_lowest,    usd(row.adult_min) ?? base);
+        agg.cbd_lowest       = pick(agg.cbd_lowest,      usd(row.cbd_min) ?? base);
+        agg.loan_lowest      = pick(agg.loan_lowest,     usd(row.loan_min) ?? base);
+        agg.dating_lowest    = pick(agg.dating_lowest,   usd(row.dating_min) ?? base);
+        agg.crypto_lowest    = pick(agg.crypto_lowest,   usd(row.crypto_min) ?? base);
+        agg.forex_lowest     = pick(agg.forex_lowest,    usd(row.trading_forex_min) ?? base);
       }
+
+      pr = agg;
     }
+
+    const lastUpdated = pr != null ? new Date().toISOString() : null;
 
     // 8. Domain metrics from new domains table
     const metricRows = await db.execute(sql`
@@ -273,24 +247,23 @@ export async function GET(
       return jsonError("domain_not_found", "No data found for this domain.", 404);
     }
 
-    const allPricing: Record<string, { price: number | null; mp: string | null }> = {
-      standard:      { price: toPrice(pr?.standard_lowest),  mp: (pr?.standard_lowest_mp as string) ?? null },
-      gambling:      { price: toPrice(pr?.gambling_lowest),  mp: (pr?.gambling_lowest_mp as string) ?? null },
-      adult:         { price: toPrice(pr?.adult_lowest),     mp: (pr?.adult_lowest_mp as string) ?? null },
-      cbd:           { price: toPrice(pr?.cbd_lowest),       mp: (pr?.cbd_lowest_mp as string) ?? null },
-      loan:          { price: toPrice(pr?.loan_lowest),      mp: (pr?.loan_lowest_mp as string) ?? null },
-      dating:        { price: toPrice(pr?.dating_lowest),    mp: (pr?.dating_lowest_mp as string) ?? null },
-      crypto:        { price: toPrice(pr?.crypto_lowest),    mp: (pr?.crypto_lowest_mp as string) ?? null },
-      trading_forex: { price: toPrice(pr?.forex_lowest),     mp: (pr?.forex_lowest_mp as string) ?? null },
+    const allPricing: Record<string, { price: number | null }> = {
+      standard:      { price: toPrice(pr?.standard_lowest) },
+      gambling:      { price: toPrice(pr?.gambling_lowest) },
+      adult:         { price: toPrice(pr?.adult_lowest) },
+      cbd:           { price: toPrice(pr?.cbd_lowest) },
+      loan:          { price: toPrice(pr?.loan_lowest) },
+      dating:        { price: toPrice(pr?.dating_lowest) },
+      crypto:        { price: toPrice(pr?.crypto_lowest) },
+      trading_forex: { price: toPrice(pr?.forex_lowest) },
     };
 
     const pricing = Object.fromEntries(
       Object.entries(allPricing)
         .filter(([k, { price }]) => price !== null && (!nicheFilter || k === nicheFilter))
-        .map(([k, { price, mp }]) => [k, {
+        .map(([k, { price }]) => [k, {
           lowest_price: price,
           our_price: ourPrice(price as number),
-          ...(showMarketplace ? { marketplace: mp } : {}),
           currency: "USD",
         }])
     );
@@ -318,20 +291,21 @@ export async function GET(
     const latencyMs = Date.now() - startMs;
     // Must be awaited — in a serverless function the execution context can be
     // frozen right after the response is returned, silently dropping any
-    // fire-and-forget writes (this previously left request_count/usage_date
-    // stuck at their defaults, so daily rate limiting never actually engaged).
-    await Promise.all([
+    // fire-and-forget writes. request_count/usage_date are already updated
+    // atomically above (step 5); this just fills in the reserved log row's
+    // final status/latency and bumps last_used_at.
+    const writes = [
       db.execute(sql`
-        INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
-        VALUES (${k.id}, ${k.user_id}, ${domain}, ${httpStatus}, ${latencyMs})
+        UPDATE api_keys SET last_used_at = NOW() WHERE id = ${k.id}
       `).catch(() => {}),
-      db.execute(sql`
-        UPDATE api_keys
-        SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
-            usage_date    = ${today},
-            last_used_at  = NOW()
-        WHERE id = ${k.id}
-      `).catch(() => {}),
-    ]);
+    ];
+    if (logId) {
+      writes.push(
+        db.execute(sql`
+          UPDATE api_request_logs SET http_status = ${httpStatus}, latency_ms = ${latencyMs} WHERE id = ${logId}
+        `).catch(() => {})
+      );
+    }
+    await Promise.all(writes);
   }
 }

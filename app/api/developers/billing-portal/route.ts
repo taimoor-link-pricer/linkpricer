@@ -4,14 +4,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { adminAuth } from "@/lib/firebase/admin";
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await req.json() as { userId: string };
+    // Read the cookie off the request directly — see /api/developers/me for why.
+    const sessionCookie = req.cookies.get("session")?.value;
+    if (!sessionCookie) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!userId) {
-      return NextResponse.json({ error: "Missing userId." }, { status: 400 });
-    }
+    const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
+    const userId = decoded.uid;
 
     const rows = await db.execute(sql`
       SELECT stripe_customer_id FROM users WHERE id = ${userId} LIMIT 1
@@ -23,7 +25,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No billing account found. Please subscribe first." }, { status: 404 });
     }
 
-    const origin = req.headers.get("origin") ?? "https://linkpricer.com";
+    const origin = req.headers.get("origin") ?? "https://linkpricer.ai";
 
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,

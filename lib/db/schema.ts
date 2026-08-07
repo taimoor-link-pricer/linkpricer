@@ -3,6 +3,15 @@ import { sql } from "drizzle-orm"
 
 
 
+export const stripeWebhookEvents = pgTable("stripe_webhook_events", {
+	id: varchar().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	stripeEventId: text("stripe_event_id").notNull(),
+	eventType: text("event_type"),
+	processedAt: timestamp("processed_at", { mode: 'string' }).defaultNow(),
+}, (table) => [
+	unique("stripe_webhook_events_stripe_event_id_unique").on(table.stripeEventId),
+]);
+
 export const apiRequestLogs = pgTable("api_request_logs", {
 	id: varchar().default(sql`gen_random_uuid()`).primaryKey().notNull(),
 	apiKeyId: varchar("api_key_id").notNull(),
@@ -420,41 +429,6 @@ export const apiClients = pgTable("api_clients", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	unique("api_clients_api_key_hash_key").on(table.apiKeyHash),
-]);
-
-export const marketplacePriceCache = pgTable("marketplace_price_cache", {
-	id: varchar().default(sql`gen_random_uuid()`).primaryKey().notNull(),
-	domain: text().notNull(),
-	marketplaceName: text("marketplace_name").notNull(),
-	marketplaceUrl: text("marketplace_url"),
-	minPrice: numeric("min_price", { precision: 10, scale:  2 }),
-	maxPrice: numeric("max_price", { precision: 10, scale:  2 }),
-	currency: text().default('USD').notNull(),
-	gamblingMinPrice: numeric("gambling_min_price", { precision: 10, scale:  2 }),
-	gamblingMaxPrice: numeric("gambling_max_price", { precision: 10, scale:  2 }),
-	adultMinPrice: numeric("adult_min_price", { precision: 10, scale:  2 }),
-	adultMaxPrice: numeric("adult_max_price", { precision: 10, scale:  2 }),
-	cbdMinPrice: numeric("cbd_min_price", { precision: 10, scale:  2 }),
-	cbdMaxPrice: numeric("cbd_max_price", { precision: 10, scale:  2 }),
-	loanMinPrice: numeric("loan_min_price", { precision: 10, scale:  2 }),
-	loanMaxPrice: numeric("loan_max_price", { precision: 10, scale:  2 }),
-	datingMinPrice: numeric("dating_min_price", { precision: 10, scale:  2 }),
-	datingMaxPrice: numeric("dating_max_price", { precision: 10, scale:  2 }),
-	cryptoMinPrice: numeric("crypto_min_price", { precision: 10, scale:  2 }),
-	cryptoMaxPrice: numeric("crypto_max_price", { precision: 10, scale:  2 }),
-	tradingForexMinPrice: numeric("trading_forex_min_price", { precision: 10, scale:  2 }),
-	tradingForexMaxPrice: numeric("trading_forex_max_price", { precision: 10, scale:  2 }),
-	available: boolean().default(true),
-	deliveryTimeDays: integer("delivery_time_days"),
-	qualityScore: integer("quality_score"),
-	fetchedAt: timestamp("fetched_at", { mode: 'string' }).defaultNow().notNull(),
-	expiresAt: timestamp("expires_at", { mode: 'string' }).notNull(),
-	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow(),
-	linkInsertionMinPrice: numeric("link_insertion_min_price", { precision: 10, scale:  2 }),
-	linkInsertionMaxPrice: numeric("link_insertion_max_price", { precision: 10, scale:  2 }),
-}, (table) => [
-	index("cache_expires_at_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamp_ops")),
-	uniqueIndex("domain_marketplace_cache_idx").using("btree", table.domain.asc().nullsLast().op("text_ops"), table.marketplaceName.asc().nullsLast().op("text_ops")),
 ]);
 
 export const apiKeys = pgTable("api_keys", {

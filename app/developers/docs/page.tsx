@@ -31,9 +31,9 @@ const RESPONSE_EXAMPLE = `{
   "domain": "techblog.com",
   "found": true,
   "pricing": {
-    "standard": { "lowest_price": 150.00, "currency": "USD" },
-    "gambling": { "lowest_price": 350.00, "currency": "USD" },
-    "crypto":   { "lowest_price": 480.00, "currency": "USD" }
+    "standard": { "lowest_price": 150.00, "our_price": 173.00, "currency": "USD" },
+    "gambling": { "lowest_price": 350.00, "our_price": 403.00, "currency": "USD" },
+    "crypto":   { "lowest_price": 480.00, "our_price": 552.00, "currency": "USD" }
   },
   "metrics": {
     "domain_rating":   45,
@@ -51,11 +51,11 @@ const ERROR_EXAMPLE = `{
 }`;
 
 const CURL_EXAMPLE = `curl -X GET \\
-  "https://linkpricer.com/api/v1/public/domains/techblog.com/pricing" \\
+  "https://linkpricer.ai/api/v1/public/domains/techblog.com/pricing" \\
   -H "x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"`;
 
 const JS_EXAMPLE = `const res = await fetch(
-  "https://linkpricer.com/api/v1/public/domains/techblog.com/pricing",
+  "https://linkpricer.ai/api/v1/public/domains/techblog.com/pricing",
   { headers: { "x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx" } }
 );
 const data = await res.json();
@@ -64,7 +64,7 @@ console.log(data.pricing.standard.lowest_price); // 150`;
 const PYTHON_EXAMPLE = `import requests
 
 response = requests.get(
-    "https://linkpricer.com/api/v1/public/domains/techblog.com/pricing",
+    "https://linkpricer.ai/api/v1/public/domains/techblog.com/pricing",
     headers={"x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"}
 )
 data = response.json()
@@ -164,7 +164,7 @@ export default function DocsPage() {
               The API is a simple REST interface. All responses are JSON. Authentication uses an API key passed in a request header.
             </p>
             <div className="docs-callout">
-              <strong>Base URL:</strong> <code className="docs-inline-code">https://linkpricer.com/api/v1/public</code>
+              <strong>Base URL:</strong> <code className="docs-inline-code">https://linkpricer.ai/api/v1/public</code>
             </div>
           </section>
 
@@ -221,6 +221,36 @@ export default function DocsPage() {
               </tbody>
             </table>
 
+            <h3 className="docs-h3">Query parameters</h3>
+            <table className="docs-table">
+              <thead>
+                <tr>
+                  <th>Parameter</th>
+                  <th>Type</th>
+                  <th>Required</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code className="docs-inline-code">niche</code></td>
+                  <td>string</td>
+                  <td>No</td>
+                  <td>
+                    Restrict the response to a single niche&apos;s pricing instead of all niches. One of{" "}
+                    <code className="docs-inline-code">standard</code>,{" "}
+                    <code className="docs-inline-code">gambling</code>,{" "}
+                    <code className="docs-inline-code">adult</code>,{" "}
+                    <code className="docs-inline-code">cbd</code>,{" "}
+                    <code className="docs-inline-code">loan</code>,{" "}
+                    <code className="docs-inline-code">dating</code>,{" "}
+                    <code className="docs-inline-code">crypto</code>,{" "}
+                    <code className="docs-inline-code">trading_forex</code>. Omit it to get every niche in one call.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
             <h3 className="docs-h3">Headers</h3>
             <table className="docs-table">
               <thead>
@@ -262,11 +292,15 @@ export default function DocsPage() {
                 {[
                   ["domain", "string", "The domain you queried."],
                   ["found", "boolean", "false if the domain exists in our DB but has no current pricing."],
-                  ["pricing.standard.lowest_price", "number | null", "Lowest standard guest post / link insert price in USD. null = no offer found."],
+                  ["pricing.standard.lowest_price", "number | null", "Lowest standard guest post / link insert price in USD, anonymized across marketplaces. null = no offer found."],
+                  ["pricing.standard.our_price", "number | null", "LinkPricer's own price to fulfill this placement directly (includes our margin over lowest_price). Present on every niche object."],
                   ["pricing.gambling.lowest_price", "number | null", "Lowest price for gambling-niche content."],
                   ["pricing.adult.lowest_price", "number | null", "Lowest price for adult-niche content."],
                   ["pricing.cbd.lowest_price", "number | null", "Lowest price for CBD-niche content."],
                   ["pricing.loan.lowest_price", "number | null", "Lowest price for loan/finance-niche content."],
+                  ["pricing.dating.lowest_price", "number | null", "Lowest price for dating-niche content."],
+                  ["pricing.crypto.lowest_price", "number | null", "Lowest price for crypto-niche content."],
+                  ["pricing.trading_forex.lowest_price", "number | null", "Lowest price for trading/forex-niche content."],
                   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],
                   ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic."],
                   ["metrics.ref_domains", "number | null", "Number of referring domains."],

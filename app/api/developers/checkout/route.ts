@@ -4,14 +4,38 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe, PLANS, type PlanKey } from "@/lib/stripe";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { adminAuth } from "@/lib/firebase/admin";
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json() as { userId: string; email: string; plan: PlanKey };
-    const { userId, email, plan } = body;
+    // Read the cookie off the request directly — see /api/developers/me for why.
+    const sessionCookie = req.cookies.get("session")?.value;
+    if (!sessionCookie) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!userId || !email || !plan || !PLANS[plan]) {
-      return NextResponse.json({ error: "Missing userId, email or plan." }, { status: 400 });
+    const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
+    const userId = decoded.uid;
+    const email = decoded.email ?? "";
+
+    const body = await req.json() as { plan: PlanKey };
+    const { plan } = body;
+
+    if (!email || !plan || !PLANS[plan]) {
+      return NextResponse.json({ error: "Missing email or plan." }, { status: 400 });
+    }
+
+    // Plan switching isn't supported yet — this endpoint only starts a fresh
+    // subscription, and doing that for someone who already has one creates a
+    // second active Stripe subscription (double billing, no proration)
+    // instead of changing the existing one. Block it here — not just in the
+    // UI — so a direct call can't create a duplicate either.
+    const existing = await db.execute(sql`
+      SELECT stripe_plan FROM users WHERE id = ${userId} LIMIT 1
+    `);
+    if (existing.rows[0]?.stripe_plan) {
+      return NextResponse.json(
+        { error: "You already have an active plan. Contact hello@linkpricer.com to switch plans." },
+        { status: 409 }
+      );
     }
 
     const planConfig = PLANS[plan];
@@ -41,7 +65,7 @@ export async function POST(req: NextRequest) {
       `);
     }
 
-    const origin = req.headers.get("origin") ?? "https://linkpricer.com";
+    const origin = req.headers.get("origin") ?? "https://linkpricer.ai";
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,

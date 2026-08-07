@@ -6,6 +6,19 @@ import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { PLANS, type PlanKey } from "@/lib/stripe";
 
+// Carries the caller's own API key (in plaintext, right after issuance) and
+// plan/usage data — every response from this route needs to bypass caching
+// entirely. It previously had no explicit Cache-Control, which left Next's
+// default (`public, max-age=0, must-revalidate`) in place: technically safe
+// against a spec-compliant cache reusing a *stale* copy, but still the wrong
+// directive for a per-user authenticated endpoint to be sending at all.
+function noStore(body: unknown, init?: { status?: number }) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: { "Cache-Control": "private, no-store" },
+  });
+}
+
 export async function GET(req: NextRequest) {
   try {
     // Read the cookie directly off the request instead of next/headers'
@@ -13,7 +26,7 @@ export async function GET(req: NextRequest) {
     // a cookie that's demonstrably present on the request (0 external calls,
     // no thrown error, just missing). req.cookies is a plain sync read.
     const session = req.cookies.get("session")?.value;
-    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!session) return noStore({ error: "Unauthorized" }, { status: 401 });
 
     const decoded = await adminAuth.verifySessionCookie(session, true);
     const userId = decoded.uid;
@@ -36,7 +49,15 @@ export async function GET(req: NextRequest) {
     const userRow = (userRows.rows ?? userRows)[0] as any;
     const keyRow = (keyRows.rows ?? keyRows)[0] as any;
 
-    if (!userRow) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    if (!userRow) return noStore({ error: "User not found" }, { status: 404 });
+
+    // This is a plain read now — no side effects. The plaintext key reveal is
+    // cleared explicitly by POST /api/developers/ack-key-reveal once the
+    // client has durably shown it, not as a side effect of every GET here.
+    // (This endpoint is polled repeatedly after checkout and hit again by
+    // manual "refresh usage" clicks; clearing state on a GET meant whichever
+    // of those calls happened to land first would silently blank the key for
+    // every later read.)
 
     // Monthly usage: count requests in current calendar month
     let monthlyUsed = 0;
@@ -60,7 +81,7 @@ export async function GET(req: NextRequest) {
     const planName = planInfo?.name ?? (isPartnerKey ? "Partner access" : null);
     const monthlyQuota = planInfo?.monthlyQuota ?? (isPartnerKey ? keyRow.daily_limit * 30 : null);
 
-    return NextResponse.json({
+    return noStore({
       user: {
         email: userRow.email,
         name: [userRow.first_name, userRow.last_name].filter(Boolean).join(" ") || null,
@@ -86,6 +107,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     console.error("[/api/developers/me]", err);
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return noStore({ error: "Unauthorized" }, { status: 401 });
   }
 }
