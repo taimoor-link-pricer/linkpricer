@@ -39,7 +39,7 @@ const RESPONSE_EXAMPLE = `{
     "domain_rating":   45,
     "organic_traffic": 12000,
     "ref_domains":     1200,
-    "country":         "US"
+    "country":         "United States"
   },
   "last_updated": "2026-06-20"
 }`;
@@ -304,7 +304,7 @@ export default function DocsPage() {
                   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],
                   ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic."],
                   ["metrics.ref_domains", "number | null", "Number of referring domains."],
-                  ["metrics.country", "string | null", "Primary traffic country (ISO 2-letter code)."],
+                  ["metrics.country", "string | null", "Primary traffic country, full name (e.g. \"United States\") — not an ISO code."],
                   ["last_updated", "string", "ISO date of the most recent price update."],
                 ].map(([field, type, desc]) => (
                   <tr key={field}>
