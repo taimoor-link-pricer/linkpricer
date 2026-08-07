@@ -86,6 +86,7 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
   const sortedOffers = [...domainData.offers].sort((a, b) => a.minPrice - b.minPrice);
   const offers = showAll ? sortedOffers : sortedOffers.slice(0, 3);
   const bestPrice = sortedOffers[0]?.minPrice ?? null;
+  const avgPrice = sortedOffers.length ? sortedOffers.reduce((sum, o) => sum + withFee(o.minPrice), 0) / sortedOffers.length : null;
 
   function typeIcon(type: string) {
     if (type === "API") return <span style={{ color: C.accent, fontWeight: 700, fontSize: 11 }}>⚡ API</span>;
@@ -107,6 +108,11 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{showAll ? "All marketplaces" : "Top 3 best prices"}</span>
           <span style={{ fontSize: 12, color: C.mute }}>{sortedOffers.length} marketplace{sortedOffers.length !== 1 ? "s" : ""} stock this domain</span>
+          {avgPrice != null && (
+            <span style={{ fontSize: 12, color: C.ink2, fontWeight: 700 }}>
+              Avg. price <span style={{ color: C.ink }}>{priceFmt(avgPrice, currency)}</span>
+            </span>
+          )}
         </div>
         <button onClick={() => setShowAll((v) => !v)} style={{ padding: "5px 12px", borderRadius: 7, border: `1.5px solid ${C.line}`, background: "rgba(15,22,32,0.04)", color: C.ink2, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
           {showAll ? "Show top 3" : `Show all (${sortedOffers.length})`}

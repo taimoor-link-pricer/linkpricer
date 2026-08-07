@@ -1,0 +1,55 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users collection — client-side profile mirror (source of truth is Postgres)
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Orders — mirror doc written server-side only (Admin SDK bypasses these
+    // rules), so `create` is closed to clients. Clients only ever read their
+    // own order and read/write its messages subcollection.
+    match /orders/{orderId} {
+      allow read: if isAuthenticated() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if false;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() &&
+          (get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid || isAdmin());
+        allow create: if isAuthenticated() &&
+          (get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid || isAdmin()) &&
+          request.resource.data.senderId == request.auth.uid &&
+          request.resource.data.body is string &&
+          request.resource.data.body.size() > 0 && request.resource.data.body.size() < 4000 &&
+          request.resource.data.keys().hasAll(['senderId', 'senderType', 'senderName', 'body', 'createdAt']);
+        allow update, delete: if false;
+      }
+    }
+
+    // Deny all other reads/writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

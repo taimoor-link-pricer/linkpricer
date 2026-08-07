@@ -88,20 +88,38 @@ export async function POST(req: NextRequest) {
   const sig = req.headers.get("stripe-signature");
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
+  if (!webhookSecret || !sig) {
+    console.error("[stripe/webhook] Missing STRIPE_WEBHOOK_SECRET or stripe-signature header — rejecting.");
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
+  }
+
   const rawBody = await req.text();
 
   let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+  } catch (err) {
+    console.error("[stripe/webhook] Signature verification failed:", err);
+    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+  }
 
-  if (webhookSecret && sig) {
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
-    } catch (err) {
-      console.error("[stripe/webhook] Signature verification failed:", err);
-      return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+  // Idempotency: Stripe guarantees at-least-once delivery. Record the event id
+  // first and bail out if we've already processed it, before touching any
+  // downstream state (e.g. re-issuing an API key on checkout.session.completed).
+  try {
+    const inserted = await db.execute(sql`
+      INSERT INTO stripe_webhook_events (stripe_event_id, event_type)
+      VALUES (${event.id}, ${event.type})
+      ON CONFLICT (stripe_event_id) DO NOTHING
+      RETURNING id
+    `);
+    if ((inserted.rows ?? inserted).length === 0) {
+      console.log(`[stripe/webhook] Duplicate delivery of ${event.id}, skipping.`);
+      return NextResponse.json({ received: true, duplicate: true });
     }
-  } else {
-    // No webhook secret configured — parse body directly (dev only)
-    event = JSON.parse(rawBody) as Stripe.Event;
+  } catch (err) {
+    console.error("[stripe/webhook] Idempotency check failed:", err);
+    return NextResponse.json({ error: "Idempotency check failed" }, { status: 500 });
   }
 
   try {

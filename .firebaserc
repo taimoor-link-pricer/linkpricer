@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "linkpricer-dev",
+    "dev": "linkpricer-dev",
+    "prod": "linkpricer-prod"
+  }
+}

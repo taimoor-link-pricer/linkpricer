@@ -8,10 +8,16 @@ import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS } from "@/lib/orders/types";
 import { computeOrderPricing, centsToAmount, OfferResolutionError, resolveOffer } from "@/lib/orders/pricing";
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { withOrderMetaExt } from "@/lib/orders/metadata";
+import { mirrorOrderToFirestore } from "@/lib/orders/firestore-mirror";
 
 export const dynamic = "force-dynamic";
 
 const itemSchema = z.object({
+  // Client-generated only when contentOption is "uploaded": the article file
+  // is uploaded straight to its final Storage path (order-uploads/orders/{id}/...)
+  // before this order row exists, so the id has to be minted client-side and
+  // threaded through here rather than left to the DB default.
+  id: z.string().uuid().optional(),
   domain: z.string().min(1),
   offerName: z.string().min(1),
   offerType: z.enum(["API", "Vendor", "DB"]),
@@ -181,6 +187,7 @@ export async function POST(req: NextRequest) {
       const [order] = await db
         .insert(orders)
         .values({
+          id: item.id,
           userId: user.uid,
           companyId: user.companyId ?? undefined,
           offerId: offer.offerId,
@@ -232,6 +239,13 @@ export async function POST(req: NextRequest) {
         orderOwnerUserId: user.uid,
         eventType: ORDER_EVENT_TYPES.statusChanged,
         metadata: eventMeta,
+      });
+
+      mirrorOrderToFirestore(order.id, {
+        userId: order.userId,
+        companyId: order.companyId,
+        domain: order.snapshotDomain,
+        title: order.articleTitle,
       });
 
       createdOrders.push(order);

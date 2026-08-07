@@ -1,0 +1,33 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Article uploads are written directly to their final, order-scoped path
+    // by the client at "Place order" time — before the order row exists —
+    // so ownership is proven by the uploader's own uid in the path itself,
+    // not by looking up order ownership (which doesn't exist yet). If the
+    // order-creation call that follows never succeeds, the file is simply
+    // unreferenced by anything: still locked to its uploader, never
+    // orphaned in a way that costs more than the object itself.
+    match /order-uploads/orders/{orderId}/{uid}/{fileName} {
+      allow write: if isAuthenticated() && request.auth.uid == uid &&
+        request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('application/.*|text/.*');
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

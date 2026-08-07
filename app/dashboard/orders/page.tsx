@@ -13,6 +13,9 @@
 // sequencing there is still undecided — "you figure out what's best").
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { collection, addDoc, onSnapshot, orderBy, query, serverTimestamp, Timestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase/client";
+import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import type { ClientOrderAction } from "@/lib/orders/types";
@@ -114,16 +117,65 @@ function fmtSize(b: number) {
 }
 
 function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { type: "admin", text: "Hi! How can we help with your order?", time: "May 19, 2:15 PM" },
-    { type: "client", text: "Just checking on the status", time: "May 19, 2:30 PM" },
-  ]);
+  const { profile } = useAuthContext();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [ready, setReady] = useState(false);
+  const [chatError, setChatError] = useState("");
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadErr, setUploadErr] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const MAX_FILES = 2;
   const MAX_BYTES = 10 * 1024 * 1024;
+
+  // Ensure the Firestore orders/{id} mirror doc exists (self-heals orders
+  // placed before real-time chat existed), then attach a live listener on
+  // its messages subcollection. Real-time, not polling — Firestore pushes
+  // new messages to every open tab the moment either side sends one.
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/orders/${order.id}/chat-init`, { method: "POST" });
+        if (!res.ok) throw new Error("chat-init failed");
+        if (cancelled) return;
+
+        const q = query(collection(db, "orders", order.id, "messages"), orderBy("createdAt", "asc"));
+        unsubscribe = onSnapshot(
+          q,
+          (snap) => {
+            const next: ChatMessage[] = snap.docs.map((d) => {
+              const data = d.data() as { senderType: "admin" | "client"; body: string; createdAt: Timestamp | null };
+              const ts = data.createdAt?.toDate();
+              return {
+                type: data.senderType,
+                text: data.body,
+                time: ts ? ts.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "Sending…",
+              };
+            });
+            setMessages(next);
+            setReady(true);
+          },
+          (err) => {
+            console.error("[ChatModal] onSnapshot", err);
+            setChatError("Couldn't load messages. Try closing and reopening this chat.");
+            setReady(true);
+          }
+        );
+      } catch (err) {
+        console.error("[ChatModal] chat-init", err);
+        setChatError("Couldn't open this chat. Try again in a moment.");
+        setReady(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [order.id]);
 
   function addFiles(fileList: FileList | null) {
     const incoming = Array.from(fileList ?? []);
@@ -148,12 +200,26 @@ function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
       return prev.filter((a) => a.id !== id);
     });
   }
-  function handleSend() {
-    if (inputValue.trim() || attachments.length) {
-      setMessages((prev) => [...prev, { type: "client", text: inputValue.trim(), files: attachments, time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) }]);
-      setInputValue("");
-      setAttachments([]);
-      setUploadErr("");
+  async function handleSend() {
+    const text = inputValue.trim();
+    if (!text || !profile) return;
+    // Attachments aren't wired to real storage yet — dropped from the
+    // persisted message rather than saving a blob URL that 404s for anyone
+    // else who opens this chat. Text-only for this pass.
+    setInputValue("");
+    setAttachments([]);
+    setUploadErr("");
+    try {
+      await addDoc(collection(db, "orders", order.id, "messages"), {
+        senderId: profile.uid,
+        senderType: "client",
+        senderName: profile.displayName || profile.email || "Client",
+        body: text,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("[ChatModal] send failed", err);
+      setChatError("Message didn't send. Check your connection and try again.");
     }
   }
 
@@ -168,6 +234,11 @@ function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${C.line}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.mute2 }}><Icon name="x" size={18} /></button>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {!ready && <div style={{ fontSize: 12, color: C.mute, textAlign: "center" }}>Loading messages…</div>}
+          {chatError && <div style={{ fontSize: 12, color: "#dc2626", textAlign: "center" }}>{chatError}</div>}
+          {ready && !chatError && messages.length === 0 && (
+            <div style={{ fontSize: 12, color: C.mute, textAlign: "center" }}>No messages yet — say hello.</div>
+          )}
           {messages.map((msg, idx) => (
             <div key={idx} style={{ display: "flex", justifyContent: msg.type === "client" ? "flex-end" : "flex-start" }}>
               <div style={{ maxWidth: "70%", padding: "12px 16px", borderRadius: 12, background: msg.type === "client" ? C.accent : C.bg3, color: msg.type === "client" ? "#fff" : C.ink2 }}>

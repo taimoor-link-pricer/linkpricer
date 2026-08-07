@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { getStorage, type FirebaseStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
@@ -24,3 +25,4 @@ function getFirebaseApp() {
 // real user interaction, never during SSR/prerendering.
 export const auth = typeof window !== "undefined" ? getAuth(getFirebaseApp()) : (undefined as unknown as Auth);
 export const db = typeof window !== "undefined" ? getFirestore(getFirebaseApp()) : (undefined as unknown as Firestore);
+export const storage = typeof window !== "undefined" ? getStorage(getFirebaseApp()) : (undefined as unknown as FirebaseStorage);

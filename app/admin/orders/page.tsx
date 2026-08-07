@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { collection, addDoc, onSnapshot, orderBy, query, serverTimestamp, Timestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import { ORDER_STATUSES, type OrderStatus } from "@/lib/orders/types";
@@ -231,7 +233,7 @@ function IndexedBadge({ indexed }: { indexed?: boolean | null }) {
 }
 
 function OrderRow({
-  order, onStatusChange, onEditUrl, onEditNotes, onStartMonitor, onViewDetails,
+  order, onStatusChange, onEditUrl, onEditNotes, onStartMonitor, onViewDetails, onOpenChat,
 }: {
   order: AdminOrder;
   onStatusChange: (id: string, s: OrderStatus) => void;
@@ -239,6 +241,7 @@ function OrderRow({
   onEditNotes: (id: string) => void;
   onStartMonitor: (id: string) => void;
   onViewDetails: (id: string) => void;
+  onOpenChat: (id: string) => void;
 }) {
   const [hover, setHover] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -357,6 +360,9 @@ function OrderRow({
           <IconBtn tooltip="Start monitoring" onClick={() => onStartMonitor(order.id)}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           </IconBtn>
+          <IconBtn tooltip="Chat with client" onClick={() => onOpenChat(order.id)}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </IconBtn>
         </div>
       </td>
     </tr>
@@ -423,6 +429,126 @@ function DetailsModal({ order, onClose }: { order: AdminOrder; onClose: () => vo
   );
 }
 
+interface AdminChatMessage {
+  senderType: "admin" | "client";
+  senderName: string;
+  body: string;
+  time: string;
+}
+
+function AdminChatModal({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
+  const { profile } = useAuthContext();
+  const [messages, setMessages] = useState<AdminChatMessage[]>([]);
+  const [ready, setReady] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [inputValue, setInputValue] = useState("");
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/orders/${order.id}/chat-init`, { method: "POST" });
+        if (!res.ok) throw new Error("chat-init failed");
+        if (cancelled) return;
+
+        const q = query(collection(db, "orders", order.id, "messages"), orderBy("createdAt", "asc"));
+        unsubscribe = onSnapshot(
+          q,
+          (snap) => {
+            const next: AdminChatMessage[] = snap.docs.map((d) => {
+              const data = d.data() as { senderType: "admin" | "client"; senderName: string; body: string; createdAt: Timestamp | null };
+              const ts = data.createdAt?.toDate();
+              return {
+                senderType: data.senderType,
+                senderName: data.senderName,
+                body: data.body,
+                time: ts ? ts.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "Sending…",
+              };
+            });
+            setMessages(next);
+            setReady(true);
+          },
+          (err) => {
+            console.error("[AdminChatModal] onSnapshot", err);
+            setChatError("Couldn't load messages. Try closing and reopening this chat.");
+            setReady(true);
+          }
+        );
+      } catch (err) {
+        console.error("[AdminChatModal] chat-init", err);
+        setChatError("Couldn't open this chat. Try again in a moment.");
+        setReady(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [order.id]);
+
+  async function handleSend() {
+    const text = inputValue.trim();
+    if (!text || !profile) return;
+    setInputValue("");
+    try {
+      await addDoc(collection(db, "orders", order.id, "messages"), {
+        senderId: profile.uid,
+        senderType: "admin",
+        senderName: profile.displayName || profile.email || "Linkpricer team",
+        body: text,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("[AdminChatModal] send failed", err);
+      setChatError("Message didn't send. Check your connection and try again.");
+    }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 640, height: "75vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 60px rgba(15,23,42,0.2)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #e8eaed", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#111827" }}>Chat: {order.domain}</div>
+            <div style={{ fontSize: 12, color: "#9ca3af" }}>{order.clientEmail} · {order.articleTitle}</div>
+          </div>
+          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: 7, border: "1px solid #e8eaed", background: "#fff", cursor: "pointer" }}>×</button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {!ready && <div style={{ fontSize: 12, color: "#9ca3af", textAlign: "center" }}>Loading messages…</div>}
+          {chatError && <div style={{ fontSize: 12, color: "#dc2626", textAlign: "center" }}>{chatError}</div>}
+          {ready && !chatError && messages.length === 0 && (
+            <div style={{ fontSize: 12, color: "#9ca3af", textAlign: "center" }}>No messages yet.</div>
+          )}
+          {messages.map((msg, idx) => (
+            <div key={idx} style={{ display: "flex", justifyContent: msg.senderType === "admin" ? "flex-end" : "flex-start" }}>
+              <div style={{ maxWidth: "70%", padding: "10px 14px", borderRadius: 12, background: msg.senderType === "admin" ? "#0052cc" : "#f3f4f6", color: msg.senderType === "admin" ? "#fff" : "#111827" }}>
+                {msg.senderType === "client" && <div style={{ fontSize: 10.5, fontWeight: 700, color: "#6b7280", marginBottom: 2 }}>{msg.senderName}</div>}
+                <div style={{ fontSize: 13 }}>{msg.body}</div>
+                <div style={{ fontSize: 10, marginTop: 4, color: msg.senderType === "admin" ? "rgba(255,255,255,0.75)" : "#9ca3af" }}>{msg.time}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ borderTop: "1px solid #e8eaed", padding: "12px 20px", display: "flex", gap: 10, background: "#f9fafb" }}>
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            placeholder="Reply to this customer…"
+            style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: "1px solid #e8eaed", fontSize: 13, color: "#111827" }}
+          />
+          <button onClick={handleSend} style={{ padding: "10px 16px", borderRadius: 8, background: "#0052cc", color: "#fff", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminOrdersPage() {
   const { loading: authLoading } = useAuthContext();
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
@@ -431,6 +557,7 @@ export default function AdminOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -544,6 +671,7 @@ export default function AdminOrdersPage() {
   ];
 
   const detailsOrder = detailsId ? orders.find(o => o.id === detailsId) ?? null : null;
+  const chatOrder = chatId ? orders.find(o => o.id === chatId) ?? null : null;
 
   return (
     <>
@@ -555,6 +683,7 @@ export default function AdminOrdersPage() {
       <div className="admin-orders-page">
 
         {detailsOrder && <DetailsModal order={detailsOrder} onClose={() => setDetailsId(null)} />}
+        {chatOrder && <AdminChatModal order={chatOrder} onClose={() => setChatId(null)} />}
 
         {/* Page header */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
@@ -654,6 +783,7 @@ export default function AdminOrdersPage() {
                       onEditNotes={handleEditNotes}
                       onStartMonitor={handleStartMonitor}
                       onViewDetails={setDetailsId}
+                      onOpenChat={setChatId}
                     />
                   ))}
                 </tbody>

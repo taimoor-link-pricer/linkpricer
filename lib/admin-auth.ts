@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { adminAuth } from "@/lib/firebase/admin";
+import { adminAuth, adminDb } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -19,6 +19,16 @@ export async function requireAdminSession(): Promise<{ uid: string } | null> {
       .limit(1);
 
     if (!result[0] || result[0].role !== "vendor") return null;
+
+    // Self-heal the Firestore users/{uid} mirror doc so Firestore security
+    // rules (isAdmin()) recognize this vendor as an admin — Postgres stays
+    // the source of truth for the role itself. Fire-and-forget: never block
+    // or fail admin auth on a Firestore hiccup.
+    adminDb
+      .collection("users")
+      .doc(decoded.uid)
+      .set({ role: "admin" }, { merge: true })
+      .catch((err) => console.error("[requireAdminSession] Firestore role sync failed", err));
 
     return { uid: decoded.uid };
   } catch {
