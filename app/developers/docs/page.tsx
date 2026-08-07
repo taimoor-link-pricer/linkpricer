@@ -46,7 +46,7 @@ const RESPONSE_EXAMPLE = `{
 
 const ERROR_EXAMPLE = `{
   "error": "domain_not_found",
-  "message": "No pricing data found for this domain",
+  "message": "No data found for this domain.",
   "status": 404
 }`;
 
