@@ -29,6 +29,18 @@ export type PriceType = (typeof PRICE_TYPES)[number];
 export const CONTENT_OPTIONS = ["provided", "uploaded", "url"] as const;
 export type ContentOption = (typeof CONTENT_OPTIONS)[number];
 
+// Single source of truth for the "Linkpricer writes it" content fee — used
+// server-side (lib/orders/pricing.ts, the actual charge) and client-side
+// (the checkout estimate) so the two can't drift the way they used to
+// (checkout hardcoded a flat $120 while the real charge was wordCount * 5
+// cents = $37.50 for the same 750-word default). No DB import here, so this
+// stays safe to pull into a "use client" page.
+export const CONTENT_PRICE_PER_WORD_CENTS = 5;
+export const DEFAULT_CONTENT_WORD_COUNT = 750;
+export function contentPriceCents(wordCount: number): number {
+  return Math.round(wordCount * CONTENT_PRICE_PER_WORD_CENTS);
+}
+
 export const ORDER_TYPES = ["managed", "direct"] as const;
 export type OrderTypeValue = (typeof ORDER_TYPES)[number];
 

@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { orders } from "@/lib/db/schema";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/get-current-user";
-import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS } from "@/lib/orders/types";
+import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS, DEFAULT_CONTENT_WORD_COUNT } from "@/lib/orders/types";
 import { computeOrderPricing, centsToAmount, OfferResolutionError, resolveOffer } from "@/lib/orders/pricing";
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { withOrderMetaExt } from "@/lib/orders/metadata";
@@ -212,7 +212,7 @@ export async function POST(req: NextRequest) {
           ),
           priceCapturedAt: new Date().toISOString(),
           contentOption: item.contentOption,
-          wordCount: item.contentOption === "provided" ? item.wordCount ?? 750 : null,
+          wordCount: item.contentOption === "provided" ? item.wordCount ?? DEFAULT_CONTENT_WORD_COUNT : null,
           contentPrice: centsToAmount(pricing.contentPriceCents),
           uploadedFileName: item.uploadedFileName,
           originalFileName: item.originalFileName,

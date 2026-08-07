@@ -11,6 +11,7 @@ import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/desi
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
+import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT } from "@/lib/orders/types";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -1367,6 +1368,12 @@ type BriefItem = CartItem & {
 const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 const UPLOAD_ACCEPT_EXT = [".docx", ".md", ".pdf"];
 
+// Same formula the server actually charges (lib/orders/pricing.ts) — was
+// hardcoded to 120 here before, independent of the real $37.50 charge for
+// the same 750-word default, so the checkout estimate never matched the
+// eventual invoice.
+const CONTENT_FEE_USD = contentPriceCents(DEFAULT_CONTENT_WORD_COUNT) / 100;
+
 // Shape of a row returned by POST /api/orders — enough fields to build a
 // real receipt client-side, no separate receipt endpoint needed.
 type PlacedOrder = {
@@ -1385,7 +1392,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 }) {
   const { profile } = useAuthContext();
   const [items, setItems] = useState<BriefItem[]>(() =>
-    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: 120, selectedFile: null, uploadError: null }))
+    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: CONTENT_FEE_USD, selectedFile: null, uploadError: null }))
   );
   const [expandedIdx, setExpandedIdx] = useState(0);
   const [placing, setPlacing] = useState(false);
@@ -1476,7 +1483,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
             contentNiche: i.niche || undefined,
             contentTone: i.tone || undefined,
             contentOption: i.contentMode === "linkpricer" ? "provided" : i.contentMode === "upload" ? "uploaded" : "url",
-            wordCount: i.contentMode === "linkpricer" ? 750 : undefined,
+            wordCount: i.contentMode === "linkpricer" ? DEFAULT_CONTENT_WORD_COUNT : undefined,
             requirements: i.contentMode === "linkpricer" ? i.brief : undefined,
             articleUrl: i.contentMode === "url" ? i.articleUrl : undefined,
             uploadedFileName: uploadResults.get(idx)?.uploadedFileName,
@@ -1595,7 +1602,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                       <div>
                         <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Who writes the article?</label>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: "+$120 · 750 words", cp: 120 }, { mode: "upload", title: "I'll upload content", sub: "Free · .docx, .md, .pdf", cp: 0 }].map(opt => (
+                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${CONTENT_FEE_USD.toFixed(2)} · ${DEFAULT_CONTENT_WORD_COUNT} words`, cp: CONTENT_FEE_USD }, { mode: "upload", title: "I'll upload content", sub: "Free · .docx, .md, .pdf", cp: 0 }].map(opt => (
                             <button key={opt.mode} onClick={() => change(i, { contentMode: opt.mode as BriefItem["contentMode"], contentPrice: opt.cp })} style={{ padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === opt.mode ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === opt.mode ? C.accent : C.line}` }}>
                               <div style={{ fontWeight: 700, fontSize: 12.5, color: item.contentMode === opt.mode ? C.accent : C.ink2 }}>{opt.title}</div>
                               <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>{opt.sub}</div>

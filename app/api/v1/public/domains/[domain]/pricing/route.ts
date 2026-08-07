@@ -35,6 +35,15 @@ function jsonError(code: string, message: string, status: number, extra?: Record
   );
 }
 
+// The daily limit resets at midnight UTC, not exactly 24h from whenever this
+// request happened to land — a key that trips the limit at 23:59 UTC should
+// get Retry-After: 60, not a flat 86400 implying a near-full day left.
+function secondsUntilMidnightUtc(): number {
+  const now = new Date();
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0);
+  return Math.max(1, Math.round((next - now.getTime()) / 1000));
+}
+
 // ─── route ─────────────────────────────────────────────────────────────────
 
 export async function GET(
@@ -113,7 +122,7 @@ export async function GET(
       "rate_limit_exceeded",
       "Daily request limit reached. Resets at midnight UTC.",
       429,
-      { "Retry-After": "86400" }
+      { "Retry-After": String(secondsUntilMidnightUtc()) }
     );
   }
 

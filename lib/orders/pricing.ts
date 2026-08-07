@@ -2,6 +2,8 @@ import { db } from "@/lib/db";
 import { domains, marketplaceOffers, supplierOffers, users } from "@/lib/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import type { PriceType } from "./types";
+import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT } from "./types";
+import { getUsdRates, toUsd } from "@/lib/currency";
 
 export type ResolvedOffer = {
   offerId: string;
@@ -21,6 +23,21 @@ export class OfferResolutionError extends Error {}
 
 function normalizeDomain(raw: string): string {
   return raw.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").trim();
+}
+
+// Marketplace offers are stored in whatever currency the marketplace quotes
+// (EUR, GBP, ...), but Analyze and the public pricing API both convert to
+// USD before ever showing a customer a number — checkout's "$" estimate is
+// built from those already-converted figures. This re-resolves the same
+// offer from scratch for the actual charge, so it has to convert here too,
+// or the order ends up persisted (and invoiced) in the marketplace's raw
+// currency while every price the customer saw was USD.
+function usdStr(raw: string | null, currency: string, rates: Record<string, number>): string | null {
+  if (raw == null) return null;
+  const n = parseFloat(raw);
+  if (Number.isNaN(n)) return null;
+  const usd = toUsd(n, currency, rates);
+  return usd == null ? null : usd.toFixed(2);
 }
 
 // Never trust a price sent by the client — the cart only carries a display preview.
@@ -70,25 +87,26 @@ export async function resolveOffer(params: {
     }
 
     const o = match.offer;
+    const rates = await getUsdRates();
     return {
       offerId: o.id,
       marketplaceName: params.offerName,
       marketplaceUrl: null,
-      currency: o.currency,
+      currency: "USD",
       showPrice: true,
       deliveryTimeDays: o.deliveryTimeDays,
       qualityScore: null,
       requirements: o.notes,
-      minPrice: o.minPrice,
+      minPrice: usdStr(o.minPrice, o.currency, rates),
       priceByType: {
-        base: o.minPrice,
-        gambling: o.gamblingMinPrice,
-        adult: o.adultMinPrice,
-        cbd: o.cbdMinPrice,
-        loan: o.loanMinPrice,
-        dating: o.datingMinPrice,
-        crypto: o.cryptoMinPrice,
-        tradingForex: o.tradingForexMinPrice,
+        base: usdStr(o.minPrice, o.currency, rates),
+        gambling: usdStr(o.gamblingMinPrice, o.currency, rates),
+        adult: usdStr(o.adultMinPrice, o.currency, rates),
+        cbd: usdStr(o.cbdMinPrice, o.currency, rates),
+        loan: usdStr(o.loanMinPrice, o.currency, rates),
+        dating: usdStr(o.datingMinPrice, o.currency, rates),
+        crypto: usdStr(o.cryptoMinPrice, o.currency, rates),
+        tradingForex: usdStr(o.tradingForexMinPrice, o.currency, rates),
       },
       domain: domainRow ?? { id: null, domain },
     };
@@ -112,25 +130,26 @@ export async function resolveOffer(params: {
   if (!row) throw new OfferResolutionError(`Marketplace offer not found for ${domain} / ${params.offerName}`);
 
   const o = row.offer;
+  const rates = await getUsdRates();
   return {
     offerId: o.id,
     marketplaceName: o.marketplaceName,
     marketplaceUrl: o.marketplaceUrl,
-    currency: o.currency,
+    currency: "USD",
     showPrice: o.showPrice,
     deliveryTimeDays: o.deliveryTimeDays,
     qualityScore: o.qualityScore,
     requirements: o.requirements,
-    minPrice: o.minPrice,
+    minPrice: usdStr(o.minPrice, o.currency, rates),
     priceByType: {
-      base: o.minPrice,
-      gambling: o.gamblingMinPrice,
-      adult: o.adultMinPrice,
-      cbd: o.cbdMinPrice,
-      loan: o.loanMinPrice,
-      dating: o.datingMinPrice,
-      crypto: o.cryptoMinPrice,
-      tradingForex: o.tradingForexMinPrice,
+      base: usdStr(o.minPrice, o.currency, rates),
+      gambling: usdStr(o.gamblingMinPrice, o.currency, rates),
+      adult: usdStr(o.adultMinPrice, o.currency, rates),
+      cbd: usdStr(o.cbdMinPrice, o.currency, rates),
+      loan: usdStr(o.loanMinPrice, o.currency, rates),
+      dating: usdStr(o.datingMinPrice, o.currency, rates),
+      crypto: usdStr(o.cryptoMinPrice, o.currency, rates),
+      tradingForex: usdStr(o.tradingForexMinPrice, o.currency, rates),
     },
     domain: { id: row.domain.id, domain: row.domain.domain },
   };
@@ -156,14 +175,14 @@ export function computeOrderPricing(params: {
   const selectedBasePrice = rawPrice ? parseFloat(rawPrice) : 0;
   const selectedBasePriceCents = Math.round(selectedBasePrice * 100);
 
-  const contentPriceCents =
-    params.contentOption === "provided" ? Math.round((params.wordCount ?? 750) * 5) : 0;
+  const contentCents =
+    params.contentOption === "provided" ? contentPriceCents(params.wordCount ?? DEFAULT_CONTENT_WORD_COUNT) : 0;
 
-  const subtotalCents = selectedBasePriceCents + contentPriceCents;
+  const subtotalCents = selectedBasePriceCents + contentCents;
   const managementFeeCents = params.orderType === "managed" ? Math.round(subtotalCents * 0.15) : 0;
   const totalCents = subtotalCents + managementFeeCents;
 
-  return { selectedBasePriceCents, contentPriceCents, managementFeeCents, totalCents };
+  return { selectedBasePriceCents, contentPriceCents: contentCents, managementFeeCents, totalCents };
 }
 
 export function centsToAmount(cents: number): string {
