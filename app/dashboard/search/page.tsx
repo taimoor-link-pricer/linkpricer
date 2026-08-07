@@ -2,12 +2,15 @@
 
 import React, { useState, Suspense, useRef, useEffect } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
+import { ref as storageRef, uploadBytes } from "firebase/storage";
+import { storage } from "@/lib/firebase/client";
 import { ProfileMenu } from "@/components/dashboard/profile-menu";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import type { PriceType } from "@/lib/orders/types";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -214,11 +217,36 @@ type CartItem = {
   traffic: number;
   offerName: string;
   offerType: "API" | "Vendor" | "DB";
-  price: number; // raw USD, pre-fee
+  price: number; // raw USD, pre-fee — already resolved for `priceType` via /api/analyze's niche param
+  priceType: PriceType; // which price column this `price` came from — sent to /api/orders so the
+  // server re-derives the SAME column instead of silently defaulting to "base" (see nicheToPriceType)
   delivery: number;
   link: string;
   orderType: "managed" | "direct";
 };
+
+// Maps the Analyze page's pricing-niche selector (its own id space, matching
+// /api/analyze's NICHE_COLUMNS) to the order backend's PriceType enum
+// (lib/orders/types.ts) — these were built as two disconnected id spaces
+// (igaming/loans/forex vs gambling/loan/tradingForex) with no shared mapping
+// anywhere, which is how an order's actual priceType silently stayed "base"
+// regardless of the niche a customer searched and was quoted under.
+// "insertion" has no PriceType counterpart at all (the orders schema was
+// never extended for link-insertion pricing) — falls back to "base" like
+// "general" does; there's no way to correctly charge a link-insertion price
+// through checkout yet.
+function nicheToPriceType(niche: string): PriceType {
+  switch (niche) {
+    case "igaming": return "gambling";
+    case "adult": return "adult";
+    case "cbd": return "cbd";
+    case "loans": return "loan";
+    case "dating": return "dating";
+    case "crypto": return "crypto";
+    case "forex": return "tradingForex";
+    default: return "base"; // "general" and "insertion" (no PriceType support yet)
+  }
+}
 
 // ─── ExpandedPanel ────────────────────────────────────────────────────────────
 function ExpandedPanel({
@@ -228,12 +256,13 @@ function ExpandedPanel({
 }: {
   domainData: Domain;
   currency: Currency;
-  onAddToCart: (item: CartItem) => void;
+  onAddToCart: (item: Omit<CartItem, "priceType">) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
   const sortedOffers = [...domainData.offers].sort((a, b) => a.minPrice - b.minPrice);
   const offers = showAll ? sortedOffers : sortedOffers.slice(0, 3);
   const bestPrice = sortedOffers[0]?.minPrice ?? null;
+  const avgPrice = sortedOffers.length ? sortedOffers.reduce((sum, o) => sum + withFee(o.minPrice), 0) / sortedOffers.length : null;
 
   function typeIcon(type: string) {
     if (type === "API") return <span style={{ color: C.accent, fontWeight: 700, fontSize: 11 }}>⚡ API</span>;
@@ -250,6 +279,11 @@ function ExpandedPanel({
             {showAll ? "All marketplaces" : "Top 3 best prices"}
           </span>
           <span style={{ fontSize: 12, color: C.mute }}>{sortedOffers.length} marketplace{sortedOffers.length !== 1 ? "s" : ""} stock this domain</span>
+          {avgPrice != null && (
+            <span style={{ fontSize: 12, color: C.ink2, fontWeight: 700 }}>
+              Avg. price <span style={{ color: C.ink }}>{priceFmt(avgPrice, currency)}</span>
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button
@@ -257,11 +291,6 @@ function ExpandedPanel({
             style={{ padding: "5px 12px", borderRadius: 7, border: `1.5px solid ${C.line}`, background: "rgba(15,22,32,0.04)", color: C.ink2, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
           >
             {showAll ? "Show top 3" : `Show all (${sortedOffers.length})`}
-          </button>
-          <button
-            style={{ padding: "5px 12px", borderRadius: 7, border: `1.5px solid ${C.line}`, background: "rgba(15,22,32,0.04)", color: C.ink2, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}
-          >
-            ▾ Filter
           </button>
         </div>
       </div>
@@ -305,7 +334,7 @@ function OfferCard({
   domainName: string;
   domainDr: number;
   domainTraffic: number;
-  onAddToCart: (item: CartItem) => void;
+  onAddToCart: (item: Omit<CartItem, "priceType">) => void;
   typeIcon: React.ReactNode;
 }) {
   const [buyHover, setBuyHover] = useState(false);
@@ -680,9 +709,6 @@ function CartPopup({
           >
             Continue to brief ›
           </button>
-          <button style={{ background: "none", border: "none", fontSize: 12.5, color: C.mute, cursor: "pointer", padding: 4, textDecoration: "underline" }}>
-            Save as list &amp; buy later
-          </button>
         </div>
       </div>
     </div>
@@ -716,7 +742,7 @@ function ResultsTable({
   notFound: string[];
   order: string[];
   currency: Currency;
-  onAddToCart: (item: CartItem) => void;
+  onAddToCart: (item: Omit<CartItem, "priceType">) => void;
   forceExpandDomain?: string;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1063,7 +1089,7 @@ function DomainRow({
   gradeStyle: { background: string; color: string };
   onToggleExpand: () => void;
   onToggleFav: () => void;
-  onAddToCart: (item: CartItem) => void;
+  onAddToCart: (item: Omit<CartItem, "priceType">) => void;
 }) {
   const [hover, setHover] = useState(false);
   const [buyHover, setBuyHover] = useState(false);
@@ -1335,26 +1361,66 @@ type BriefItem = CartItem & {
   title: string; targetUrl: string; anchorText: string; niche: string;
   contentMode: "linkpricer" | "upload" | "url";
   brief: string; articleUrl: string; tone: string; contentPrice: number;
+  selectedFile: File | null; uploadError: string | null;
+};
+
+const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const UPLOAD_ACCEPT_EXT = [".docx", ".md", ".pdf"];
+
+// Shape of a row returned by POST /api/orders — enough fields to build a
+// real receipt client-side, no separate receipt endpoint needed.
+type PlacedOrder = {
+  id: string;
+  snapshotDomain: string | null;
+  snapshotMarketplaceName: string | null;
+  articleTitle: string | null;
+  totalAmount: string | null;
+  snapshotCurrency: string | null;
+  createdAt: string | null;
 };
 
 function CheckoutModal({ cartItems, onClose, onPlaced }: {
   cartItems: CartItem[];
-  onClose: () => void; onPlaced: (orders: { id: string }[]) => void;
+  onClose: () => void; onPlaced: (orders: PlacedOrder[]) => void;
 }) {
+  const { profile } = useAuthContext();
   const [items, setItems] = useState<BriefItem[]>(() =>
-    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: 120 }))
+    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: 120, selectedFile: null, uploadError: null }))
   );
   const [expandedIdx, setExpandedIdx] = useState(0);
   const [placing, setPlacing] = useState(false);
+  const [placingStage, setPlacingStage] = useState<"uploading" | "submitting" | null>(null);
 
   const subtotal = items.reduce((s, i) => s + i.price + i.contentPrice, 0);
   const fee = Math.round(items.filter(i => i.orderType === "managed").reduce((s, i) => s + i.price + i.contentPrice, 0) * 0.15);
   const total = subtotal + fee;
-  const readyCount = items.filter(i => i.contentMode === "linkpricer" ? (!!i.title && !!i.targetUrl && !!i.anchorText && !!i.brief) : i.contentMode === "url" ? (!!i.targetUrl && !!i.anchorText && !!i.articleUrl) : (!!i.targetUrl && !!i.anchorText)).length;
+  const readyCount = items.filter(i => i.contentMode === "linkpricer" ? (!!i.title && !!i.targetUrl && !!i.anchorText && !!i.brief) : i.contentMode === "url" ? (!!i.targetUrl && !!i.anchorText && !!i.articleUrl) : (!!i.targetUrl && !!i.anchorText && !!i.selectedFile)).length;
   const [placeError, setPlaceError] = useState<string | null>(null);
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+  }
+
+  function handleFileSelect(idx: number, file: File | undefined) {
+    if (!file) return;
+    const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "";
+    if (!UPLOAD_ACCEPT_EXT.includes(ext)) {
+      change(idx, { uploadError: "Only .docx, .md or .pdf files are accepted." });
+      return;
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+      change(idx, { uploadError: "File is over the 5 MB limit." });
+      return;
+    }
+    // Just held locally — nothing touches Storage until "Place order" is
+    // clicked and every field on every placement has actually validated.
+    // That way a browsed-away tab or an abandoned checkout never leaves
+    // anything in Storage to clean up.
+    change(idx, { selectedFile: file, uploadError: null });
+  }
+
+  function handleRemoveUpload(idx: number) {
+    change(idx, { selectedFile: null, uploadError: null });
   }
 
   async function handlePlace() {
@@ -1363,17 +1429,47 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
       setPlaceError("Please fill in the required fields for every placement before confirming.");
       return;
     }
+    if (!profile) {
+      setPlaceError("You must be signed in to place an order.");
+      return;
+    }
     setPlacing(true);
     try {
+      // Upload phase: every selected file goes straight to its final,
+      // order-scoped path (order-uploads/orders/{clientOrderId}/{uid}/...)
+      // — the order row doesn't exist yet, so the client mints the id and
+      // the order-creation call below re-uses it. If any upload fails, we
+      // never call the order API at all: no half-placed order, and nothing
+      // in Storage claims to belong to an order that doesn't exist.
+      setPlacingStage("uploading");
+      const uploadResults = new Map<number, { id: string; uploadedFileName: string; originalFileName: string }>();
+      try {
+        for (let idx = 0; idx < items.length; idx++) {
+          const item = items[idx];
+          if (item.contentMode !== "upload" || !item.selectedFile) continue;
+          const ext = item.selectedFile.name.includes(".") ? item.selectedFile.name.slice(item.selectedFile.name.lastIndexOf(".")).toLowerCase() : "";
+          const clientOrderId = crypto.randomUUID();
+          const path = `order-uploads/orders/${clientOrderId}/${profile.uid}/article${ext}`;
+          await uploadBytes(storageRef(storage, path), item.selectedFile);
+          uploadResults.set(idx, { id: clientOrderId, uploadedFileName: path, originalFileName: item.selectedFile.name });
+        }
+      } catch (err) {
+        console.error("[handlePlace] upload failed", err);
+        throw new Error("Couldn't upload your article file. Check your connection and try again.");
+      }
+
+      setPlacingStage("submitting");
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: items.map(i => ({
+          items: items.map((i, idx) => ({
+            id: uploadResults.get(idx)?.id,
             domain: i.domain,
             offerName: i.offerName,
             offerType: i.offerType,
             orderType: i.orderType,
+            priceType: i.priceType,
             articleTitle: i.title || undefined,
             targetUrl: i.targetUrl,
             anchorText: i.anchorText,
@@ -1383,6 +1479,8 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
             wordCount: i.contentMode === "linkpricer" ? 750 : undefined,
             requirements: i.contentMode === "linkpricer" ? i.brief : undefined,
             articleUrl: i.contentMode === "url" ? i.articleUrl : undefined,
+            uploadedFileName: uploadResults.get(idx)?.uploadedFileName,
+            originalFileName: uploadResults.get(idx)?.originalFileName,
           })),
         }),
       });
@@ -1390,11 +1488,12 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to place order");
       }
-      onPlaced(data.orders as { id: string }[]);
+      onPlaced(data.orders as PlacedOrder[]);
     } catch (err) {
       setPlaceError(err instanceof Error ? err.message : "Failed to place order");
     } finally {
       setPlacing(false);
+      setPlacingStage(null);
     }
   }
 
@@ -1515,10 +1614,31 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                         {item.contentMode === "linkpricer" ? (
                           <textarea value={item.brief} onChange={e => change(i, { brief: e.target.value })} style={{ ...inp, minHeight: 100, resize: "vertical" as const, lineHeight: 1.5 }} placeholder="Editorial piece — lead with industry insight…" />
                         ) : item.contentMode === "upload" ? (
-                          <div style={{ border: `1.5px dashed ${C.line}`, borderRadius: 9, padding: 22, textAlign: "center" as const, background: C.bg3, cursor: "pointer" }}>
-                            <div style={{ fontSize: 20, color: C.mute }}>↑</div>
-                            <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 6 }}>Drop .docx, .md or .pdf</div>
-                            <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>or click to choose · max 5 MB</div>
+                          <div>
+                            {item.selectedFile ? (
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${C.line}`, borderRadius: 9, padding: "12px 14px", background: "#fff" }}>
+                                <span style={{ fontSize: 16 }}>📄</span>
+                                <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.selectedFile.name}</span>
+                                <button onClick={() => handleRemoveUpload(i)} style={{ background: "none", border: "none", color: C.mute, cursor: "pointer", fontSize: 13, padding: 0 }}>Remove</button>
+                              </div>
+                            ) : (
+                              <label
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={(e) => { e.preventDefault(); handleFileSelect(i, e.dataTransfer.files[0]); }}
+                                style={{ display: "block", border: `1.5px dashed ${C.line}`, borderRadius: 9, padding: 22, textAlign: "center" as const, background: C.bg3, cursor: "pointer" }}
+                              >
+                                <input
+                                  type="file"
+                                  accept=".docx,.md,.pdf"
+                                  onChange={(e) => { handleFileSelect(i, e.target.files?.[0]); e.target.value = ""; }}
+                                  style={{ display: "none" }}
+                                />
+                                <div style={{ fontSize: 20, color: C.mute }}>↑</div>
+                                <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 6 }}>Drop .docx, .md or .pdf</div>
+                                <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>or click to choose · max 5 MB</div>
+                              </label>
+                            )}
+                            {item.uploadError && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 6, fontWeight: 600 }}>{item.uploadError}</div>}
                           </div>
                         ) : (
                           <input type="url" value={item.articleUrl} onChange={e => change(i, { articleUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-title" />
@@ -1557,18 +1677,18 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                       via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
                     </div>
                   </div>
-                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${(item.price + item.contentPrice).toLocaleString()}</div>
+                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${Math.round(item.price + item.contentPrice).toLocaleString()}</div>
                 </div>
               ))}
               <div style={{ marginTop: 14, fontSize: 13 }}>
-                {[{ l: `${items.length} placements subtotal`, v: `$${subtotal.toLocaleString()}` }, { l: "Linkpricer fee (15%)", v: `$${fee.toLocaleString()}` }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
+                {[{ l: `${items.length} placements subtotal`, v: `$${Math.round(subtotal).toLocaleString()}` }, { l: "Linkpricer fee (15%)", v: `$${fee.toLocaleString()}` }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
                   <div key={r.l} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", color: r.m ? C.mute : C.ink2 }}>
                     <span>{r.l}</span><span style={{ fontFamily: C.mono, fontWeight: 700 }}>{r.v}</span>
                   </div>
                 ))}
                 <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 6px", marginTop: 6, borderTop: `1px solid ${C.line2}` }}>
                   <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>Estimated total</span>
-                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>${total.toLocaleString()}</span>
+                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>${Math.round(total).toLocaleString()}</span>
                 </div>
                 <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 9, background: "#e8f6ee", border: "1px solid #bbf0c8", display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <span style={{ color: C.good }}>✓</span>
@@ -1582,7 +1702,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
               </div>
             )}
             <button onClick={handlePlace} disabled={placing} style={{ padding: 16, background: placing ? C.ink2 : C.ink, color: "#fff", border: "none", borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: placing ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              {placing ? "Placing order…" : "✓ Place order"}
+              {placingStage === "uploading" ? "Uploading article…" : placingStage === "submitting" ? "Placing order…" : "✓ Place order"}
             </button>
             <div style={{ fontSize: 11.5, color: C.mute, textAlign: "center" as const, lineHeight: 1.5 }}>
               By placing this order you agree to the <span style={{ color: C.accent, cursor: "pointer" }}>marketplace terms</span>. We&apos;ll send an invoice for each placement once the publication URL is delivered.
@@ -1595,8 +1715,45 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 }
 
 // ─── Order Placed Modal ────────────────────────────────────────────────────────
-function OrderPlacedModal({ orderIds, onClose }: { orderIds: string[]; onClose: () => void }) {
-  const orderId = orderIds[0]?.slice(0, 8) ?? "—";
+function buildReceiptText(orders: PlacedOrder[]): string {
+  const lines: string[] = [];
+  lines.push("LINKPRICER — ORDER RECEIPT");
+  lines.push(`Generated ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`);
+  lines.push("");
+  let total = 0;
+  const currencySym = { USD: "$", EUR: "€", GBP: "£" } as Record<string, string>;
+  for (const o of orders) {
+    const amount = o.totalAmount ? parseFloat(o.totalAmount) : 0;
+    total += amount;
+    const sym = currencySym[o.snapshotCurrency ?? "USD"] ?? "$";
+    lines.push(`Order #${o.id.slice(0, 8)}`);
+    lines.push(`  Domain:       ${o.snapshotDomain ?? "—"}`);
+    lines.push(`  Marketplace:  ${o.snapshotMarketplaceName ?? "—"}`);
+    lines.push(`  Article:      ${o.articleTitle ?? "—"}`);
+    lines.push(`  Placed:       ${o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-US", { dateStyle: "medium" }) : "—"}`);
+    lines.push(`  Amount:       ${sym}${amount.toLocaleString()}`);
+    lines.push("");
+  }
+  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${currencySym[orders[0]?.snapshotCurrency ?? "USD"] ?? "$"}${total.toLocaleString()}`);
+  lines.push("");
+  lines.push("$0 charged today. Each placement is invoiced individually once its publication URL is delivered and verified live.");
+  return lines.join("\n");
+}
+
+function OrderPlacedModal({ orders, onClose }: { orders: PlacedOrder[]; onClose: () => void }) {
+  const router = useRouter();
+  const orderId = orders[0]?.id?.slice(0, 8) ?? "—";
+
+  function handleDownloadReceipt() {
+    const blob = new Blob([buildReceiptText(orders)], { type: "text/plain;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `linkpricer-receipt-${orders[0]?.id?.slice(0, 8) ?? "order"}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 18, padding: "44px 48px", maxWidth: 700, width: "100%" }}>
@@ -1620,8 +1777,8 @@ function OrderPlacedModal({ orderIds, onClose }: { orderIds: string[]; onClose: 
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-          <button onClick={onClose} style={{ padding: "12px 22px", background: C.ink, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↗ View your orders</button>
-          <button onClick={onClose} style={{ padding: "12px 22px", background: "#fff", color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↓ Download receipt</button>
+          <button onClick={() => router.push("/dashboard/orders")} style={{ padding: "12px 22px", background: C.ink, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↗ View your orders</button>
+          <button onClick={handleDownloadReceipt} style={{ padding: "12px 22px", background: "#fff", color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↓ Download receipt</button>
         </div>
       </div>
     </div>
@@ -1792,7 +1949,7 @@ function SearchPageInner() {
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
-  const [placedOrderIds, setPlacedOrderIds] = useState<string[]>([]);
+  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
   const [analyzeHover, setAnalyzeHover] = useState(false);
 
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(() => loadRecentSearches());
@@ -2015,8 +2172,11 @@ function SearchPageInner() {
     });
   }
 
-  function handleAddToCart(item: CartItem) {
-    setCartItems((prev) => [...prev, item]);
+  function handleAddToCart(item: Omit<CartItem, "priceType">) {
+    // priceType is derived here, once, from whatever niche is currently
+    // selected — not passed up from the button click — so every add-to-cart
+    // call site (OfferCard's two buttons) can't independently forget it.
+    setCartItems((prev) => [...prev, { ...item, priceType: nicheToPriceType(niche) }]);
     setCartOpen(true);
   }
 
@@ -2103,13 +2263,13 @@ function SearchPageInner() {
             setCheckoutOpen(false);
             setOrderPlaced(true);
             setCartItems([]);
-            setPlacedOrderIds(orders.map(o => o.id));
+            setPlacedOrders(orders);
           }}
         />
       )}
 
       {orderPlaced && (
-        <OrderPlacedModal orderIds={placedOrderIds} onClose={() => setOrderPlaced(false)} />
+        <OrderPlacedModal orders={placedOrders} onClose={() => setOrderPlaced(false)} />
       )}
 
       <div style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
