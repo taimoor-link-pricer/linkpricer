@@ -286,15 +286,31 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   ];
 
   // Split into words and pre-filter on the *narrow* text columns (category,
-  // domain name, plus the AI-labeled semantic category/summary) with ILIKE
-  // before touching pricing/metrics joins or doing any aggregation. This
-  // bounds the candidate set up front (recall), while final ranking quality
-  // (precision) comes from the Claude rerank pass below over the shortlist.
+  // domain name, plus the AI-labeled semantic category/summary) with a
+  // word-boundary match before touching pricing/metrics joins or doing any
+  // aggregation. This bounds the candidate set up front (recall), while
+  // final ranking quality (precision) comes from the Claude rerank pass
+  // below over the shortlist.
+  //
+  // Word-boundary (\y...\y), not a bare ILIKE '%word%' substring match: a
+  // plain substring search for "linen" matched "onLINEnomad.nl",
+  // "headLINEnation.co.uk" and "onLINEnachrichtheute.de" — none remotely
+  // about linen, all just containing "line" immediately followed by a word
+  // starting with "n". "line" alone is one of the most common substrings in
+  // web/tech domains and category text ("online", "headline", "deadline",
+  // "timeline", ...), so this wasn't a rare edge case — it was a systematic
+  // false-positive source feeding junk straight into the Claude shortlist,
+  // displacing genuinely-relevant candidates that could have taken those
+  // slots instead. \y matches PostgreSQL's regex word-boundary (word chars
+  // are [A-Za-z0-9_], so punctuation like the dots/hyphens in a domain name
+  // still count as boundaries — "linen-shop.com" or "shop.linencompany.com"
+  // still match cleanly).
   const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
-  const wordClauses = words.map(
-    (w) =>
-      sql`(d.category ILIKE ${"%" + w + "%"} OR d.domain ILIKE ${"%" + w + "%"} OR ai."semanticCategory" ILIKE ${"%" + w + "%"} OR ai."semanticSummary" ILIKE ${"%" + w + "%"})`
-  );
+  const wordBoundaryPattern = (w: string) => `\\y${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\y`;
+  const wordClauses = words.map((w) => {
+    const pattern = wordBoundaryPattern(w);
+    return sql`(d.category ~* ${pattern} OR d.domain ~* ${pattern} OR ai."semanticCategory" ~* ${pattern} OR ai."semanticSummary" ~* ${pattern})`;
+  });
   const matchClause = wordClauses.length
     ? sql`AND (${sql.join(wordClauses, sql` OR `)})`
     : sql``;
@@ -379,12 +395,20 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     return { results: [], lowRelevance: false, degradedAhrefs, total: 0 };
   }
 
+  // Word-boundary, matching the SQL prefilter above (and for the same
+  // reason: hay.includes(w) would count "linen" as present in "onlinenomad"
+  // via the exact same false-positive this whole file's fix is about — a
+  // domain that only cleared the SQL stage by matching a *different* query
+  // word would otherwise still get incorrectly boosted here for "matching"
+  // this one too).
+  const wordBoundaryRe = new Map(words.map((w) => [w, new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")]));
+
   // Simple relevance score: how many query words appear in this domain's
   // category or name. Used to cut a shortlist for the Claude rerank pass
   // below, and as the fallback ranking if that call fails or is skipped.
   function relevance(domain: string, category: string): number {
-    const hay = `${category} ${domain}`.toLowerCase();
-    return words.filter((w) => hay.includes(w)).length;
+    const hay = `${category} ${domain}`;
+    return words.filter((w) => wordBoundaryRe.get(w)!.test(hay)).length;
   }
 
   const shortlist = matchedRows
@@ -394,6 +418,10 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
 
   let scored: { row: Record<string, unknown>; matchPct: number }[];
   let total: number;
+  // True only when matchPct below actually came from Claude's semantic
+  // judgment, not the word-overlap fallback (Claude unavailable/timed
+  // out/unparseable, or sortBy skipped it entirely) — see lowRelevance below.
+  let usedClaudeScoring = false;
 
   if (sortBy !== "match") {
     // Plain-column sort: skip Claude entirely and order the *full* matched
@@ -438,6 +466,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     );
 
     total = shortlist.length;
+    usedClaudeScoring = !!claudeScores;
     scored = claudeScores
       ? shortlist
           .map((s) => ({
@@ -499,12 +528,20 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     };
   });
 
-  // Low-relevance flag: even the best word-overlap match only hit a small
-  // fraction of the query's words — distinct from zero results. Based on
-  // word overlap regardless of whether Claude reranked, since this signals
-  // whether the SQL pre-filter found anything worth ranking at all.
+  // Low-relevance flag, distinct from zero results — signals "we found
+  // rows, but even the best one is a weak match" so the UI can say so
+  // instead of presenting a table of 2-5%-match results as if they were
+  // normal ones. Prefers Claude's own semantic score when we have one: word
+  // overlap alone can look fine (e.g. "linen websites" overlapping on the
+  // generic word "websites", shared by huge swaths of unrelated categories)
+  // while every actual semantic score comes back in single digits — word
+  // overlap is only the fallback signal for when Claude wasn't invoked
+  // (a plain column sort) or came back null.
   const bestWordRel = shortlist[0]?.rel ?? 0;
-  const lowRelevance = words.length > 1 && bestWordRel / words.length < 0.4;
+  const bestMatchPct = results.length > 0 ? Math.max(...results.map((r) => r.matchPct)) : 0;
+  const lowRelevance = usedClaudeScoring
+    ? bestMatchPct < 40
+    : words.length > 1 && bestWordRel / words.length < 0.4;
 
   const output: CatalogSearchOutput = { results, lowRelevance, degradedAhrefs, total };
 

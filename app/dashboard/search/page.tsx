@@ -1497,6 +1497,12 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
   const readyCount = items.filter(isBriefItemReady).length;
   const [placeError, setPlaceError] = useState<string | null>(null);
+  // Set once the user has actually tried to submit with something missing —
+  // gates the not-ready cards' red-flagged styling below so a freshly opened
+  // checkout (nothing filled in yet, nothing "wrong") doesn't look like it's
+  // already full of errors.
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
@@ -1527,8 +1533,18 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   async function handlePlace() {
     if (placingRef.current) return;
     setPlaceError(null);
-    if (readyCount < items.length) {
-      setPlaceError("Please fill in the required fields for every placement before confirming.");
+    const notReadyIdx = items.map((it, i) => (isBriefItemReady(it) ? -1 : i)).filter((i) => i !== -1);
+    if (notReadyIdx.length > 0) {
+      setAttemptedSubmit(true);
+      const first = notReadyIdx[0];
+      setExpandedIdx(first);
+      itemRefs.current[first]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const domain = items[first].domain;
+      setPlaceError(
+        notReadyIdx.length === 1
+          ? `Placement ${first + 1} (${domain}) is missing a required field — see below.`
+          : `${notReadyIdx.length} placements are missing required fields, starting with #${first + 1} (${domain}).`
+      );
       return;
     }
     if (!profile) {
@@ -1666,8 +1682,19 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
             {items.map((item, i) => {
               const ready = isBriefItemReady(item);
+              const flagged = attemptedSubmit && !ready;
               return (
-              <div key={item.domain + i} style={{ background: "#fff", border: `1px solid ${expandedIdx === i ? C.accent : C.line}`, borderRadius: 14, overflow: "hidden", boxShadow: expandedIdx === i ? `0 0 0 3px ${C.accent50}` : "none" }}>
+              <div
+                key={item.domain + i}
+                ref={(el) => { itemRefs.current[i] = el; }}
+                style={{
+                  background: "#fff",
+                  border: `1px solid ${expandedIdx === i ? C.accent : flagged ? "#f3a5a5" : C.line}`,
+                  borderRadius: 14,
+                  overflow: "hidden",
+                  boxShadow: expandedIdx === i ? `0 0 0 3px ${C.accent50}` : flagged ? "0 0 0 3px #fee2e2" : "none",
+                }}
+              >
                 {/* Card header row */}
                 <div onClick={() => setExpandedIdx(prev => prev === i ? -1 : i)} style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, borderBottom: expandedIdx === i ? `1px solid ${C.line2}` : "none", background: expandedIdx === i ? C.accent50 : "transparent", cursor: "pointer" }}>
                   <div style={{ width: 28, height: 28, borderRadius: 7, flexShrink: 0, background: ready ? "#e8f6ee" : "#fdf2dd", color: ready ? C.good : "#a35d00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12, border: `1px solid ${ready ? "#bbf0c8" : "#f3d99c"}` }}>
