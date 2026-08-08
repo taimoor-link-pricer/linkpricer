@@ -138,7 +138,7 @@ function DualRangeSlider({
           max={bounds.max}
           value={Math.min(Math.max(valueMin, bounds.min), bounds.max)}
           onChange={(e) => onChange(Math.min(Number(e.target.value), valueMax), valueMax)}
-          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: "pointer" }}
+          style={{ position: "absolute", width: "100%", height: 20, top: 0, margin: 0, cursor: "pointer" }}
         />
         <input
           type="range"
@@ -147,7 +147,7 @@ function DualRangeSlider({
           max={bounds.max}
           value={Math.min(Math.max(valueMax, bounds.min), bounds.max)}
           onChange={(e) => onChange(valueMin, Math.max(Number(e.target.value), valueMin))}
-          style={{ position: "absolute", width: "100%", top: 0, margin: 0, cursor: "pointer" }}
+          style={{ position: "absolute", width: "100%", height: 20, top: 0, margin: 0, cursor: "pointer" }}
         />
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -353,8 +353,9 @@ function LoadingSpinner() {
 }
 
 // ── row (mirrors DomainRow, but with the extra Match column) ─────────────────
-function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, onAddToCart }: {
+function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, onAddToCart, tableWrapWidth }: {
   row: RelatedSite; isLast: boolean; expanded: boolean; onToggle: () => void; isFav: boolean; onFav: () => void; currency: Currency; onAddToCart: (item: CartItem) => void;
+  tableWrapWidth?: number | null;
 }) {
   const gs = gradeStyle(row.grade);
   const matchStyle = row.matchPct >= 60 ? { background: "#e6f6ed", color: C.good } : { background: "#fce8c6", color: C.warn };
@@ -470,10 +471,10 @@ function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, on
         </td>
         <td style={{ ...td, color: C.ink2 }}>{fmtNum(row.traffic)}</td>
         <td style={{ ...td, color: C.ink2 }}>{fmtNum(row.keywords)}</td>
-        <td style={td}><span style={{ background: C.line2, color: C.ink3, borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{row.category}</span></td>
+        <td style={{ ...td, maxWidth: 130 }}><span title={row.category} style={{ display: "inline-block", maxWidth: 110, background: C.line2, color: C.ink3, borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>{row.category}</span></td>
       </tr>
       {expanded && (
-        <tr><td colSpan={10} style={{ padding: 0 }}><ExpandedPanel domainData={row} currency={currency} onAddToCart={onAddToCart} /></td></tr>
+        <tr><td colSpan={10} style={{ padding: 0 }}><ExpandedPanel domainData={row} currency={currency} onAddToCart={onAddToCart} maxWidth={tableWrapWidth} /></td></tr>
       )}
     </>
   );
@@ -543,6 +544,30 @@ export default function RelatedSitesPage() {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
+
+  // This table has an explicit minWidth:1180 for its extra Match column, so
+  // its horizontally-scrolling wrapper is *routinely* narrower than the
+  // table itself — an expanded row's price-comparison cards are a colSpan
+  // cell inside that same table, so they'd otherwise inherit the full
+  // 1180px+ width instead of what's actually visible. See the matching
+  // tableWrapWidth comment in dashboard/search/page.tsx (same bug, same fix).
+  //
+  // A callback ref, not useRef+useEffect(,[]) — the table (and this wrapper)
+  // only exists once a search has actually returned results, well after this
+  // component's own first mount, so a mount-only effect would forever see
+  // tableWrapRef.current as null from that first (table-less) render and
+  // never re-check it. The callback form re-fires the moment the wrapper div
+  // actually mounts, whenever that happens to be.
+  const [tableWrapEl, setTableWrapEl] = useState<HTMLDivElement | null>(null);
+  const [tableWrapWidth, setTableWrapWidth] = useState<number | null>(null);
+  useEffect(() => {
+    if (!tableWrapEl) return;
+    const update = () => setTableWrapWidth(tableWrapEl.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(tableWrapEl);
+    return () => ro.disconnect();
+  }, [tableWrapEl]);
 
   const hasSite = !!ownSite.trim();
   const activeFilterCount =
@@ -766,8 +791,8 @@ export default function RelatedSitesPage() {
           background: transparent;
           pointer-events: none;
         }
-        input.lp-range-thumb::-webkit-slider-runnable-track { background: transparent; }
-        input.lp-range-thumb::-moz-range-track { background: transparent; border: none; }
+        input.lp-range-thumb::-webkit-slider-runnable-track { background: transparent; height: 20px; }
+        input.lp-range-thumb::-moz-range-track { background: transparent; border: none; height: 20px; }
         input.lp-range-thumb::-webkit-slider-thumb {
           -webkit-appearance: none;
           appearance: none;
@@ -779,7 +804,13 @@ export default function RelatedSitesPage() {
           border: 2px solid ${C.accent};
           box-shadow: 0 1px 3px rgba(0,0,0,0.3);
           cursor: pointer;
-          margin-top: 6px;
+          /* Centers the 16px thumb on the visible track div (top:8, height:4 —
+          center at y=10 within this 20px-tall input): WebKit doesn't
+          auto-center a custom slider-thumb, it positions it margin-top px
+          below the input's own top edge, so this needs (input height 20 -
+          thumb height 16) / 2 = 2, not an eyeballed value that assumed a
+          different reference height than what actually renders here. */
+          margin-top: 2px;
         }
         input.lp-range-thumb::-moz-range-thumb {
           pointer-events: auto;
@@ -928,7 +959,7 @@ export default function RelatedSitesPage() {
               </button>
             </div>
           </header>
-          <div style={{ overflowX: "auto" }}>
+          <div ref={setTableWrapEl} style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
               <thead>
                 <tr>
@@ -964,6 +995,7 @@ export default function RelatedSitesPage() {
                     onFav={() => toggleFav(row)}
                     currency="USD"
                     onAddToCart={addToCart}
+                    tableWrapWidth={tableWrapWidth}
                   />
                 ))}
               </tbody>

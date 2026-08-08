@@ -271,10 +271,17 @@ function ExpandedPanel({
   domainData,
   currency,
   onAddToCart,
+  maxWidth,
 }: {
   domainData: Domain;
   currency: Currency;
   onAddToCart: (item: Omit<CartItem, "priceType">) => void;
+  // Caps this panel to the table's visible (scrolled) width instead of its
+  // full rendered width — see the tableWrapWidth comment in ResultsTable.
+  // Also kept pinned to the left of whatever the table is currently scrolled
+  // to, so expanding a row after scrolling right doesn't leave the panel
+  // sitting off-screen to the left.
+  maxWidth?: number | null;
 }) {
   const [showAll, setShowAll] = useState(false);
   const sortedOffers = [...domainData.offers].sort((a, b) => a.minPrice - b.minPrice);
@@ -289,7 +296,19 @@ function ExpandedPanel({
   }
 
   return (
-    <div data-tour="offers" style={{ background: "#f8f9fc", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, padding: "20px 24px" }}>
+    <div
+      data-tour="offers"
+      style={{
+        background: "#f8f9fc",
+        borderTop: `1px solid ${C.line}`,
+        borderBottom: `1px solid ${C.line}`,
+        padding: "20px 24px",
+        position: "sticky",
+        left: 0,
+        maxWidth: maxWidth ?? undefined,
+        boxSizing: "border-box",
+      }}
+    >
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -313,8 +332,11 @@ function ExpandedPanel({
         </div>
       </div>
 
-      {/* Cards grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+      {/* Cards grid — 320px cap matches results-shared.tsx's ExpandedPanel
+      (Related Sites): plain 1fr stretched cards much wider than intended
+      once the panel could be wide (now bounded by `maxWidth` above, but a
+      wide screen still has plenty of room for 1fr to over-grow into). */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 320px))", gap: 14 }}>
         {offers.map((offer) => (
           <OfferCard
             key={offer.name}
@@ -769,6 +791,35 @@ function ResultsTable({
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterOpen, setFilterOpen] = useState(false);
 
+  // This table's own columns (Domain/Actions/Value/Country/DR/Traffic/
+  // Keywords/Category) routinely need more width than fits on screen — that's
+  // fine, it's why the table sits in its own overflowX:auto wrapper below.
+  // But an expanded row's price-comparison cards are a colSpan cell *inside*
+  // that same table, so table-layout:auto hands them the table's full
+  // (possibly much wider) rendered width, and the "3 cards in a row" grid
+  // fills whatever width it's given — 3 cards always fit fine relative to
+  // the table, just not relative to what's actually visible on screen. Track
+  // the wrapper's true visible width so ExpandedPanel can cap itself to it
+  // instead of the table's.
+  // Callback ref, not useRef+useEffect(,[]) — ResultsTable happens to mount
+  // atomically with this wrapper today (both appear together once `results`
+  // stops being null), so a mount-only effect works, but that's incidental
+  // to this component's current structure. The callback form re-fires
+  // whenever the wrapper div actually mounts regardless, which is what
+  // dashboard/related-sites/page.tsx needs for the identical fix there,
+  // since its table mounts well after that page's own first render — keeping
+  // both the same avoids two subtly different versions of the same fix.
+  const [tableWrapEl, setTableWrapEl] = useState<HTMLDivElement | null>(null);
+  const [tableWrapWidth, setTableWrapWidth] = useState<number | null>(null);
+  useEffect(() => {
+    if (!tableWrapEl) return;
+    const update = () => setTableWrapWidth(tableWrapEl.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(tableWrapEl);
+    return () => ro.disconnect();
+  }, [tableWrapEl]);
+
   // Onboarding tour step 3 needs a row already expanded so it has something
   // to spotlight ([data-tour="offers"] only exists once a row is open).
   useEffect(() => {
@@ -1009,7 +1060,7 @@ function ResultsTable({
         </div>
       )}
 
-      <div style={{ overflowX: "auto" }}>
+      <div ref={setTableWrapEl} style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -1072,6 +1123,7 @@ function ResultsTable({
                           domainData={row}
                           currency={currency}
                           onAddToCart={onAddToCart}
+                          maxWidth={tableWrapWidth}
                         />
                       </td>
                     </tr>
@@ -1352,10 +1404,16 @@ function DomainRow({
       {/* Keywords */}
       <td style={{ ...tdBase, color: C.ink2 }}>{fmtNum(row.keywords)}</td>
 
-      {/* Category */}
-      <td style={tdBase}>
+      {/* Category — full text (often several comma-joined categories) shown
+      on hover via title; the visible pill is capped so one long domain's
+      category list can't force this whole column (and every other row's
+      cell in it) wider than it needs to be in an auto-layout table. */}
+      <td style={{ ...tdBase, maxWidth: 130 }}>
         <span
+          title={row.category}
           style={{
+            display: "inline-block",
+            maxWidth: 110,
             background: C.line2,
             color: C.ink3,
             borderRadius: 99,
@@ -1363,6 +1421,9 @@ function DomainRow({
             fontSize: 11,
             fontWeight: 600,
             whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            verticalAlign: "bottom",
           }}
         >
           {row.category}

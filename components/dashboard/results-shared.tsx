@@ -81,7 +81,13 @@ export type CartItem = {
   price: number; delivery: number; link: string;
 };
 
-export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAddToCart }: { domainData: T; currency: Currency; onAddToCart: (item: CartItem) => void }) {
+// maxWidth caps this panel to its table's visible (scrolled) width instead
+// of the table's full rendered width — a colSpan cell in an auto-layout
+// table otherwise inherits the table's true width (routinely wider than
+// what's on screen, e.g. related-sites' table sets minWidth:1180), so the
+// "3 cards in a row" grid below fills however much width THAT turns out to
+// be rather than what's actually visible. See callers for how it's measured.
+export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAddToCart, maxWidth }: { domainData: T; currency: Currency; onAddToCart: (item: CartItem) => void; maxWidth?: number | null }) {
   const [showAll, setShowAll] = useState(false);
   const sortedOffers = [...domainData.offers].sort((a, b) => a.minPrice - b.minPrice);
   const offers = showAll ? sortedOffers : sortedOffers.slice(0, 3);
@@ -103,7 +109,7 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
   }
 
   return (
-    <div style={{ background: "#f8f9fc", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, padding: "20px 24px" }}>
+    <div style={{ background: "#f8f9fc", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, padding: "20px 24px", position: "sticky", left: 0, maxWidth: maxWidth ?? undefined, boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{showAll ? "All marketplaces" : "Top 3 best prices"}</span>
