@@ -184,14 +184,14 @@ function DetailsCard({ order }: { order: ApiOrder }) {
       {ext.draftUrl && (
         <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 9, background: "#e8f5e9", border: "1px solid #c8e6c9" }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: "#006621", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Draft ready</div>
-          <a href={ext.draftUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "#006621" }}>{ext.draftUrl}</a>
+          <a href={ext.draftUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "#006621", wordBreak: "break-all" }}>{ext.draftUrl}</a>
         </div>
       )}
 
       {order.liveUrl && (
         <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 9, background: "#f9fafb", border: "1px dashed #e8eaed" }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: "#9ca3af", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Published URL</div>
-          <a href={order.liveUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "#0052cc" }}>{order.liveUrl}</a>
+          <a href={order.liveUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "#0052cc", wordBreak: "break-all" }}>{order.liveUrl}</a>
         </div>
       )}
 

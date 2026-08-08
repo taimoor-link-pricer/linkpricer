@@ -300,6 +300,14 @@ function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
 function LinkMonitoringModal({ order, onClose }: { order: Order; onClose: () => void }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
+      <style>{`
+        .monitor-row { display: grid; grid-template-columns: 150px 1fr 1fr 100px; }
+        @media (max-width: 600px) {
+          .monitor-row { grid-template-columns: 1fr; }
+          .monitor-row > div { border-bottom: 1px solid ${C.line2}; }
+          .monitor-row > div:last-child { border-bottom: none; }
+        }
+      `}</style>
       <div style={{ background: "#fff", borderRadius: 10, width: "90%", maxWidth: 800, maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 60px rgba(15,23,42,0.14)", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ padding: 20, borderBottom: `1px solid ${C.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.bg3 }}>
           <div>
@@ -329,16 +337,16 @@ function LinkMonitoringModal({ order, onClose }: { order: Order; onClose: () => 
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, marginBottom: 12 }}>Expected vs Found</div>
           <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 1fr 100px", borderBottom: `1px solid ${C.line2}` }}>
+            <div className="monitor-row" style={{ borderBottom: `1px solid ${C.line2}` }}>
               <div style={{ padding: 12, background: C.bg3, fontWeight: 600, fontSize: 12, color: C.ink2 }}>Target URL</div>
-              <div style={{ padding: 12, fontSize: 12, color: C.ink2, fontFamily: "monospace" }}>{order.targetUrl}</div>
-              <div style={{ padding: 12, fontSize: 12, color: C.ink2, fontFamily: "monospace" }}>{order.targetUrl}</div>
+              <div style={{ padding: 12, fontSize: 12, color: C.ink2, fontFamily: "monospace", wordBreak: "break-all" }}>{order.targetUrl}</div>
+              <div style={{ padding: 12, fontSize: 12, color: C.ink2, fontFamily: "monospace", wordBreak: "break-all" }}>{order.targetUrl}</div>
               <div style={{ padding: 12, textAlign: "center", fontWeight: 600, color: "#006621" }}>✓ Match</div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 1fr 100px" }}>
+            <div className="monitor-row">
               <div style={{ padding: 12, background: C.bg3, fontWeight: 600, fontSize: 12, color: C.ink2 }}>Anchor Text</div>
-              <div style={{ padding: 12, fontSize: 12, color: C.ink2 }}>{order.anchorText}</div>
-              <div style={{ padding: 12, fontSize: 12, color: C.ink2 }}>{order.anchorText}</div>
+              <div style={{ padding: 12, fontSize: 12, color: C.ink2, wordBreak: "break-word" }}>{order.anchorText}</div>
+              <div style={{ padding: 12, fontSize: 12, color: C.ink2, wordBreak: "break-word" }}>{order.anchorText}</div>
               <div style={{ padding: 12, textAlign: "center", fontWeight: 600, color: "#006621" }}>✓ Match</div>
             </div>
           </div>
@@ -384,7 +392,7 @@ function OrderCard({
 
   return (
     <div style={{ marginBottom: 16, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
-      <div onClick={() => setExpanded(!expanded)} {...tourAttr("row")} style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr 1fr 88px", gap: 16, alignItems: "center", cursor: "pointer", borderBottom: expanded ? `1px solid ${C.line2}` : "none" }}>
+      <div onClick={() => setExpanded(!expanded)} {...tourAttr("row")} className="order-row-grid" style={{ padding: "16px 20px", alignItems: "center", cursor: "pointer", borderBottom: expanded ? `1px solid ${C.line2}` : "none" }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Order Details</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -664,7 +672,14 @@ export default function OrdersPage() {
 
   return (
     <div style={{ padding: "20px 32px 40px", maxWidth: 1200, margin: "0 auto" }}>
-      <style>{`* { box-sizing: border-box; }`}</style>
+      <style>{`
+        * { box-sizing: border-box; }
+        .order-row-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 88px; gap: 16px; }
+        @media (max-width: 700px) {
+          .order-row-grid { grid-template-columns: 1fr; gap: 10px; }
+          .order-row-grid > div:last-child { justify-content: flex-start; }
+        }
+      `}</style>
 
       {tourActive && <Tour steps={tourSteps} stepIndex={tourStep} setStepIndex={setTourStep} onClose={endTour} />}
 

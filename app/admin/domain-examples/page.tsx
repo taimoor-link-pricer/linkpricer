@@ -120,6 +120,7 @@ export default function DomainExamplesPage() {
 
       {/* Table */}
       <div style={{ background: "#fff", border: "1px solid #e8eaed", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "#f9fafb" }}>
@@ -266,6 +267,7 @@ export default function DomainExamplesPage() {
             })}
           </tbody>
         </table>
+        </div>
 
         {/* Pagination */}
         {totalPages > 1 && (
