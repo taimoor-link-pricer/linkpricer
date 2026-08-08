@@ -19,10 +19,22 @@ service firebase.storage {
     // order-creation call that follows never succeeds, the file is simply
     // unreferenced by anything: still locked to its uploader, never
     // orphaned in a way that costs more than the object itself.
+    // The UI only ever offers .docx/.md/.pdf (see UPLOAD_ACCEPT_EXT in
+    // app/dashboard/search/page.tsx) — "application/.*|text/.*" accepted any
+    // MIME type in either of those two entire top-level categories, which is
+    // far broader than the 3 real formats. Both the path's own extension and
+    // the declared content type must match one of the 3 formats now.
+    // application/octet-stream and text/plain stay allowed alongside the
+    // "correct" MIME type for each format because .md has no MIME type
+    // browsers agree on, and an unrecognized extension commonly falls back
+    // to one of those two rather than "application/.*"'s open wildcard.
     match /order-uploads/orders/{orderId}/{uid}/{fileName} {
       allow write: if isAuthenticated() && request.auth.uid == uid &&
         request.resource.size < 5 * 1024 * 1024 &&
-        request.resource.contentType.matches('application/.*|text/.*');
+        fileName.matches('.*\\.(docx|md|pdf)$') &&
+        request.resource.contentType.matches(
+          'application/pdf|application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document|application/octet-stream|text/markdown|text/plain'
+        );
       allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
     }
 

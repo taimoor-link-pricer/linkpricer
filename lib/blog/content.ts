@@ -9,6 +9,66 @@ const BASE_ALLOWED_TAGS = [
 
 const ALLOWED_ATTR = ["href", "src", "alt", "title", "id", "class", "style", "target", "rel"];
 
+// `style` is in ALLOWED_ATTR above, but sanitize-html only actually filters
+// its *value* if allowedStyles is given — without it, the CSS filter is a
+// documented no-op and any inline style="..." (including url()-based
+// exfiltration/tracking) passes through untouched. This restricts inline
+// styles to plain cosmetic/layout properties with value patterns that can
+// never contain "url(" or similar.
+const COLOR = "(#[0-9a-f]{3,8}|rgba?\\([\\d.,\\s%]+\\)|hsla?\\([\\d.,\\s%]+\\)|[a-z]+)";
+const SAFE_COLOR = new RegExp(`^${COLOR}$`, "i");
+const SAFE_LENGTH = /^-?\d*\.?\d+(px|em|rem|%|vw|vh)?$/i;
+const SAFE_LENGTH_LIST = /^(-?\d*\.?\d+(px|em|rem|%)?\s*){1,4}$/i;
+const SAFE_BORDER = new RegExp(`^\\d*\\.?\\d+(px|em)?\\s+(solid|dashed|dotted|double|none)\\s+${COLOR}$`, "i");
+const ALLOWED_STYLES: Record<string, Record<string, RegExp[]>> = {
+  "*": {
+    color: [SAFE_COLOR],
+    "background-color": [SAFE_COLOR],
+    "font-size": [SAFE_LENGTH],
+    "font-weight": [/^(normal|bold|bolder|lighter|[1-9]00)$/i],
+    "font-style": [/^(normal|italic|oblique)$/i],
+    "text-align": [/^(left|right|center|justify)$/i],
+    "text-decoration": [/^[a-z\s-]+$/i],
+    "text-transform": [/^(none|capitalize|uppercase|lowercase)$/i],
+    "line-height": [SAFE_LENGTH],
+    "letter-spacing": [SAFE_LENGTH],
+    margin: [SAFE_LENGTH_LIST],
+    "margin-top": [SAFE_LENGTH], "margin-bottom": [SAFE_LENGTH], "margin-left": [SAFE_LENGTH], "margin-right": [SAFE_LENGTH],
+    padding: [SAFE_LENGTH_LIST],
+    "padding-top": [SAFE_LENGTH], "padding-bottom": [SAFE_LENGTH], "padding-left": [SAFE_LENGTH], "padding-right": [SAFE_LENGTH],
+    border: [SAFE_BORDER],
+    "border-color": [SAFE_COLOR],
+    "border-radius": [SAFE_LENGTH],
+    width: [SAFE_LENGTH],
+    height: [SAFE_LENGTH],
+    "max-width": [SAFE_LENGTH],
+    display: [/^(block|inline|inline-block|flex|none|table|table-cell|table-row)$/i],
+    "white-space": [/^(normal|nowrap|pre|pre-wrap|pre-line)$/i],
+    "vertical-align": [/^[a-z-]+$/i],
+  },
+};
+
+// sanitize-html's allowedTags/allowedStyles only govern tag and attribute
+// *structure*. For an allowed <style> tag specifically (used for
+// "html"-contentType posts, see below), the library hard-codes passing its
+// raw text straight through — see its own index.js: "Allowing script tags
+// is, by definition, game over for XSS protection... The same is essentially
+// true for style tags" — it doesn't even invoke `textFilter` for them
+// (verified: that early-return branch runs before the textFilter call).
+// So this runs as a second pass over sanitizeHtml's OUTPUT below, the same
+// way the table-wrap replace further down does — safe to do with a plain
+// regex here because by this point <style>/</style> only appear as real
+// tags, never inside unescaped text. Strips @import (fetches a remote
+// stylesheet), url() (tracking pixels / exfiltration via attribute-selector
+// CSS), and the old IE/Firefox script-equivalent CSS hooks.
+const DANGEROUS_CSS = /@import\b[^;]*;?|url\s*\([^)]*\)|expression\s*\([^)]*\)|-moz-binding\s*:[^;]*;?|behaviou?r\s*:[^;]*;?/gi;
+function stripDangerousCss(css: string): string {
+  return css.replace(DANGEROUS_CSS, (match) => (match.toLowerCase().startsWith("url") ? "none" : ""));
+}
+function stripStyleTagContent(html: string): string {
+  return html.replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/gi, (_match, open, css, close) => `${open}${stripDangerousCss(css)}${close}`);
+}
+
 /**
  * "html"-contentType posts embed their own per-post scoped <style> block
  * (e.g. #sports-betting-post) directly in the body — that's the only place
@@ -23,6 +83,7 @@ export function sanitizePostBody(html: string, contentType: string): string {
   const sanitized = sanitizeHtml(html, {
     allowedTags,
     allowedAttributes: { "*": ALLOWED_ATTR },
+    allowedStyles: ALLOWED_STYLES,
     transformTags: {
       img: (tagName, attribs) => ({
         tagName,
@@ -49,7 +110,7 @@ export function sanitizePostBody(html: string, contentType: string): string {
   // Safe to do with a plain string replace here: the HTML has already
   // been through sanitizeHtml above, so <table>/</table> only appear as
   // real tags, never inside untrusted/unescaped text.
-  return sanitized
+  return stripStyleTagContent(sanitized)
     .replace(/<table/g, '<div class="lp-blog-table-wrap"><table')
     .replace(/<\/table>/g, "</table></div>");
 }

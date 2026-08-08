@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { authors, blogPosts } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireAdminSession } from "@/lib/admin-auth";
+import { deleteBlogStorageImages } from "@/lib/blog/storage-cleanup";
 import { z } from "zod";
 
 const updateAuthorSchema = z.object({
@@ -90,6 +91,7 @@ export async function DELETE(
 
     const [deleted] = await db.delete(authors).where(eq(authors.id, id)).returning();
     if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await deleteBlogStorageImages([deleted.avatarUrl]);
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[DELETE /api/admin/blog/authors/:id]", err);
