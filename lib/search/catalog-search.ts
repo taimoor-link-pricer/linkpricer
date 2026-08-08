@@ -14,6 +14,40 @@ const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
 const DEFAULT_FINAL_RESULT_SIZE = 30;
 const DEFAULT_CANDIDATE_POOL_LIMIT = 400;
 
+// The SQL prefilter (ILIKE across 596K domains, joined + aggregated with
+// per-row price subqueries) plus the Claude rerank call together take
+// 0.6-10s depending on how common the search word is and cache warmth —
+// there's no index that helps once a word matches a large fraction of the
+// table (Postgres correctly prefers a seq scan over the trigram indexes at
+// that selectivity; verified via EXPLAIN ANALYZE). Search results aren't
+// required to be second-fresh — actual price/availability is re-verified
+// authoritatively at checkout time (resolveOffer in lib/orders/pricing.ts)
+// — so a short in-memory TTL cache, same pattern as getUsdRates() in
+// lib/currency.ts, turns repeat/popular searches (this is what a public,
+// unauthenticated homepage search realistically gets) into a cache hit
+// instead of paying the full DB+LLM cost every time. Bounded size with
+// oldest-first eviction since query text has effectively unbounded
+// cardinality and a warm serverless instance could otherwise grow this
+// unboundedly over its lifetime.
+const SEARCH_CACHE_TTL_MS = 3 * 60 * 1000;
+const SEARCH_CACHE_MAX_ENTRIES = 200;
+const searchCache = new Map<string, { result: CatalogSearchOutput; cachedAt: number }>();
+
+function searchCacheKey(opts: CatalogSearchOptions): string {
+  const f = opts.filters ?? {};
+  return JSON.stringify([
+    opts.query.trim().toLowerCase(),
+    f.country ?? null, f.language ?? null, f.minTraffic ?? null, f.maxTraffic ?? null,
+    f.minDr ?? null, f.maxDr ?? null, f.minPrice ?? null, f.maxPrice ?? null,
+    f.category ?? null, f.grade ?? null,
+    opts.ownSite?.trim().toLowerCase() ?? null, opts.hideLinked ?? false,
+    opts.claudeShortlistSize ?? DEFAULT_CLAUDE_SHORTLIST_SIZE,
+    opts.finalResultSize ?? DEFAULT_FINAL_RESULT_SIZE,
+    opts.sortBy ?? "match", opts.sortDir ?? "desc",
+    opts.candidatePoolLimit ?? DEFAULT_CANDIDATE_POOL_LIMIT,
+  ]);
+}
+
 // marketplace_offers/supplier_offers store prices in whatever currency the
 // source quotes (mostly EUR, some USD, a handful of GBP — confirmed live:
 // 1,485,337 EUR / 576,550 USD / 3 GBP rows). Every price comparison/filter/
@@ -206,6 +240,10 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
  */
 export async function searchCatalog(opts: CatalogSearchOptions): Promise<CatalogSearchOutput> {
   const __t0 = Date.now();
+  const cacheKey = searchCacheKey(opts);
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < SEARCH_CACHE_TTL_MS) return cached.result;
+
   const query = opts.query.trim();
   const f = opts.filters ?? {};
   const claudeShortlistSize = opts.claudeShortlistSize ?? DEFAULT_CLAUDE_SHORTLIST_SIZE;
@@ -468,5 +506,13 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const bestWordRel = shortlist[0]?.rel ?? 0;
   const lowRelevance = words.length > 1 && bestWordRel / words.length < 0.4;
 
-  return { results, lowRelevance, degradedAhrefs, total };
+  const output: CatalogSearchOutput = { results, lowRelevance, degradedAhrefs, total };
+
+  if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = searchCache.keys().next().value;
+    if (oldestKey !== undefined) searchCache.delete(oldestKey);
+  }
+  searchCache.set(cacheKey, { result: output, cachedAt: Date.now() });
+
+  return output;
 }
