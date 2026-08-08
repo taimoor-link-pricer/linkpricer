@@ -23,17 +23,33 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   const { plain, hash } = generateApiKey();
   const { dailyLimit, perMinuteLimit } = planLimits(plan);
+  const name = `Linkpricer API — ${PLANS[plan].name}`;
 
-  // Deactivate any existing keys for this user
-  await db.execute(sql`
-    UPDATE api_keys SET is_active = false WHERE user_id = ${userId}
-  `);
-
-  // Issue new API key (store plain temporarily for one-time dashboard reveal)
-  await db.execute(sql`
+  // Deactivate whatever's currently active and issue the new key as one
+  // statement (CTE) — two separate round trips here let two checkout-completed
+  // calls for the same user (e.g. two distinct sessions landing close together;
+  // genuine Stripe retries are already filtered out by the idempotency check
+  // above) both deactivate-then-insert and leave two active keys behind. A
+  // unique index on api_keys(user_id) WHERE is_active backstops this at the DB
+  // level — if it still rejects us (two of these firing at the exact same
+  // instant), deactivate whatever won and retry once.
+  const issue = () => db.execute(sql`
+    WITH deactivated AS (
+      UPDATE api_keys SET is_active = false WHERE user_id = ${userId} AND is_active = true
+      RETURNING id
+    )
     INSERT INTO api_keys (user_id, key_hash, name, daily_limit, per_minute_limit, is_active, plain_key_temp)
-    VALUES (${userId}, ${hash}, ${`Linkpricer API — ${PLANS[plan].name}`}, ${dailyLimit}, ${perMinuteLimit}, true, ${plain})
+    VALUES (${userId}, ${hash}, ${name}, ${dailyLimit}, ${perMinuteLimit}, true, ${plain})
+    RETURNING id
   `);
+
+  try {
+    await issue();
+  } catch (err: any) {
+    if (err?.code !== "23505") throw err;
+    await db.execute(sql`UPDATE api_keys SET is_active = false WHERE user_id = ${userId} AND is_active = true`);
+    await issue();
+  }
 
   // Store subscription metadata on user
   const subId = typeof session.subscription === "string"

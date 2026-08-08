@@ -58,9 +58,39 @@ function nichePrice(row: Record<string, unknown>, niche: string): { min: unknown
   return { min: row.min_price, max: row.max_price ?? row.min_price };
 }
 
+// Anti-scraping throttle, not a metered quota — this is a free, frequently-used
+// interactive feature (paste domains, click Analyze), so the limit is sized to
+// never bother a human clicking the button, only a script hammering the
+// endpoint to sweep the catalog (up to 200 domains x 4 joined tables per call).
+// Reuses the same user_activity_events log related-sites' quota already uses,
+// just with a 1-minute window instead of a weekly one.
+const RATE_LIMIT_PER_MINUTE = 20;
+const RATE_LIMIT_EVENT_TYPE = "analyze_domains";
+
+async function checkAndReserveRateLimit(userId: string): Promise<boolean> {
+  const rows = await db.execute(sql`
+    SELECT COUNT(*)::int AS n FROM user_activity_events
+    WHERE user_id = ${userId} AND event_type = ${RATE_LIMIT_EVENT_TYPE}
+      AND timestamp > NOW() - INTERVAL '1 minute'
+  `);
+  const used = Number((rows.rows ?? rows)[0]?.n ?? 0);
+  if (used >= RATE_LIMIT_PER_MINUTE) return false;
+  await db.execute(sql`
+    INSERT INTO user_activity_events (user_id, event_type) VALUES (${userId}, ${RATE_LIMIT_EVENT_TYPE})
+  `);
+  return true;
+}
+
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  if (!(await checkAndReserveRateLimit(user.uid))) {
+    return NextResponse.json(
+      { error: "Too many analyze requests. Please wait a moment and try again." },
+      { status: 429, headers: { "Retry-After": "60" } }
+    );
+  }
 
   let body: { domains: string[]; niche?: string };
   try {

@@ -83,6 +83,7 @@ export async function GET(
   };
 
   const today = new Date().toISOString().slice(0, 10);
+  const minuteBucket = Math.floor(Date.now() / 60000);
 
   // 3. Normalize domain
   const { domain: rawDomain } = await params;
@@ -105,10 +106,32 @@ export async function GET(
   }
   const nicheFilter = nicheParam as Niche | null;
 
-  // 5. Daily limit — atomic check-and-increment. Previously the count was read
-  // once up front and only written back in `finally`, so concurrent requests
-  // could all pass the check before any of them incremented it (TOCTOU). This
-  // does both in one statement, serialized by Postgres's row lock on the key.
+  // 5. Per-minute limit — atomic check-and-increment on a counter column, same
+  // mechanism as the daily limit below (this used to be a plain SELECT COUNT
+  // over api_request_logs with no locking — a genuine TOCTOU race under
+  // concurrent requests: many requests could all read the same pre-burst
+  // count before any of them logged). Checked BEFORE the daily limit so a
+  // request this rejects never first burns a day's worth of quota with
+  // nothing to show for it, which the old daily-then-minute order did.
+  const minuteUpdate = await db.execute(sql`
+    UPDATE api_keys
+    SET minute_count  = CASE WHEN minute_window = ${minuteBucket} THEN minute_count + 1 ELSE 1 END,
+        minute_window = ${minuteBucket}
+    WHERE id = ${k.id}
+      AND (minute_window IS DISTINCT FROM ${minuteBucket} OR minute_count < per_minute_limit)
+    RETURNING minute_count
+  `);
+  if (!minuteUpdate.rows.length) {
+    return jsonError(
+      "rate_limit_exceeded",
+      "Per-minute rate limit exceeded. See Retry-After header.",
+      429,
+      { "Retry-After": "60" }
+    );
+  }
+
+  // 6. Daily limit — atomic check-and-increment, serialized by Postgres's row
+  // lock on this specific key (same pattern as the per-minute check above).
   const dailyUpdate = await db.execute(sql`
     UPDATE api_keys
     SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
@@ -123,23 +146,6 @@ export async function GET(
       "Daily request limit reached. Resets at midnight UTC.",
       429,
       { "Retry-After": String(secondsUntilMidnightUtc()) }
-    );
-  }
-
-  // 6. Per-minute limit
-  const minuteRows = await db.execute(sql`
-    SELECT COUNT(*) AS cnt
-    FROM api_request_logs
-    WHERE api_key_id = ${k.id}
-      AND created_at > NOW() - INTERVAL '1 minute'
-  `);
-  const minuteUsed = Number(minuteRows.rows[0]?.cnt ?? 0);
-  if (minuteUsed >= k.per_minute_limit) {
-    return jsonError(
-      "rate_limit_exceeded",
-      "Per-minute rate limit exceeded. See Retry-After header.",
-      429,
-      { "Retry-After": "60" }
     );
   }
 

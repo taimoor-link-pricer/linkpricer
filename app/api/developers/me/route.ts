@@ -34,9 +34,10 @@ export async function GET(req: NextRequest) {
     // Get user's active API key + plain key (one-time reveal)
     const keyRows = await db.execute(sql`
       SELECT id, key_hash, name, daily_limit, per_minute_limit, request_count,
-             usage_date, last_used_at, plain_key_temp
+             usage_date, last_used_at, created_at, plain_key_temp
       FROM api_keys
       WHERE user_id = ${userId} AND is_active = true
+      ORDER BY created_at DESC
       LIMIT 1
     `);
 

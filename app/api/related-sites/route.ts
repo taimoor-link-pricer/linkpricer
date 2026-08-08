@@ -81,12 +81,29 @@ interface SearchBody {
   hideLinked?: boolean;
   sortBy?: CatalogSortBy;
   sortDir?: CatalogSortDir;
-  // Re-sorting an already-run search (clicking a column header) doesn't
-  // consume a weekly quota unit — only the initial "Search" click, and any
-  // change to the query/filters/own-site inputs, does. The quota gate still
-  // blocks the request outright once exhausted (see below), it just doesn't
-  // additionally decrement on sort-only refinements.
-  countAsSearch?: boolean;
+}
+
+// Deterministic string form of a value, independent of key insertion order —
+// used to compare "the search this request represents" against the last one
+// logged, regardless of how the caller happened to build the object.
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+}
+
+// Identifies "the search" independent of sort — two requests that only differ
+// by sortBy/sortDir are the same search being re-sorted, not a new one.
+function searchSignature(params: { query: string; filters?: CatalogSearchFilters; ownSite?: string; hideLinked?: boolean }): string {
+  return stableStringify({
+    query: params.query,
+    filters: params.filters ?? null,
+    ownSite: params.ownSite ?? null,
+    hideLinked: !!params.hideLinked,
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -110,7 +127,20 @@ export async function POST(req: NextRequest) {
 
   const sortBy = body.sortBy ?? "match";
   const isPlainSort = sortBy !== "match";
-  const countAsSearch = body.countAsSearch !== false;
+
+  // Whether this counts against the weekly quota is derived server-side, not
+  // taken from the client. It's a genuine re-sort (free) only if it matches
+  // the signature of this user's own most recently logged search; anything
+  // else — including a client simply claiming countAsSearch:false — counts.
+  const signature = searchSignature({ query, filters: body.filters, ownSite: body.ownSite, hideLinked: body.hideLinked });
+  const lastSearchRows = await db.execute(sql`
+    SELECT metadata FROM user_activity_events
+    WHERE user_id = ${userId} AND event_type = ${EVENT_TYPE}
+    ORDER BY timestamp DESC
+    LIMIT 1
+  `);
+  const lastMetadata = (lastSearchRows.rows ?? lastSearchRows)[0]?.metadata as { signature?: string } | undefined;
+  const countAsSearch = lastMetadata?.signature !== signature;
 
   try {
     const { results, lowRelevance, degradedAhrefs, total } = await searchCatalog({
@@ -134,7 +164,7 @@ export async function POST(req: NextRequest) {
     if (countAsSearch) {
       await db.execute(sql`
         INSERT INTO user_activity_events (user_id, event_type, metadata)
-        VALUES (${userId}, ${EVENT_TYPE}, ${JSON.stringify({ query })})
+        VALUES (${userId}, ${EVENT_TYPE}, ${JSON.stringify({ query, signature })})
       `);
     }
 
