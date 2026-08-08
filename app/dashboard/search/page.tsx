@@ -11,7 +11,7 @@ import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/desi
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
-import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT } from "@/lib/orders/types";
+import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT, currencySymbol } from "@/lib/orders/types";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -226,16 +226,32 @@ type CartItem = {
   orderType: "managed" | "direct";
 };
 
+// Mirrors computeOrderPricing's integer-cent math (lib/orders/pricing.ts) so the
+// quote shown here matches what /api/orders actually charges to the cent — the
+// managed fee is rounded PER ITEM server-side, not on the aggregate sum, so
+// summing already-rounded per-item totals (rather than rounding the sum once)
+// is required to avoid a client/server mismatch on multi-item managed carts.
+function cartCentsTotals(items: { price: number; contentPrice?: number; orderType: "managed" | "direct" }[]) {
+  let subtotalCents = 0;
+  let feeCents = 0;
+  for (const i of items) {
+    const itemSubtotalCents = Math.round(i.price * 100) + Math.round((i.contentPrice ?? 0) * 100);
+    subtotalCents += itemSubtotalCents;
+    if (i.orderType === "managed") feeCents += Math.round(itemSubtotalCents * 0.15);
+  }
+  return { subtotalCents, feeCents, totalCents: subtotalCents + feeCents };
+}
+
+function fmtCents(cents: number): string {
+  return (cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Maps the Analyze page's pricing-niche selector (its own id space, matching
 // /api/analyze's NICHE_COLUMNS) to the order backend's PriceType enum
 // (lib/orders/types.ts) — these were built as two disconnected id spaces
 // (igaming/loans/forex vs gambling/loan/tradingForex) with no shared mapping
 // anywhere, which is how an order's actual priceType silently stayed "base"
 // regardless of the niche a customer searched and was quoted under.
-// "insertion" has no PriceType counterpart at all (the orders schema was
-// never extended for link-insertion pricing) — falls back to "base" like
-// "general" does; there's no way to correctly charge a link-insertion price
-// through checkout yet.
 function nicheToPriceType(niche: string): PriceType {
   switch (niche) {
     case "igaming": return "gambling";
@@ -245,7 +261,8 @@ function nicheToPriceType(niche: string): PriceType {
     case "dating": return "dating";
     case "crypto": return "crypto";
     case "forex": return "tradingForex";
-    default: return "base"; // "general" and "insertion" (no PriceType support yet)
+    case "insertion": return "insertion";
+    default: return "base"; // "general" has no niche-specific price column
   }
 }
 
@@ -558,9 +575,7 @@ function CartPopup({
   onCheckout: () => void;
   onRemove: (idx: number) => void;
 }) {
-  const subtotal = items.reduce((s, i) => s + i.price, 0);
-  const fee = Math.round(items.filter(i => i.orderType === "managed").reduce((s, i) => s + i.price, 0) * 0.15);
-  const total = subtotal + fee;
+  const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
 
   return (
     <div
@@ -662,16 +677,16 @@ function CartPopup({
         <div style={{ borderTop: `1px solid ${C.line}`, padding: "14px 20px", background: "#fbfcfe", display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.ink3 }}>
             <span>Subtotal</span>
-            <span>{priceFmt(subtotal, currency)}</span>
+            <span>{priceFmt(subtotalCents / 100, currency)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.ink3 }}>
             <span>Linkpricer fee <span style={{ fontSize: 11 }}>(15%)</span></span>
-            <span>{priceFmt(fee, currency)}</span>
+            <span>{priceFmt(feeCents / 100, currency)}</span>
           </div>
           <div style={{ height: 1, background: C.line, margin: "2px 0" }} />
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: C.ink }}>
             <span>Total</span>
-            <span>{priceFmt(total, currency)}</span>
+            <span>{priceFmt(totalCents / 100, currency)}</span>
           </div>
         </div>
 
@@ -1412,10 +1427,13 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   const [expandedIdx, setExpandedIdx] = useState(0);
   const [placing, setPlacing] = useState(false);
   const [placingStage, setPlacingStage] = useState<"uploading" | "submitting" | null>(null);
+  // React state updates are async — `disabled={placing}` alone leaves a real
+  // window where a fast double-click invokes handlePlace twice before the
+  // re-render lands. This ref is checked synchronously at the very top of
+  // handlePlace to close that race independent of the state-driven disable.
+  const placingRef = useRef(false);
 
-  const subtotal = items.reduce((s, i) => s + i.price + i.contentPrice, 0);
-  const fee = Math.round(items.filter(i => i.orderType === "managed").reduce((s, i) => s + i.price + i.contentPrice, 0) * 0.15);
-  const total = subtotal + fee;
+  const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
   const readyCount = items.filter(isBriefItemReady).length;
   const [placeError, setPlaceError] = useState<string | null>(null);
 
@@ -1446,6 +1464,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   }
 
   async function handlePlace() {
+    if (placingRef.current) return;
     setPlaceError(null);
     if (readyCount < items.length) {
       setPlaceError("Please fill in the required fields for every placement before confirming.");
@@ -1455,8 +1474,15 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
       setPlaceError("You must be signed in to place an order.");
       return;
     }
+    placingRef.current = true;
     setPlacing(true);
     try {
+      // Minted for every item up front (not just uploads) so a network retry or
+      // double-submit of this same handlePlace call replays identical order ids —
+      // the server treats a repeat id as a no-op instead of creating a duplicate
+      // order (see the onConflictDoNothing handling in /api/orders POST).
+      const orderIds = new Map<number, string>(items.map((_, idx) => [idx, crypto.randomUUID()]));
+
       // Upload phase: every selected file goes straight to its final,
       // order-scoped path (order-uploads/orders/{clientOrderId}/{uid}/...)
       // — the order row doesn't exist yet, so the client mints the id and
@@ -1464,16 +1490,16 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
       // never call the order API at all: no half-placed order, and nothing
       // in Storage claims to belong to an order that doesn't exist.
       setPlacingStage("uploading");
-      const uploadResults = new Map<number, { id: string; uploadedFileName: string; originalFileName: string }>();
+      const uploadResults = new Map<number, { uploadedFileName: string; originalFileName: string }>();
       try {
         for (let idx = 0; idx < items.length; idx++) {
           const item = items[idx];
           if (item.contentMode !== "upload" || !item.selectedFile) continue;
           const ext = item.selectedFile.name.includes(".") ? item.selectedFile.name.slice(item.selectedFile.name.lastIndexOf(".")).toLowerCase() : "";
-          const clientOrderId = crypto.randomUUID();
+          const clientOrderId = orderIds.get(idx)!;
           const path = `order-uploads/orders/${clientOrderId}/${profile.uid}/article${ext}`;
           await uploadBytes(storageRef(storage, path), item.selectedFile);
-          uploadResults.set(idx, { id: clientOrderId, uploadedFileName: path, originalFileName: item.selectedFile.name });
+          uploadResults.set(idx, { uploadedFileName: path, originalFileName: item.selectedFile.name });
         }
       } catch (err) {
         console.error("[handlePlace] upload failed", err);
@@ -1486,7 +1512,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           items: items.map((i, idx) => ({
-            id: uploadResults.get(idx)?.id,
+            id: orderIds.get(idx),
             domain: i.domain,
             offerName: i.offerName,
             offerType: i.offerType,
@@ -1514,6 +1540,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
     } catch (err) {
       setPlaceError(err instanceof Error ? err.message : "Failed to place order");
     } finally {
+      placingRef.current = false;
       setPlacing(false);
       setPlacingStage(null);
     }
@@ -1709,18 +1736,18 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                       via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
                     </div>
                   </div>
-                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${Math.round(item.price + item.contentPrice).toLocaleString()}</div>
+                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${fmtCents(Math.round(item.price * 100) + Math.round(item.contentPrice * 100))}</div>
                 </div>
               ))}
               <div style={{ marginTop: 14, fontSize: 13 }}>
-                {[{ l: `${items.length} placements subtotal`, v: `$${Math.round(subtotal).toLocaleString()}` }, { l: "Linkpricer fee (15%)", v: `$${fee.toLocaleString()}` }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
+                {[{ l: `${items.length} placements subtotal`, v: `$${fmtCents(subtotalCents)}` }, { l: "Linkpricer fee (15%)", v: `$${fmtCents(feeCents)}` }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
                   <div key={r.l} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", color: r.m ? C.mute : C.ink2 }}>
                     <span>{r.l}</span><span style={{ fontFamily: C.mono, fontWeight: 700 }}>{r.v}</span>
                   </div>
                 ))}
                 <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 6px", marginTop: 6, borderTop: `1px solid ${C.line2}` }}>
                   <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>Estimated total</span>
-                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>${Math.round(total).toLocaleString()}</span>
+                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>${fmtCents(totalCents)}</span>
                 </div>
                 <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 9, background: "#e8f6ee", border: "1px solid #bbf0c8", display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <span style={{ color: C.good }}>✓</span>
@@ -1753,11 +1780,10 @@ function buildReceiptText(orders: PlacedOrder[]): string {
   lines.push(`Generated ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`);
   lines.push("");
   let total = 0;
-  const currencySym = { USD: "$", EUR: "€", GBP: "£" } as Record<string, string>;
   for (const o of orders) {
     const amount = o.totalAmount ? parseFloat(o.totalAmount) : 0;
     total += amount;
-    const sym = currencySym[o.snapshotCurrency ?? "USD"] ?? "$";
+    const sym = currencySymbol(o.snapshotCurrency);
     lines.push(`Order #${o.id.slice(0, 8)}`);
     lines.push(`  Domain:       ${o.snapshotDomain ?? "—"}`);
     lines.push(`  Marketplace:  ${o.snapshotMarketplaceName ?? "—"}`);
@@ -1766,7 +1792,7 @@ function buildReceiptText(orders: PlacedOrder[]): string {
     lines.push(`  Amount:       ${sym}${amount.toLocaleString()}`);
     lines.push("");
   }
-  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${currencySym[orders[0]?.snapshotCurrency ?? "USD"] ?? "$"}${total.toLocaleString()}`);
+  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${currencySymbol(orders[0]?.snapshotCurrency)}${total.toLocaleString()}`);
   lines.push("");
   lines.push("$0 charged today. Each placement is invoiced individually once its publication URL is delivered and verified live.");
   return lines.join("\n");

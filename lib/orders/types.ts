@@ -22,6 +22,7 @@ export const PRICE_TYPES = [
   "dating",
   "crypto",
   "tradingForex",
+  "insertion",
 ] as const;
 
 export type PriceType = (typeof PRICE_TYPES)[number];

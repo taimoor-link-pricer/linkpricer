@@ -107,6 +107,7 @@ export async function resolveOffer(params: {
         dating: usdStr(o.datingMinPrice, o.currency, rates),
         crypto: usdStr(o.cryptoMinPrice, o.currency, rates),
         tradingForex: usdStr(o.tradingForexMinPrice, o.currency, rates),
+        insertion: usdStr(o.linkInsertionMinPrice, o.currency, rates),
       },
       domain: domainRow ?? { id: null, domain },
     };
@@ -150,6 +151,7 @@ export async function resolveOffer(params: {
       dating: usdStr(o.datingMinPrice, o.currency, rates),
       crypto: usdStr(o.cryptoMinPrice, o.currency, rates),
       tradingForex: usdStr(o.tradingForexMinPrice, o.currency, rates),
+      insertion: usdStr(o.linkInsertionMinPrice, o.currency, rates),
     },
     domain: { id: row.domain.id, domain: row.domain.domain },
   };

@@ -184,7 +184,11 @@ export async function POST(req: NextRequest) {
     for (const { item, offer, pricing } of resolved) {
       const initialStatus = item.orderType === "managed" ? "confirming_with_marketplace" : "approved";
 
-      const [order] = await db
+      // item.id is now always client-minted (see handlePlace in dashboard/search/page.tsx),
+      // so a network retry or double-submit replays the SAME id — onConflictDoNothing lets
+      // that land here as a no-op instead of creating a second real order, and the fallback
+      // select below returns the original order either way so the client still gets a result.
+      const [inserted] = await db
         .insert(orders)
         .values({
           id: item.id,
@@ -225,7 +229,24 @@ export async function POST(req: NextRequest) {
           priceType: item.priceType,
           selectedPrice: centsToAmount(pricing.selectedBasePriceCents),
         })
+        .onConflictDoNothing({ target: orders.id })
         .returning();
+
+      let order = inserted;
+      if (!order) {
+        // Conflict on id — this exact order was already created by an earlier
+        // attempt of the same request (retry/double-submit). Return the
+        // existing row instead of creating a duplicate or erroring. A conflict
+        // is only possible when item.id was actually supplied (the DB default
+        // gen_random_uuid() used otherwise won't collide), so item.id is real here.
+        const [existing] = item.id ? await db.select().from(orders).where(eq(orders.id, item.id)).limit(1) : [];
+        if (!existing) {
+          return NextResponse.json({ error: "Failed to create order" }, { status: 500 });
+        }
+        order = existing;
+        createdOrders.push(order);
+        continue;
+      }
 
       const eventMeta: OrderStatusChangedMeta = {
         orderId: order.id,

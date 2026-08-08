@@ -47,7 +47,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     WHERE id = ${userId}
   `);
 
-  console.log(`[stripe/webhook] API key issued for user ${userId} on plan ${plan}. Key (shown once): ${plain}`);
+  console.log(`[stripe/webhook] API key issued for user ${userId} on plan ${plan}.`);
 }
 
 async function handleSubscriptionUpdated(sub: Stripe.Subscription) {

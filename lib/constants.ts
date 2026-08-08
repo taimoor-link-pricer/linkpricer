@@ -30,7 +30,6 @@ export const ROUTES = {
   adminBlogAuthors: "/admin/blog/authors",
   adminAnalyticsUsers: "/admin/analytics/users",
   adminSupportTickets: "/admin/support-tickets",
-  checkout: "/dashboard/checkout",
 } as const;
 
 // Only accept an internal path (starts with "/", not "//") as a post-auth
