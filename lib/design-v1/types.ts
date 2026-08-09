@@ -12,6 +12,11 @@ export interface Offer {
   minPrice: number;
   maxPrice?: number;
   quality: number;
+  // Only meaningfully set by real API data (lib/search/catalog-search.ts) —
+  // omitted by demo/sample data, in which case RatingBadge just renders
+  // `quality` as-is (see lib/design-v1/icons.tsx).
+  ratingCount?: number;
+  hasEnoughRatings?: boolean;
   delivery: number;
   deliveryDays?: number;
   tat: number;

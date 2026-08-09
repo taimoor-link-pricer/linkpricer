@@ -17,7 +17,42 @@ export type ResolvedOffer = {
   minPrice: string | null;
   priceByType: Record<PriceType, string | null>;
   domain: { id: string | null; domain: string };
+  // Only set for Vendor offers — snapshotted onto the order at creation time
+  // (see app/api/orders/route.ts) so buyer ratings can be attributed to the
+  // vendor later without re-deriving it from supplier_offers, which could
+  // change or be deleted after the order is placed.
+  vendorUserId: string | null;
+  // Buyer-rating average/count at the moment of purchase (same aggregate
+  // lib/search/catalog-search.ts computes for display) — snapshotted for
+  // record-keeping only, not used in pricing and not rendered anywhere.
+  ratingAvg: number | null;
+  ratingCount: number;
 };
+
+async function getRatingAggregate(params: { marketplaceName?: string; vendorUserId?: string }): Promise<{ avg: number | null; count: number }> {
+  const rows = params.vendorUserId
+    ? await db.execute(sql`
+        SELECT AVG(rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+        FROM order_ratings orr
+        JOIN orders o ON o.id = orr.order_id
+        WHERE o.snapshot_offer_metadata->>'vendorUserId' = ${params.vendorUserId}
+      `)
+    : await db.execute(sql`
+        SELECT AVG(rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+        FROM (
+          SELECT orr.rating
+          FROM order_ratings orr
+          JOIN orders o ON o.id = orr.order_id
+          WHERE orr.order_id IS NOT NULL AND LOWER(o.snapshot_marketplace_name) = LOWER(${params.marketplaceName ?? ""})
+          UNION ALL
+          SELECT orr.rating
+          FROM order_ratings orr
+          WHERE orr.order_id IS NULL AND LOWER(orr.marketplace_name) = LOWER(${params.marketplaceName ?? ""})
+        ) combined
+      `);
+  const row = rows.rows[0] as { avg_rating: number | null; rating_count: number } | undefined;
+  return { avg: row?.avg_rating ?? null, count: Number(row?.rating_count ?? 0) };
+}
 
 export class OfferResolutionError extends Error {}
 
@@ -88,6 +123,7 @@ export async function resolveOffer(params: {
 
     const o = match.offer;
     const rates = await getUsdRates();
+    const rating = await getRatingAggregate({ vendorUserId: o.vendorUserId });
     return {
       offerId: o.id,
       marketplaceName: params.offerName,
@@ -110,6 +146,9 @@ export async function resolveOffer(params: {
         insertion: usdStr(o.linkInsertionMinPrice, o.currency, rates),
       },
       domain: domainRow ?? { id: null, domain },
+      vendorUserId: o.vendorUserId,
+      ratingAvg: rating.avg,
+      ratingCount: rating.count,
     };
   }
 
@@ -132,6 +171,7 @@ export async function resolveOffer(params: {
 
   const o = row.offer;
   const rates = await getUsdRates();
+  const rating = await getRatingAggregate({ marketplaceName: o.marketplaceName });
   return {
     offerId: o.id,
     marketplaceName: o.marketplaceName,
@@ -154,6 +194,9 @@ export async function resolveOffer(params: {
       insertion: usdStr(o.linkInsertionMinPrice, o.currency, rates),
     },
     domain: { id: row.domain.id, domain: row.domain.domain },
+    vendorUserId: null,
+    ratingAvg: rating.avg,
+    ratingCount: rating.count,
   };
 }
 

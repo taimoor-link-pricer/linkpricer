@@ -107,12 +107,21 @@ export interface CatalogSearchOffer {
   updated: string;
   minPrice: number;
   maxPrice: number;
+  // `quality` is a real buyer-submitted average (1-5) only when
+  // hasEnoughRatings is true — never a fabricated/default number. UI must
+  // gate display on hasEnoughRatings, not just check `quality` truthiness.
   quality: number;
+  ratingCount: number;
+  hasEnoughRatings: boolean;
   delivery: number;
   tat: number;
   link: string;
   example: string | null;
 }
+
+// Below this many submitted ratings, an average isn't shown — see the
+// "New" pill in components/dashboard/results-shared.tsx's RatingBadge.
+const MIN_RATINGS_FOR_DISPLAY = 3;
 
 export interface CatalogSearchFilters {
   country?: string;
@@ -177,20 +186,54 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
   if (domains.length === 0) return offersMap;
   const domainList = sql.join(domains.map((d) => sql`${d}`), sql`, `);
 
+  // Buyer-submitted ratings aggregated live (order_ratings stays small — no
+  // precomputed metrics table needed). Marketplace/DB offers are rated by
+  // marketplace name (orders.snapshot_marketplace_name, always populated at
+  // order creation); vendor offers are rated by vendor user id, snapshotted
+  // into orders.snapshot_offer_metadata->>'vendorUserId' at order creation
+  // (see app/api/orders/route.ts) since supplier_offers rows can change or
+  // be deleted after the order was placed.
   const [marketplaceRows, vendorRows, exampleRows] = await Promise.all([
     db.execute(sql`
       SELECT LOWER(d.domain) AS domain, mo.marketplace_name AS name, mo.min_price, mo.max_price, mo.currency,
-             mo.delivery_time_days, mo.quality_score, mo.link_type, mo.tat, mo.updated_at
+             mo.delivery_time_days, mo.link_type, mo.tat, mo.updated_at,
+             rt.avg_rating, rt.rating_count
       FROM marketplace_offers mo
       JOIN domains d ON d.id = mo.domain_id
+      LEFT JOIN (
+        SELECT marketplace_name, AVG(rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+        FROM (
+          -- Buyer reviews: attributed via the order they actually completed.
+          SELECT LOWER(o.snapshot_marketplace_name) AS marketplace_name, orr.rating
+          FROM order_ratings orr
+          JOIN orders o ON o.id = orr.order_id
+          WHERE orr.order_id IS NOT NULL AND o.snapshot_marketplace_name IS NOT NULL
+          UNION ALL
+          -- Admin reviews: no order to attach to, marketplace set directly
+          -- (see app/api/admin/reviews/marketplaces/route.ts).
+          SELECT LOWER(orr.marketplace_name) AS marketplace_name, orr.rating
+          FROM order_ratings orr
+          WHERE orr.order_id IS NULL AND orr.marketplace_name IS NOT NULL
+        ) combined
+        GROUP BY marketplace_name
+      ) rt ON rt.marketplace_name = LOWER(mo.marketplace_name)
       WHERE mo.available = true AND mo.min_price::float > 0 AND LOWER(d.domain) IN (${domainList})
       ORDER BY mo.min_price::float ASC
     `),
     db.execute(sql`
       SELECT LOWER(so.domain) AS domain, COALESCE(u.vendor_name, CONCAT(u.first_name, ' ', u.last_name), u.email) AS vendor_name,
-             so.min_price, so.max_price, so.currency, so.delivery_time_days, so.updated_at, so.status
+             so.min_price, so.max_price, so.currency, so.delivery_time_days, so.updated_at, so.status,
+             rt.avg_rating, rt.rating_count
       FROM supplier_offers so
       JOIN users u ON u.id = so.vendor_user_id
+      LEFT JOIN (
+        SELECT o.snapshot_offer_metadata->>'vendorUserId' AS vendor_user_id,
+               AVG(orr.rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+        FROM order_ratings orr
+        JOIN orders o ON o.id = orr.order_id
+        WHERE o.snapshot_offer_metadata->>'vendorUserId' IS NOT NULL
+        GROUP BY o.snapshot_offer_metadata->>'vendorUserId'
+      ) rt ON rt.vendor_user_id = so.vendor_user_id
       WHERE so.status = 'active' AND so.is_active = true AND so.min_price::float > 0 AND LOWER(so.domain) IN (${domainList})
       ORDER BY so.min_price::float ASC
     `),
@@ -208,10 +251,13 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
     if (!offersMap.has(domain)) offersMap.set(domain, []);
     const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null, rates) ?? 0;
     const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null, rates) ?? minUsd;
+    const ratingCount = Number(r.rating_count ?? 0);
+    const hasEnoughRatings = ratingCount >= MIN_RATINGS_FOR_DISPLAY;
     offersMap.get(domain)!.push({
       name: (r.name as string) ?? "Marketplace", type: "DB", updated: fmtUpdated(r.updated_at as string | null),
       minPrice: minUsd, maxPrice: maxUsd,
-      quality: Math.min(5, Math.max(1, Number(r.quality_score ?? 3))), delivery: Number(r.delivery_time_days ?? 14),
+      quality: hasEnoughRatings ? Number(r.avg_rating) : 0, ratingCount, hasEnoughRatings,
+      delivery: Number(r.delivery_time_days ?? 14),
       tat: Number(r.tat ?? r.delivery_time_days ?? 14), link: (r.link_type as string) ?? "Dofollow",
       example: exampleMap.get(domain) ?? null,
     });
@@ -221,10 +267,13 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
     if (!offersMap.has(domain)) offersMap.set(domain, []);
     const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null, rates) ?? 0;
     const maxUsd = toUsd(Number(r.max_price ?? r.min_price ?? 0), r.currency as string | null, rates) ?? minUsd;
+    const ratingCount = Number(r.rating_count ?? 0);
+    const hasEnoughRatings = ratingCount >= MIN_RATINGS_FOR_DISPLAY;
     offersMap.get(domain)!.push({
       name: `Vendor: ${r.vendor_name as string}`, type: "Vendor", updated: fmtUpdated(r.updated_at as string | null),
       minPrice: minUsd, maxPrice: maxUsd,
-      quality: 3, delivery: Number(r.delivery_time_days ?? 14), tat: Number(r.delivery_time_days ?? 14),
+      quality: hasEnoughRatings ? Number(r.avg_rating) : 0, ratingCount, hasEnoughRatings,
+      delivery: Number(r.delivery_time_days ?? 14), tat: Number(r.delivery_time_days ?? 14),
       link: "Dofollow", example: exampleMap.get(domain) ?? null,
     });
   }

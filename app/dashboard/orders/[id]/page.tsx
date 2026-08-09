@@ -266,6 +266,145 @@ function ActionPanel({ status, onAction, acting }: { status: OrderStatus; onActi
   return null;
 }
 
+// ── Rating ───────────────────────────────────────────────────────────────────
+
+interface OrderRating {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+}
+
+const STAR_POINTS = "12 2 15 9 22 9 16.5 13.5 18.5 21 12 17 5.5 21 7.5 13.5 2 9 9 9";
+
+function StarInput({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const [hover, setHover] = useState(0);
+  return (
+    <div style={{ display: "flex", gap: 4 }}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(n)}
+          onMouseEnter={() => setHover(n)}
+          onMouseLeave={() => setHover(0)}
+          aria-label={`Rate ${n} star${n > 1 ? "s" : ""}`}
+          style={{ background: "none", border: "none", cursor: "pointer", padding: 2, lineHeight: 0 }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill={(hover || value) >= n ? "#f59e0b" : "none"} stroke="#f59e0b" strokeWidth="1.5">
+            <polygon points={STAR_POINTS} />
+          </svg>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ReadOnlyStars({ n }: { n: number }) {
+  return (
+    <div style={{ display: "flex", gap: 2 }}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <svg key={i} width="18" height="18" viewBox="0 0 24 24" fill={i <= n ? "#f59e0b" : "none"} stroke="#f59e0b" strokeWidth="1.5">
+          <polygon points={STAR_POINTS} />
+        </svg>
+      ))}
+    </div>
+  );
+}
+
+function RatingCard({ orderId, status }: { orderId: string; status: OrderStatus }) {
+  const [rating, setRating] = useState<OrderRating | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [draftRating, setDraftRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status !== "complete") {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/orders/${orderId}/rating`);
+        const data = await res.json();
+        if (!cancelled) setRating(data.rating ?? null);
+      } catch (err) {
+        console.error("[RatingCard load]", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId, status]);
+
+  if (status !== "complete" || loading) return null;
+
+  async function submit() {
+    if (!draftRating || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/rating`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rating: draftRating, comment: comment.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to submit rating");
+      setRating(data.rating as OrderRating);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to submit rating");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e8eaed", borderRadius: 14, padding: 22 }}>
+      <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>
+        {rating ? "Your rating" : "Rate this order"}
+      </h3>
+      {rating ? (
+        <>
+          <ReadOnlyStars n={rating.rating} />
+          {rating.comment && (
+            <p style={{ margin: "10px 0 0", fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{rating.comment}</p>
+          )}
+        </>
+      ) : (
+        <>
+          <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "#6b7280" }}>How was this marketplace/vendor to work with?</p>
+          <StarInput value={draftRating} onChange={setDraftRating} />
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Optional comment…"
+            rows={2}
+            style={{ width: "100%", marginTop: 12, padding: "8px 10px", borderRadius: 8, border: "1px solid #e8eaed", fontSize: 12.5, fontFamily: "inherit", resize: "none", boxSizing: "border-box" }}
+          />
+          {error && <div style={{ marginTop: 8, fontSize: 12, color: "#8b0000" }}>{error}</div>}
+          <button
+            onClick={submit}
+            disabled={!draftRating || submitting}
+            style={{
+              marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "none",
+              background: draftRating ? "#0052cc" : "#e8eaed", color: draftRating ? "#fff" : "#9ca3af",
+              fontWeight: 700, fontSize: 12.5, cursor: draftRating ? "pointer" : "default",
+            }}
+          >
+            {submitting ? "Submitting…" : "Submit rating"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
 type TimelineEntry =
@@ -568,6 +707,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Timeline status={status} />
             <ActionPanel status={status} acting={acting} onAction={handleAction} />
+            <RatingCard orderId={order.id} status={status} />
             <DetailsCard order={order} />
           </div>
 

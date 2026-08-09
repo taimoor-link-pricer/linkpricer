@@ -906,6 +906,48 @@ export const supplierOffers = pgTable("supplier_offers", {
 		}),
 ]);
 
+// Buyer-submitted 1-5 star rating left on an order after it completes. One
+// row per order (unique orderId) — ratings are aggregated live via a plain
+// GROUP BY at search-query time (see lib/search/catalog-search.ts), not a
+// precomputed metrics table, since this stays small.
+export const orderRatings = pgTable("order_ratings", {
+	id: varchar().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	// Nullable: a buyer review always has orderId set (unique — one review
+	// per order); an admin-added marketplace review has orderId null and
+	// marketplaceName set directly instead (admins have no order to attach
+	// to). Postgres treats each NULL as distinct under a plain UNIQUE
+	// constraint, so this same column/constraint permits unlimited
+	// admin (order_id-null) rows without weakening the one-per-order rule
+	// for real buyer rows.
+	orderId: varchar("order_id"),
+	userId: varchar("user_id").notNull(),
+	rating: integer().notNull(),
+	comment: text(),
+	marketplaceName: text("marketplace_name"),
+	source: text().default('buyer').notNull(),
+	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("order_ratings_order_id_unique").on(table.orderId),
+	// One admin review per (admin, marketplace) — only applies to admin rows
+	// (order_id IS NULL); buyer rows are unconstrained by this index.
+	uniqueIndex("order_ratings_admin_marketplace_idx")
+		.using("btree", table.userId.asc(), table.marketplaceName.asc())
+		.where(sql`${table.orderId} IS NULL`),
+	foreignKey({
+			columns: [table.orderId],
+			foreignColumns: [orders.id],
+			name: "order_ratings_order_id_orders_id_fk"
+		}),
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.id],
+			name: "order_ratings_user_id_users_id_fk"
+		}),
+	check("order_ratings_rating_check", sql`rating >= 1 AND rating <= 5`),
+	check("order_ratings_source_check", sql`source IN ('buyer', 'admin')`),
+	check("order_ratings_attribution_check", sql`order_id IS NOT NULL OR marketplace_name IS NOT NULL`),
+]);
+
 export const apiBillingLedger = pgTable("api_billing_ledger", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	orderId: uuid("order_id").notNull(),

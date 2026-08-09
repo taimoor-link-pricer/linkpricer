@@ -175,12 +175,27 @@ export async function POST(req: NextRequest) {
           mo.link_insertion_max_price,
           mo.currency,
           mo.delivery_time_days,
-          mo.quality_score,
           mo.link_type,
           mo.tat,
-          mo.updated_at
+          mo.updated_at,
+          rt.avg_rating,
+          rt.rating_count
         FROM marketplace_offers mo
         JOIN domains d ON d.id = mo.domain_id
+        LEFT JOIN (
+          SELECT marketplace_name, AVG(rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+          FROM (
+            SELECT LOWER(o.snapshot_marketplace_name) AS marketplace_name, orr.rating
+            FROM order_ratings orr
+            JOIN orders o ON o.id = orr.order_id
+            WHERE orr.order_id IS NOT NULL AND o.snapshot_marketplace_name IS NOT NULL
+            UNION ALL
+            SELECT LOWER(orr.marketplace_name) AS marketplace_name, orr.rating
+            FROM order_ratings orr
+            WHERE orr.order_id IS NULL AND orr.marketplace_name IS NOT NULL
+          ) combined
+          GROUP BY marketplace_name
+        ) rt ON rt.marketplace_name = LOWER(mo.marketplace_name)
         WHERE mo.available = true
           AND mo.min_price::float > 0
           AND LOWER(d.domain) IN (${domainList})
@@ -212,9 +227,19 @@ export async function POST(req: NextRequest) {
           so.currency,
           so.delivery_time_days,
           so.updated_at,
-          so.status
+          so.status,
+          rt.avg_rating,
+          rt.rating_count
         FROM supplier_offers so
         JOIN users u ON u.id = so.vendor_user_id
+        LEFT JOIN (
+          SELECT o.snapshot_offer_metadata->>'vendorUserId' AS vendor_user_id,
+                 AVG(orr.rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+          FROM order_ratings orr
+          JOIN orders o ON o.id = orr.order_id
+          WHERE o.snapshot_offer_metadata->>'vendorUserId' IS NOT NULL
+          GROUP BY o.snapshot_offer_metadata->>'vendorUserId'
+        ) rt ON rt.vendor_user_id = so.vendor_user_id
         WHERE so.status = 'active'
           AND so.is_active = true
           AND so.min_price::float > 0
@@ -248,12 +273,17 @@ export async function POST(req: NextRequest) {
       minPrice: number;
       maxPrice: number;
       quality: number;
+      ratingCount: number;
+      hasEnoughRatings: boolean;
       delivery: number;
       tat: number;
       link: string;
       example: string | null;
     };
     const offersMap = new Map<string, RawOffer[]>();
+    // Below this many submitted ratings, no average is shown — matches
+    // MIN_RATINGS_FOR_DISPLAY in lib/search/catalog-search.ts.
+    const MIN_RATINGS_FOR_DISPLAY = 3;
 
     for (const r of marketplaceRows.rows) {
       const domain = r.domain as string;
@@ -262,13 +292,16 @@ export async function POST(req: NextRequest) {
       const { min: rawMin, max: rawMax } = nichePrice(r as Record<string, unknown>, niche);
       const minUsd = toUsd(Number(rawMin ?? 0), r.currency as string | null) ?? 0;
       const maxUsd = toUsd(Number(rawMax ?? rawMin ?? 0), r.currency as string | null) ?? minUsd;
+      const ratingCount = Number(r.rating_count ?? 0);
+      const hasEnoughRatings = ratingCount >= MIN_RATINGS_FOR_DISPLAY;
       offersMap.get(domain)!.push({
         name: (r.name as string) ?? "Marketplace",
         type: "DB",
         updated: fmtUpdated(r.updated_at as string | null),
         minPrice: minUsd,
         maxPrice: maxUsd,
-        quality: Math.min(5, Math.max(1, Number(r.quality_score ?? 3))),
+        quality: hasEnoughRatings ? Number(r.avg_rating) : 0,
+        ratingCount, hasEnoughRatings,
         delivery: Number(r.delivery_time_days ?? 14),
         tat: Number(r.tat ?? r.delivery_time_days ?? 14),
         link: (r.link_type as string) ?? "Dofollow",
@@ -283,13 +316,16 @@ export async function POST(req: NextRequest) {
       const { min: rawMinV, max: rawMaxV } = nichePrice(r as Record<string, unknown>, niche);
       const minUsd = toUsd(Number(rawMinV ?? 0), r.currency as string | null) ?? 0;
       const maxUsd = toUsd(Number(rawMaxV ?? rawMinV ?? 0), r.currency as string | null) ?? minUsd;
+      const ratingCount = Number(r.rating_count ?? 0);
+      const hasEnoughRatings = ratingCount >= MIN_RATINGS_FOR_DISPLAY;
       offersMap.get(domain)!.push({
         name: `Vendor: ${r.vendor_name as string}`,
         type: "Vendor",
         updated: fmtUpdated(r.updated_at as string | null),
         minPrice: minUsd,
         maxPrice: maxUsd,
-        quality: 3,
+        quality: hasEnoughRatings ? Number(r.avg_rating) : 0,
+        ratingCount, hasEnoughRatings,
         delivery: Number(r.delivery_time_days ?? 14),
         tat: Number(r.delivery_time_days ?? 14),
         link: "Dofollow",

@@ -208,6 +208,9 @@ export async function POST(req: NextRequest) {
               qualityScore: offer.qualityScore,
               requirements: offer.requirements,
               minPrice: offer.minPrice,
+              vendorUserId: offer.vendorUserId,
+              ratingAvg: offer.ratingAvg,
+              ratingCount: offer.ratingCount,
             },
             {
               contentNiche: item.contentNiche ?? null,

@@ -11,6 +11,7 @@ const ADMIN_NAV = [
   { label: "Users", href: ROUTES.adminUsers, icon: "👥" },
   { label: "All Orders", href: ROUTES.adminOrders, icon: "📋" },
   { label: "Marketplaces", href: "/admin/marketplaces", icon: "🏪" },
+  { label: "Reviews", href: "/admin/reviews", icon: "⭐" },
   { label: "Domain Examples", href: "/admin/domain-examples", icon: "🔗" },
   { label: "Currency Rates", href: "/admin/currency-rates", icon: "💱" },
   { label: "Support Tickets", href: ROUTES.adminSupportTickets, icon: "🎫" },

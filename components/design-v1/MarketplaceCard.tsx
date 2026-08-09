@@ -5,7 +5,7 @@
 // the interactive app and, here, the homepage demo).
 
 import { Icon } from "@/lib/design-v1/icons";
-import { Stars } from "@/lib/design-v1/icons";
+import { RatingBadge } from "@/lib/design-v1/icons";
 import { fmt, priceFmt } from "@/lib/design-v1/format";
 import type { BuyHandler, Currency, Domain, Offer } from "@/lib/design-v1/types";
 import { Pill, InfoTip, btn, priceCell, priceLbl, priceVal, editRow, editLbl, editVal } from "./primitives";
@@ -78,7 +78,7 @@ export function MarketplaceCard({
             <div style={{ fontSize: 11, color: "var(--lp-mute)" }}>Updated {o.updated}</div>
           </div>
         </div>
-        <Stars n={o.quality} />
+        <RatingBadge score={o.quality} count={o.ratingCount} hasEnoughData={o.hasEnoughRatings} />
       </div>
 
       <div

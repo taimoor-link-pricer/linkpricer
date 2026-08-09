@@ -19,6 +19,14 @@ export type SnapshotOfferMetadata = {
   requirements?: string | null;
   minPrice?: string | number | null;
   maxPrice?: string | number | null;
+  // Only set for Vendor-sourced orders — see ResolvedOffer.vendorUserId in
+  // lib/orders/pricing.ts for why this is snapshotted here rather than
+  // re-derived from supplier_offers after the fact.
+  vendorUserId?: string | null;
+  // Buyer-rating average/count at purchase time — record-keeping only, not
+  // rendered anywhere or used in pricing.
+  ratingAvg?: number | null;
+  ratingCount?: number;
   ext?: OrderMetaExt;
   [key: string]: unknown;
 };

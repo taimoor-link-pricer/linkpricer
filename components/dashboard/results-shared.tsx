@@ -62,13 +62,37 @@ export function Stars({ n }: { n: number }) {
   return <span style={{ color: "#f59e0b", fontSize: 13 }}>{[1, 2, 3, 4, 5].map((i) => (i <= n ? "★" : "☆")).join("")}</span>;
 }
 
+// Buyer-submitted rating average, always shown as stars — empty stars when
+// there aren't enough ratings yet to show a meaningful number (see
+// MIN_RATINGS_FOR_DISPLAY in lib/search/catalog-search.ts). Never falls back
+// to a fabricated score. Pointer cursor on both states so the stars read as
+// interactive (hover shows the count / basis via the title tooltip).
+export function RatingBadge({ score, count, hasEnoughData }: { score: number; count: number; hasEnoughData: boolean }) {
+  if (!hasEnoughData) {
+    return (
+      <span
+        title={`${count} rating${count === 1 ? "" : "s"} so far — not enough yet to show a rating`}
+        style={{ display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+      >
+        <Stars n={0} />
+      </span>
+    );
+  }
+  return (
+    <span title={`${score.toFixed(1)} · ${count} rating${count === 1 ? "" : "s"}`} style={{ cursor: "pointer" }}>
+      <Stars n={Math.round(score)} />
+    </span>
+  );
+}
+
 export function Spinner({ size = 18 }: { size?: number }) {
   return <span style={{ display: "inline-block", width: size, height: size, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "lp-spin 0.7s linear infinite", flexShrink: 0 }} />;
 }
 
 export type Offer = {
   name: string; type: "API" | "Vendor" | "DB"; updated: string;
-  minPrice: number; maxPrice: number; quality: number; delivery: number; tat: number;
+  minPrice: number; maxPrice: number; quality: number; ratingCount: number; hasEnoughRatings: boolean;
+  delivery: number; tat: number;
   link: string; example: string | null;
 };
 
@@ -110,6 +134,12 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
 
   return (
     <div style={{ background: "#f8f9fc", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, padding: "20px 24px", position: "sticky", left: 0, maxWidth: maxWidth ?? undefined, boxSizing: "border-box" }}>
+      {/* Scoped, not page-level: this component is shared across pages that
+      don't all define their own mobile breakpoints — a hardcoded N-column
+      grid (below) has no room to shrink on a narrow screen the way auto-fit
+      does, so it needs its own collapse-to-1-column rule at the component
+      level rather than depending on a host page to provide one. */}
+      <style>{`@media (max-width: 640px) { .lp-offer-grid { grid-template-columns: 1fr !important; } }`}</style>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{showAll ? "All marketplaces" : "Top 3 best prices"}</span>
@@ -124,11 +154,12 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
           {showAll ? "Show top 3" : `Show all (${sortedOffers.length})`}
         </button>
       </div>
-      {/* max 320px per card — plain 1fr stretches to fill the row when there are
-      only 3 cards in a wide container (e.g. related-sites' table, which sets
-      minWidth:1180 for its extra Match column), making each card much wider
-      than intended even though the same grid looks fine on narrower tables. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 320px))", gap: 14 }}>
+      {/* Top-3 view: fixed N-column grid (N = however many of the 3 slots are
+      filled) so the cards stretch to fill the row on a big screen instead of
+      leaving whitespace to the right of narrower, 320px-capped cards. "Show
+      all" can have far more cards than fit in one row, so it keeps the
+      auto-fit/320px cap there to avoid over-wide cards in a long list. */}
+      <div className={showAll ? undefined : "lp-offer-grid"} style={{ display: "grid", gridTemplateColumns: showAll ? "repeat(auto-fit, minmax(240px, 320px))" : `repeat(${offers.length}, minmax(0, 1fr))`, gap: 14 }}>
         {offers.map((offer) => (
           <OfferCard
             key={offer.name}
@@ -148,7 +179,7 @@ export function ExpandedPanel<T extends DomainLike>({ domainData, currency, onAd
   );
 }
 
-function OfferCard({
+export function OfferCard({
   offer, isBest, yourPrice, currency, domainName, domainDr, domainTraffic, onAddToCart,
 }: {
   offer: Offer; isBest: boolean; yourPrice: number | null; currency: Currency;
@@ -177,7 +208,7 @@ function OfferCard({
           </div>
           <div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{offer.type === "Vendor" ? offer.name : prettyMarketplaceName(offer.name)}</div><div style={{ fontSize: 11, color: C.mute }}>Updated {offer.updated}</div></div>
         </div>
-        <Stars n={offer.quality} />
+        <RatingBadge score={offer.quality} count={offer.ratingCount} hasEnoughData={offer.hasEnoughRatings} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: yourPrice != null ? "repeat(3, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 1, background: C.line2, border: `1px solid ${C.line2}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ background: "#fff", padding: "9px 10px" }}>

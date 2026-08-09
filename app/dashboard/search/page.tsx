@@ -12,6 +12,7 @@ import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
 import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT, currencySymbol } from "@/lib/orders/types";
+import { RatingBadge } from "@/components/dashboard/results-shared";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -93,14 +94,6 @@ function domainInitials(domain: string): string {
   return domain.slice(0, 2).toUpperCase();
 }
 
-function Stars({ n }: { n: number }) {
-  return (
-    <span style={{ color: "#f59e0b", fontSize: 13 }}>
-      {[1, 2, 3, 4, 5].map((i) => (i <= n ? "★" : "☆")).join("")}
-    </span>
-  );
-}
-
 function Spinner({ size = 18 }: { size?: number }) {
   return (
     <>
@@ -140,6 +133,8 @@ type Offer = {
   minPrice: number;
   maxPrice: number;
   quality: number;
+  ratingCount: number;
+  hasEnoughRatings: boolean;
   delivery: number;
   tat: number;
   link: string;
@@ -332,11 +327,17 @@ function ExpandedPanel({
         </div>
       </div>
 
-      {/* Cards grid — 320px cap matches results-shared.tsx's ExpandedPanel
-      (Related Sites): plain 1fr stretched cards much wider than intended
-      once the panel could be wide (now bounded by `maxWidth` above, but a
-      wide screen still has plenty of room for 1fr to over-grow into). */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 320px))", gap: 14 }}>
+      {/* Top-3 view: fixed N-column grid (N = however many of the 3 slots are
+      filled) so the cards always stretch to fill the row on a big screen,
+      instead of auto-fit's 320px cap leaving dead whitespace to the right
+      when there are only 3 (or fewer) cards to lay out. "Show all" can have
+      many more cards than fit in one row, so it keeps the auto-fit/320px cap
+      there — that's still what avoids over-wide cards for a long list.
+      lp-offer-grid + the @media rule below collapses the fixed N-column
+      layout back to a single column on mobile — a hardcoded 1fr-per-offer
+      grid has no room to shrink on a narrow screen otherwise, unlike
+      auto-fit which already wraps naturally. */}
+      <div className={showAll ? undefined : "lp-offer-grid"} style={{ display: "grid", gridTemplateColumns: showAll ? "repeat(auto-fit, minmax(240px, 320px))" : `repeat(${offers.length}, minmax(0, 1fr))`, gap: 14 }}>
         {offers.map((offer) => (
           <OfferCard
             key={offer.name}
@@ -432,7 +433,7 @@ function OfferCard({
             <div style={{ fontSize: 11, color: C.mute }}>Updated {offer.updated}</div>
           </div>
         </div>
-        <Stars n={offer.quality} />
+        <RatingBadge score={offer.quality} count={offer.ratingCount} hasEnoughData={offer.hasEnoughRatings} />
       </div>
 
       {/* Price grid: 2 or 3 columns */}
@@ -2057,9 +2058,9 @@ const TOUR_DEMO_ROW: Domain = {
   bestPrice: 1200,
   yourPrice: null,
   offers: [
-    { name: "Vendor: John D.", type: "Vendor", updated: "04-05-2026 11:00", minPrice: 1200, maxPrice: 1200, quality: 3, delivery: 14, tat: 7, link: "Dofollow", example: null },
-    { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1300, maxPrice: 1450, quality: 5, delivery: 10, tat: 5, link: "Dofollow", example: null },
-    { name: "Getlinks", type: "DB", updated: "05-05-2026 09:12", minPrice: 1395, maxPrice: 1395, quality: 4, delivery: 7, tat: 4, link: "Dofollow", example: null },
+    { name: "Vendor: John D.", type: "Vendor", updated: "04-05-2026 11:00", minPrice: 1200, maxPrice: 1200, quality: 3, ratingCount: 0, hasEnoughRatings: false, delivery: 14, tat: 7, link: "Dofollow", example: null },
+    { name: "Adsy", type: "API", updated: "05-05-2026 14:30", minPrice: 1300, maxPrice: 1450, quality: 5, ratingCount: 0, hasEnoughRatings: false, delivery: 10, tat: 5, link: "Dofollow", example: null },
+    { name: "Getlinks", type: "DB", updated: "05-05-2026 09:12", minPrice: 1395, maxPrice: 1395, quality: 4, ratingCount: 0, hasEnoughRatings: false, delivery: 7, tat: 4, link: "Dofollow", example: null },
   ],
 };
 
@@ -2392,6 +2393,7 @@ function SearchPageInner() {
           .search-breadcrumb { display: none; }
           .search-2col { grid-template-columns: 1fr !important; }
           .search-hero-actions { flex-shrink: 1 !important; width: 100%; }
+          .lp-offer-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
 

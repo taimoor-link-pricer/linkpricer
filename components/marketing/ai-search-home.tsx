@@ -8,7 +8,7 @@
 // best match since this UI shows one domain at a time.
 
 import { useEffect, useRef, useState } from "react";
-import { Icon, Stars } from "@/lib/design-v1/icons";
+import { Icon, RatingBadge } from "@/lib/design-v1/icons";
 import { fmt } from "@/lib/design-v1/format";
 import { Pill, btn, chip, priceLbl, priceVal } from "@/components/design-v1/primitives";
 import type { CatalogSearchResult, CatalogSearchOffer } from "@/lib/search/catalog-search";
@@ -50,7 +50,7 @@ function OfferCard({ o, onBuy }: { o: CatalogSearchOffer; onBuy: () => void }) {
         }}><Icon name={typeIcon} size={15} /></div>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: "var(--lp-ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.type === "Vendor" ? o.name : prettyMarketplaceName(o.name)}</div>
-          <Stars n={o.quality} size={11} />
+          <RatingBadge score={o.quality} count={o.ratingCount} hasEnoughData={o.hasEnoughRatings} size={11} />
         </div>
       </div>
 
@@ -104,7 +104,7 @@ function OfferRow({ o, locked, onUnlock }: { o: CatalogSearchOffer; locked?: boo
         }}><Icon name={typeIcon} size={15} /></div>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: "var(--lp-ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.type === "Vendor" ? o.name : prettyMarketplaceName(o.name)}</div>
-          <Stars n={o.quality} size={11} />
+          <RatingBadge score={o.quality} count={o.ratingCount} hasEnoughData={o.hasEnoughRatings} size={11} />
         </div>
       </div>
 

@@ -91,3 +91,43 @@ export function Stars({
     </span>
   );
 }
+
+// Buyer-submitted rating average, always shown as stars — empty (outline)
+// stars when there aren't enough ratings yet (hasEnoughData === false — see
+// MIN_RATINGS_FOR_DISPLAY in lib/search/catalog-search.ts), never a
+// fabricated score. Pointer cursor on both states so the stars read as
+// interactive (hover shows the count / basis via the title tooltip).
+// hasEnoughData is only omitted by demo/sample data (lib/design-v1/types.ts
+// is explicitly loose, non-live data), in which case this just renders the
+// given score as-is — real API data always sets the flag explicitly, so
+// live pages never fabricate stars.
+export function RatingBadge({
+  score,
+  count,
+  hasEnoughData,
+  size = 12,
+}: {
+  score: number;
+  count?: number;
+  hasEnoughData?: boolean;
+  size?: number;
+}) {
+  if (hasEnoughData === false) {
+    return (
+      <span
+        title={`${count ?? 0} rating${count === 1 ? "" : "s"} so far — not enough yet to show a rating`}
+        style={{ display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+      >
+        <Stars n={0} size={size} />
+      </span>
+    );
+  }
+  return (
+    <span
+      title={count != null ? `${score.toFixed(1)} · ${count} rating${count === 1 ? "" : "s"}` : undefined}
+      style={{ cursor: "pointer" }}
+    >
+      <Stars n={Math.round(score)} size={size} />
+    </span>
+  );
+}
