@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchCatalog } from "@/lib/search/catalog-search";
+import { isOnTopicQuery } from "@/lib/ai/query-intent";
 
 // See app/api/related-sites/route.ts for why this is needed — same
 // searchCatalog pipeline, same risk of exceeding the platform-default
@@ -71,12 +72,46 @@ export async function POST(req: NextRequest) {
   if (!query) return NextResponse.json({ error: "query is required" }, { status: 400 });
 
   try {
-    // Only the single best match is ever shown here, so reranking the full
-    // default shortlist (80 candidates) wastes ~half the request's latency
-    // scoring domains that get thrown away. 25 is plenty for Claude to find
-    // the best of the word-overlap-prefiltered set.
-    const { results, lowRelevance } = await searchCatalog({ query, finalResultSize: 1, claudeShortlistSize: 25 });
-    return NextResponse.json({ result: results[0] ?? null, lowRelevance, remaining });
+    // Run the on-topic gate and the real search concurrently — a public chat
+    // box inevitably gets off-topic input ("can you clean my bathroom",
+    // "what is 2+2"), and those can still score real word-overlap matches
+    // (e.g. "bathroom" hits actual home-decor domains), so skipping the SQL
+    // prefilter isn't reliable on its own. Running both in parallel means
+    // legitimate searches never pay extra latency for this check; the search
+    // result is simply discarded on the rare off-topic request.
+    //
+    // Claude already scores the full 25-candidate shortlist regardless of
+    // finalResultSize (that param only slices the sorted result afterward),
+    // so asking for 5 instead of 1 costs no extra Claude time — just a few
+    // more pricing-join rows. The single best match is still all that's ever
+    // shown as a "found it" offer; the other 4 exist only so a low-relevance
+    // search can suggest categories that are actually in the catalog, rather
+    // than leaving the user with only a name-brand-less "no match" message.
+    const [onTopic, { results, lowRelevance }] = await Promise.all([
+      isOnTopicQuery(query),
+      searchCatalog({ query, finalResultSize: 5, claudeShortlistSize: 25 }),
+    ]);
+
+    if (!onTopic) {
+      return NextResponse.json({ result: null, lowRelevance: false, offTopic: true, remaining });
+    }
+
+    let suggestedCategories: string[] | undefined;
+    if (lowRelevance) {
+      const seen = new Set<string>();
+      suggestedCategories = [];
+      outer: for (const r of results) {
+        for (const cat of r.category.split(",").map((c) => c.trim()).filter(Boolean)) {
+          const key = cat.toLowerCase();
+          if (key === "general" || seen.has(key)) continue;
+          seen.add(key);
+          suggestedCategories.push(cat);
+          if (suggestedCategories.length >= 3) break outer;
+        }
+      }
+    }
+
+    return NextResponse.json({ result: results[0] ?? null, lowRelevance, suggestedCategories, remaining });
   } catch (err) {
     console.error("[/api/homepage-search]", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Search failed" }, { status: 500 });

@@ -19,7 +19,7 @@ const CHIPS = ["Finance guest post", "iGaming niche edit", "Tech blog under $200
 
 type ThreadMessage =
   | { role: "user"; text: string }
-  | { role: "assistant"; text: string }
+  | { role: "assistant"; text: string; suggestions?: string[] }
   | { role: "assistant"; domain: CatalogSearchResult };
 
 function priceFmt(n: number | null | undefined) {
@@ -83,9 +83,65 @@ function OfferCard({ o, onBuy }: { o: CatalogSearchOffer; onBuy: () => void }) {
   );
 }
 
+// Compact row for the 2nd/3rd cheapest offers — same info as OfferCard's
+// price/marketplace columns but without the "Best price" badge or Buy Now
+// button, since only the single cheapest offer is buyable inline here (the
+// full list, with buying, lives behind sign-up in "See all suppliers").
+function OfferRow({ o, locked, onUnlock }: { o: CatalogSearchOffer; locked?: boolean; onUnlock?: () => void }) {
+  const typeIcon = ({ API: "plug", DB: "db", Vendor: "user" } as const)[o.type] || "plug";
+  return (
+    <div style={{
+      background: "#fff", borderRadius: 12, border: "1px solid var(--lp-line)",
+      padding: "14px 18px", position: "relative", marginTop: 10, overflow: "hidden",
+      display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 170px", minWidth: 150, filter: locked ? "blur(5px)" : undefined }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 7, flexShrink: 0,
+          background: o.type === "Vendor" ? "#fdf2dd" : o.type === "API" ? "#e9f1fe" : "#eef0f4",
+          color: o.type === "Vendor" ? "#a35d00" : o.type === "API" ? "#1d4ed8" : "#374151",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}><Icon name={typeIcon} size={15} /></div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--lp-ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.type === "Vendor" ? o.name : prettyMarketplaceName(o.name)}</div>
+          <Stars n={o.quality} size={11} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 18, flex: "1 1 220px", filter: locked ? "blur(5px)" : undefined }}>
+        <div>
+          <div style={priceLbl}>Marketplace</div>
+          <div style={priceVal}>{priceFmt(o.minPrice)}</div>
+        </div>
+        <div>
+          <div style={priceLbl}>Our price</div>
+          <div style={{ ...priceVal, color: "var(--lp-accent-700)" }}>{priceFmt(fmt.withFee(o.minPrice))}</div>
+        </div>
+      </div>
+
+      {locked && (
+        <button
+          type="button"
+          onClick={onUnlock}
+          style={{
+            position: "absolute", inset: 0, border: "none", cursor: "pointer",
+            background: "rgba(255,255,255,0.5)", display: "flex", alignItems: "center",
+            justifyContent: "center", gap: 8,
+          }}
+        >
+          <span style={{ ...btn("primary", "sm"), pointerEvents: "none" }}>
+            <Icon name="lock" size={12} /> Log in to see full pricing
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 function MatchResult({ d, onBuy, onViewMore }: { d: CatalogSearchResult; onBuy: () => void; onViewMore: () => void }) {
   const offers = (d.offers || []).slice().sort((a, b) => a.minPrice - b.minPrice);
-  const best = offers[0];
+  const [best, second, third] = offers;
+  const remaining = offers.length - 3;
 
   return (
     <div className="msg-in" style={{ marginTop: 14, maxWidth: 720 }}>
@@ -96,11 +152,13 @@ function MatchResult({ d, onBuy, onViewMore }: { d: CatalogSearchResult; onBuy: 
       </div>
 
       {best && <OfferCard o={best} onBuy={onBuy} />}
+      {second && <OfferRow o={second} />}
+      {third && <OfferRow o={third} locked onUnlock={onViewMore} />}
 
-      {offers.length > 1 && (
+      {remaining > 0 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
           <span style={{ fontSize: 13.5, color: "var(--lp-mute)" }}>
-            +{offers.length - 1} more suppliers stock this domain
+            +{remaining} more suppliers stock this domain
           </span>
           <button style={{ ...btn("ghost", "sm"), cursor: "pointer" }} onClick={onViewMore}>
             See all suppliers <Icon name="arrowRight" size={12} />
@@ -116,9 +174,18 @@ const UserBubble = ({ text }: { text: string }) => (
     <div style={{ maxWidth: "75%", background: "var(--lp-accent)", color: "#fff", borderRadius: "16px 16px 4px 16px", padding: "11px 16px", fontSize: 14.5, lineHeight: 1.5 }}>{text}</div>
   </div>
 );
-const AssistantText = ({ text }: { text: string }) => (
+const AssistantText = ({ text, suggestions, onSuggestionClick }: { text: string; suggestions?: string[]; onSuggestionClick?: (s: string) => void }) => (
   <div className="msg-in" style={{ marginTop: 16, maxWidth: 640 }}>
     <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6, color: "var(--lp-ink-2)" }}>{text}</p>
+    {suggestions && suggestions.length > 0 && (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+        {suggestions.map((s) => (
+          <button key={s} type="button" onClick={() => onSuggestionClick?.(s)} style={{ ...chip, cursor: "pointer" }}>
+            {s}
+          </button>
+        ))}
+      </div>
+    )}
   </div>
 );
 const THINKING_STEPS = [
@@ -176,6 +243,8 @@ function InputBar({ docked, value, setValue, thinking, send }: { docked: boolean
 interface HomepageSearchResponse {
   result: CatalogSearchResult | null;
   lowRelevance: boolean;
+  suggestedCategories?: string[];
+  offTopic?: boolean;
   remaining?: number;
 }
 
@@ -211,16 +280,41 @@ export function AiSearchHome() {
       const data: HomepageSearchResponse = await res.json();
       setThinking(false);
 
+      // Off-topic input (small talk, unrelated tasks, trivia, math) never
+      // reaches the search pipeline's "no match"/"low relevance" branches —
+      // the API flags it directly so the chat can decline in-character
+      // instead of pretending to search a marketplace for "2+2".
+      if (data.offTopic) {
+        setThread((t) => [...t, {
+          role: "assistant",
+          text: "That's a bit outside what I can help with — I'm built to find backlink and guest-post opportunities on real websites. Try one of these instead:",
+          suggestions: CHIPS,
+        }]);
+        return;
+      }
+
       if (!data.result) {
         setThread((t) => [...t, { role: "assistant", text: "I couldn't find a match for that — try describing the niche, budget, or type of site you're after." }]);
         return;
       }
 
+      // A low-relevance result means Claude couldn't find anything genuinely
+      // on-topic — presenting it as a priced, buy-now offer (as before) reads
+      // as a confident recommendation when it's really just the least-bad
+      // guess. Guide the user toward categories we actually carry instead of
+      // dressing up an unrelated domain as a match.
+      if (data.lowRelevance) {
+        const cats = data.suggestedCategories ?? [];
+        const guideText = cats.length > 0
+          ? `We don't have domains specifically for "${text}" in our database yet. We do have similar sites in these categories though — want to see options in one?`
+          : `We don't have domains specifically for "${text}" in our database yet — try describing a different niche or budget.`;
+        setThread((t) => [...t, { role: "assistant", text: guideText, suggestions: cats }]);
+        return;
+      }
+
       const d = data.result;
       slots.current.domain = d;
-      const intro = data.lowRelevance
-        ? `Closest match we found for that — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}:`
-        : `Found it — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}. Here's the best price we found:`;
+      const intro = `Found it — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}. Here's the best price we found:`;
       setThread((t) => [...t, { role: "assistant", text: intro }, { role: "assistant", domain: d }]);
     } catch {
       setThinking(false);
@@ -266,7 +360,7 @@ export function AiSearchHome() {
               {thread.map((m, i) => {
                 if (m.role === "user") return <UserBubble key={i} text={m.text} />;
                 if ("domain" in m) return <MatchResult key={i} d={m.domain} onBuy={() => requireSignup("buy")} onViewMore={() => requireSignup("search")} />;
-                return <AssistantText key={i} text={m.text} />;
+                return <AssistantText key={i} text={m.text} suggestions={m.suggestions} onSuggestionClick={(s) => send(s)} />;
               })}
               {thinking && <TypingRow />}
             </div>

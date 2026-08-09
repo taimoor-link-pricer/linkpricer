@@ -305,7 +305,25 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // are [A-Za-z0-9_], so punctuation like the dots/hyphens in a domain name
   // still count as boundaries — "linen-shop.com" or "shop.linencompany.com"
   // still match cleanly).
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+  // Generic terms like "website"/"niche" show up in nearly every domain's
+  // category/summary text, so on their own (via the word-boundary OR clause
+  // below) they can admit huge swaths of unrelated domains into the prefilter
+  // — e.g. "linen websites" only needed to match the word "websites" to pull
+  // in domains with nothing to do with linen. Stripping terms too generic to
+  // mean anything on their own keeps the OR clause meaningful without
+  // requiring every word to match (which would tank recall on legitimate
+  // multi-word queries).
+  const SEARCH_STOPWORDS = new Set([
+    "website", "websites", "site", "sites", "niche", "niches",
+    "blog", "blogs", "domain", "domains", "page", "pages",
+    "backlink", "backlinks", "link", "links",
+  ]);
+  const words = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w) => !SEARCH_STOPWORDS.has(w))
+    .slice(0, 6);
   const wordBoundaryPattern = (w: string) => `\\y${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\y`;
   const wordClauses = words.map((w) => {
     const pattern = wordBoundaryPattern(w);
