@@ -124,7 +124,7 @@ function DualRangeSlider({
   const minPct = clampPct(valueMin);
   const maxPct = clampPct(valueMax);
   return (
-    <div style={{ flex: "1 1 220px", minWidth: 220 }}>
+    <div style={{ width: "100%" }}>
       <div style={{ fontSize: 10.5, fontWeight: 700, color: C.mute, letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 6 }}>
         {label}
       </div>
@@ -893,10 +893,27 @@ export default function RelatedSitesPage() {
         )}
       </section>
 
+      {/* Split into two rows, each its own aligned layout, instead of one
+      flex-wrap row mixing dropdowns (fixed-ish width) with range sliders
+      (which need real room for a track + two number inputs). Mixed together,
+      flex-grow distributed leftover space unevenly across items with very
+      different internal content, so the three sliders never lined up cleanly
+      with each other or the dropdowns. Sliders now get their own equal-width
+      grid so Traffic/DR/Price stay visually aligned regardless of screen
+      width, and collapse to one column on mobile (.lp-range-grid below). */}
       <section data-tour="filters" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16, boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
+        <style>{`@media (max-width: 860px) { .lp-range-grid { grid-template-columns: 1fr !important; } }`}</style>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
           <RSDropdown label="Country" value={filters.country} options={RS_FILTERS.country} onChange={(v) => setFilters((f) => ({ ...f, country: v }))} searchable />
           <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
+          <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
+          <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
+          {activeFilterCount > 0 && (
+            <button onClick={clearFilters} style={{ height: 38, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Clear ({activeFilterCount})</button>
+          )}
+        </div>
+
+        <div className="lp-range-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 24, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.line2}` }}>
           <DualRangeSlider
             label="Traffic"
             bounds={trafficBounds}
@@ -927,11 +944,6 @@ export default function RelatedSitesPage() {
             formatValue={(v) => `$${Math.round(v).toLocaleString()}`}
             title="Marketplace price range (before fee) — drag or type an exact value"
           />
-          <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
-          <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
-          {activeFilterCount > 0 && (
-            <button onClick={clearFilters} style={{ height: 38, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Clear ({activeFilterCount})</button>
-          )}
         </div>
       </section>
 
