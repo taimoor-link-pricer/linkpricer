@@ -7,9 +7,18 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Reads the `admin` custom claim off the ID token itself, not a
+    // users/{uid} document lookup -- a get()-based check here works for a
+    // single document but Firestore does not memoize get() calls across a
+    // list/collection-group query's per-document rule evaluations, so a
+    // query returning N documents would re-run that get() up to N times and
+    // blow the per-query get() budget, denying the whole query even for a
+    // genuine admin (this is exactly what broke the admin chat dock's
+    // cross-order feed). The claim is set server-side in
+    // requireAdminSession() (lib/admin-auth.ts) whenever an admin session is
+    // established, and costs nothing to check regardless of query size.
     function isAdmin() {
-      return isAuthenticated() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isAuthenticated() && request.auth.token.admin == true;
     }
 
     function isOwner(userId) {
@@ -39,17 +48,49 @@ service cloud.firestore {
       allow update: if isAdmin();
       allow delete: if isAdmin();
 
+      // Covers reads/writes scoped to ONE specific order's subcollection
+      // (collection(db, "orders", orderId, "messages")) -- the per-order
+      // chat thread has always used exactly this form, and it works because
+      // request.auth here is being checked against a single, known orderId.
+      // It does NOT cover a collectionGroup(db, "messages") query spanning
+      // every order at once -- see the top-level {path=**} rule below for
+      // that case, which Firestore treats as structurally different from
+      // this nested form despite matching the same underlying documents.
       match /messages/{messageId} {
+        // isAdmin() checked first, deliberately -- get()-based checks (the
+        // ownership check on the other side of this ||) cost a document
+        // read, and `||` evaluates left-to-right without skipping the left
+        // operand just because the right one would also be true. Costs
+        // nothing extra for the common admin case either way here since
+        // this rule only ever evaluates against one specific orderId, but
+        // keeping the cheap check first is free and consistent with the
+        // collection-group rule below, where the ordering genuinely matters.
         allow read: if isAuthenticated() &&
-          (get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid || isAdmin());
+          (isAdmin() || get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid);
         allow create: if isAuthenticated() &&
-          (get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid || isAdmin()) &&
+          (isAdmin() || get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid) &&
           request.resource.data.senderId == request.auth.uid &&
           request.resource.data.body is string &&
           request.resource.data.body.size() > 0 && request.resource.data.body.size() < 4000 &&
           request.resource.data.keys().hasAll(['senderId', 'senderType', 'senderName', 'body', 'createdAt']);
         allow update, delete: if false;
       }
+    }
+
+    // Collection-group counterpart to orders/{orderId}/messages/{messageId}
+    // above, specifically for the admin chat dock's cross-order "latest
+    // message per conversation" feed (collectionGroup(db, "messages")).
+    // Firestore does not extend a nested subcollection match rule to
+    // collection-group queries automatically -- that only covers queries
+    // scoped to one known parent order, which is a structurally different
+    // request as far as rule matching is concerned even though it can
+    // return the exact same documents. This needs its own top-level rule
+    // using the {path=**} wildcard. Admin-only and read-only: nothing
+    // client-side should ever need to query or write across every order's
+    // messages at once -- all writes still go through the scoped rule
+    // above, which requires knowing a specific orderId.
+    match /{path=**}/messages/{messageId} {
+      allow read: if isAdmin();
     }
 
     // Deny all other reads/writes by default
