@@ -322,6 +322,11 @@ function EmptyState({ query, hasResults, activeFilterCount, onClear }: { query: 
   );
 }
 
+const CATEGORY_MAX_CHARS = 25;
+function truncateCategory(category: string): string {
+  return category.length > CATEGORY_MAX_CHARS ? `${category.slice(0, CATEGORY_MAX_CHARS)}...` : category;
+}
+
 interface RelatedSite {
   domain: string; matchPct: number; country: string; lang: string; category: string;
   dr: number; drUpdatedAt: string | null; drTrend: "up" | "flat" | "down"; traffic: number; keywords: number; refDomains: number;
@@ -471,7 +476,7 @@ function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, on
         </td>
         <td style={{ ...td, color: C.ink2 }}>{fmtNum(row.traffic)}</td>
         <td style={{ ...td, color: C.ink2 }}>{fmtNum(row.keywords)}</td>
-        <td style={{ ...td, maxWidth: 130 }}><span title={row.category} style={{ display: "inline-block", maxWidth: 110, background: C.line2, color: C.ink3, borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>{row.category}</span></td>
+        <td style={{ ...td, maxWidth: 130 }}><span title={row.category} style={{ display: "inline-block", maxWidth: 110, background: C.line2, color: C.ink3, borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom", cursor: "pointer" }}>{truncateCategory(row.category)}</span></td>
       </tr>
       {expanded && (
         <tr><td colSpan={10} style={{ padding: 0 }}><ExpandedPanel domainData={row} currency={currency} onAddToCart={onAddToCart} maxWidth={tableWrapWidth} /></td></tr>
