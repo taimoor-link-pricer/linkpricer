@@ -6,6 +6,8 @@ import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   getAdditionalUserInfo,
   signOut as firebaseSignOut,
   updateProfile,
@@ -13,6 +15,7 @@ import {
   verifyPasswordResetCode as firebaseVerifyPasswordResetCode,
   confirmPasswordReset as firebaseConfirmPasswordReset,
   type User,
+  type UserCredential,
 } from "firebase/auth";
 import { auth } from "./client";
 import { ROUTES } from "@/lib/constants";
@@ -79,17 +82,48 @@ export async function signUpWithEmail(
   return user;
 }
 
-export async function startGoogleSignIn(): Promise<{ user: User; isNewUser: boolean }> {
-  const provider = new GoogleAuthProvider();
-  const result = await signInWithPopup(auth, provider);
+async function finalizeGoogleResult(result: UserCredential): Promise<{ user: User; isNewUser: boolean }> {
   const isNewUser = getAdditionalUserInfo(result)?.isNewUser ?? false;
   const idToken = await result.user.getIdToken();
   await createSession(idToken);
   return { user: result.user, isNewUser };
 }
 
+// Codes Firebase raises when the popup itself was the problem (blocked
+// outright, or the SDK lost track of it) rather than a real auth failure.
+// The specific bug this exists for: Chrome's Cross-Origin-Opener-Policy
+// blocks the opener's `popup.closed` poll that signInWithPopup relies on to
+// detect completion, so the SDK gives up and reports popup-closed-by-user
+// even when the user finished signing in — our own COOP header is already
+// the documented "same-origin-allow-popups" fix for our side, but
+// accounts.google.com's COOP is outside our control, so it still happens.
+// Falling back to a full-page redirect sidesteps the popup (and its
+// `.closed` check) entirely.
+const POPUP_FALLBACK_CODES = new Set(["auth/popup-blocked", "auth/popup-closed-by-user", "auth/cancelled-popup-request"]);
+
+export async function startGoogleSignIn(): Promise<{ user: User; isNewUser: boolean }> {
+  const provider = new GoogleAuthProvider();
+  try {
+    const result = await signInWithPopup(auth, provider);
+    return await finalizeGoogleResult(result);
+  } catch (err) {
+    if (isFirebaseError(err) && POPUP_FALLBACK_CODES.has(err.code)) {
+      await signInWithRedirect(auth, provider);
+      // signInWithRedirect navigates the page away to Google — this call
+      // site never gets a result back directly. finishGoogleSignIn() picks
+      // it up on the next page load once Google redirects back. Hang
+      // rather than resolve/throw so callers' post-await code (e.g. a
+      // route push) doesn't fire while the browser is mid-navigation.
+      return new Promise(() => {});
+    }
+    throw err;
+  }
+}
+
 export async function finishGoogleSignIn(): Promise<{ user: User; isNewUser: boolean } | null> {
-  return null;
+  const result = await getRedirectResult(auth);
+  if (!result) return null;
+  return finalizeGoogleResult(result);
 }
 
 export async function signOut() {
