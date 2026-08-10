@@ -90,6 +90,7 @@ export default function MarketplacesPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedDomain, setExpandedDomain] = useState<string | null>(null);
   const [expandedData, setExpandedData] = useState<MarketListing[] | null>(null);
   const [expandLoading, setExpandLoading] = useState(false);
@@ -99,14 +100,37 @@ export default function MarketplacesPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const params = new URLSearchParams({ page: String(page) });
       if (search) params.set("search", search);
       const res = await fetch(`/api/admin/domains?${params}`);
+      // A 401/403 here means the session cookie is no longer valid server-side
+      // even though the client still thinks it's logged in (e.g. it expired,
+      // or got revoked) -- AuthProvider only catches this on its own
+      // onAuthStateChanged firing, which doesn't happen just because one API
+      // call got rejected. Send them to log in again rather than silently
+      // showing an empty table that looks like "there's just no data".
+      if (res.status === 401 || res.status === 403) {
+        window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`;
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(
+          res.status === 504
+            ? "This page timed out loading. Try again in a moment."
+            : "Couldn't load domains. Try again."
+        );
+      }
       const data = await res.json();
       setRows(data.domains ?? []);
       setTotal(data.total ?? 0);
       setTotalPages(data.totalPages ?? 1);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Couldn't load domains. Try again.");
+      setRows([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
     }
@@ -280,7 +304,7 @@ export default function MarketplacesPage() {
               onChange={(e) => handleSearchChange(e.target.value)}
             />
           </div>
-          {!loading && (
+          {!loading && !loadError && (
             <span className="mp-count">
               {total === 0
                 ? "No domains found"
@@ -307,6 +331,13 @@ export default function MarketplacesPage() {
                   <td colSpan={6}>
                     <span className="mp-spinner" />
                     Loading domains…
+                  </td>
+                </tr>
+              ) : loadError ? (
+                <tr className="mp-empty">
+                  <td colSpan={6}>
+                    <div style={{ color: "#dc2626", fontWeight: 600, marginBottom: 10 }}>{loadError}</div>
+                    <button className="mp-expand-btn" onClick={() => load()}>↻ Retry</button>
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
