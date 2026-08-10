@@ -173,14 +173,74 @@ function DualRangeSlider({
 // ── filter option sets (verbatim from RS_FILTERS) ────────────────────────────
 const RS_FILTERS: Record<string, DropdownOption[]> = {
   country: [
-    { id: "any", label: "All countries" }, { id: "US", label: "United States" }, { id: "GB", label: "United Kingdom" },
-    { id: "CA", label: "Canada" }, { id: "AU", label: "Australia" }, { id: "IE", label: "Ireland" }, { id: "DE", label: "Germany" },
-    { id: "FR", label: "France" }, { id: "ES", label: "Spain" }, { id: "IT", label: "Italy" }, { id: "PT", label: "Portugal" },
-    { id: "NL", label: "Netherlands" }, { id: "BE", label: "Belgium" }, { id: "CH", label: "Switzerland" }, { id: "AT", label: "Austria" },
-    { id: "SE", label: "Sweden" }, { id: "NO", label: "Norway" }, { id: "DK", label: "Denmark" }, { id: "FI", label: "Finland" },
-    { id: "PL", label: "Poland" }, { id: "LT", label: "Lithuania" }, { id: "BR", label: "Brazil" }, { id: "MX", label: "Mexico" },
-    { id: "IN", label: "India" }, { id: "JP", label: "Japan" }, { id: "CN", label: "China" }, { id: "KR", label: "South Korea" },
-    { id: "SG", label: "Singapore" }, { id: "AE", label: "United Arab Emirates" }, { id: "ZA", label: "South Africa" }, { id: "NZ", label: "New Zealand" },
+    { id: "any", label: "All countries" },
+    { id: "AF", label: "Afghanistan" }, { id: "AL", label: "Albania" }, { id: "DZ", label: "Algeria" },
+    { id: "AD", label: "Andorra" }, { id: "AO", label: "Angola" }, { id: "AG", label: "Antigua and Barbuda" },
+    { id: "AR", label: "Argentina" }, { id: "AM", label: "Armenia" }, { id: "AU", label: "Australia" },
+    { id: "AT", label: "Austria" }, { id: "AZ", label: "Azerbaijan" }, { id: "BS", label: "Bahamas" },
+    { id: "BH", label: "Bahrain" }, { id: "BD", label: "Bangladesh" }, { id: "BB", label: "Barbados" },
+    { id: "BY", label: "Belarus" }, { id: "BE", label: "Belgium" }, { id: "BZ", label: "Belize" },
+    { id: "BJ", label: "Benin" }, { id: "BT", label: "Bhutan" }, { id: "BO", label: "Bolivia" },
+    { id: "BA", label: "Bosnia and Herzegovina" }, { id: "BW", label: "Botswana" }, { id: "BR", label: "Brazil" },
+    { id: "BN", label: "Brunei" }, { id: "BG", label: "Bulgaria" }, { id: "BF", label: "Burkina Faso" },
+    { id: "BI", label: "Burundi" }, { id: "CV", label: "Cabo Verde" }, { id: "KH", label: "Cambodia" },
+    { id: "CM", label: "Cameroon" }, { id: "CA", label: "Canada" }, { id: "CF", label: "Central African Republic" },
+    { id: "TD", label: "Chad" }, { id: "CL", label: "Chile" }, { id: "CN", label: "China" },
+    { id: "CO", label: "Colombia" }, { id: "KM", label: "Comoros" }, { id: "CG", label: "Congo (Brazzaville)" },
+    { id: "CD", label: "Congo (DRC)" }, { id: "CR", label: "Costa Rica" }, { id: "CI", label: "Côte d'Ivoire" },
+    { id: "HR", label: "Croatia" }, { id: "CU", label: "Cuba" }, { id: "CY", label: "Cyprus" },
+    { id: "CZ", label: "Czechia" }, { id: "DK", label: "Denmark" }, { id: "DJ", label: "Djibouti" },
+    { id: "DM", label: "Dominica" }, { id: "DO", label: "Dominican Republic" }, { id: "EC", label: "Ecuador" },
+    { id: "EG", label: "Egypt" }, { id: "SV", label: "El Salvador" }, { id: "GQ", label: "Equatorial Guinea" },
+    { id: "ER", label: "Eritrea" }, { id: "EE", label: "Estonia" }, { id: "SZ", label: "Eswatini" },
+    { id: "ET", label: "Ethiopia" }, { id: "FJ", label: "Fiji" }, { id: "FI", label: "Finland" },
+    { id: "FR", label: "France" }, { id: "GA", label: "Gabon" }, { id: "GM", label: "Gambia" },
+    { id: "GE", label: "Georgia" }, { id: "DE", label: "Germany" }, { id: "GH", label: "Ghana" },
+    { id: "GR", label: "Greece" }, { id: "GD", label: "Grenada" }, { id: "GT", label: "Guatemala" },
+    { id: "GN", label: "Guinea" }, { id: "GW", label: "Guinea-Bissau" }, { id: "GY", label: "Guyana" },
+    { id: "HT", label: "Haiti" }, { id: "HN", label: "Honduras" }, { id: "HK", label: "Hong Kong" },
+    { id: "HU", label: "Hungary" }, { id: "IS", label: "Iceland" }, { id: "IN", label: "India" },
+    { id: "ID", label: "Indonesia" }, { id: "IR", label: "Iran" }, { id: "IQ", label: "Iraq" },
+    { id: "IE", label: "Ireland" }, { id: "IL", label: "Israel" }, { id: "IT", label: "Italy" },
+    { id: "JM", label: "Jamaica" }, { id: "JP", label: "Japan" }, { id: "JO", label: "Jordan" },
+    { id: "KZ", label: "Kazakhstan" }, { id: "KE", label: "Kenya" }, { id: "KI", label: "Kiribati" },
+    { id: "XK", label: "Kosovo" }, { id: "KW", label: "Kuwait" }, { id: "KG", label: "Kyrgyzstan" },
+    { id: "LA", label: "Laos" }, { id: "LV", label: "Latvia" }, { id: "LB", label: "Lebanon" },
+    { id: "LS", label: "Lesotho" }, { id: "LR", label: "Liberia" }, { id: "LY", label: "Libya" },
+    { id: "LI", label: "Liechtenstein" }, { id: "LT", label: "Lithuania" }, { id: "LU", label: "Luxembourg" },
+    { id: "MO", label: "Macao" }, { id: "MG", label: "Madagascar" }, { id: "MW", label: "Malawi" },
+    { id: "MY", label: "Malaysia" }, { id: "MV", label: "Maldives" }, { id: "ML", label: "Mali" },
+    { id: "MT", label: "Malta" }, { id: "MH", label: "Marshall Islands" }, { id: "MR", label: "Mauritania" },
+    { id: "MU", label: "Mauritius" }, { id: "MX", label: "Mexico" }, { id: "FM", label: "Micronesia" },
+    { id: "MD", label: "Moldova" }, { id: "MC", label: "Monaco" }, { id: "MN", label: "Mongolia" },
+    { id: "ME", label: "Montenegro" }, { id: "MA", label: "Morocco" }, { id: "MZ", label: "Mozambique" },
+    { id: "MM", label: "Myanmar" }, { id: "NA", label: "Namibia" }, { id: "NR", label: "Nauru" },
+    { id: "NP", label: "Nepal" }, { id: "NL", label: "Netherlands" }, { id: "NZ", label: "New Zealand" },
+    { id: "NI", label: "Nicaragua" }, { id: "NE", label: "Niger" }, { id: "NG", label: "Nigeria" },
+    { id: "KP", label: "North Korea" }, { id: "MK", label: "North Macedonia" }, { id: "NO", label: "Norway" },
+    { id: "OM", label: "Oman" }, { id: "PK", label: "Pakistan" }, { id: "PW", label: "Palau" },
+    { id: "PS", label: "Palestine" }, { id: "PA", label: "Panama" }, { id: "PG", label: "Papua New Guinea" },
+    { id: "PY", label: "Paraguay" }, { id: "PE", label: "Peru" }, { id: "PH", label: "Philippines" },
+    { id: "PL", label: "Poland" }, { id: "PT", label: "Portugal" }, { id: "QA", label: "Qatar" },
+    { id: "RO", label: "Romania" }, { id: "RU", label: "Russia" }, { id: "RW", label: "Rwanda" },
+    { id: "KN", label: "Saint Kitts and Nevis" }, { id: "LC", label: "Saint Lucia" }, { id: "VC", label: "Saint Vincent and the Grenadines" },
+    { id: "WS", label: "Samoa" }, { id: "SM", label: "San Marino" }, { id: "ST", label: "Sao Tome and Principe" },
+    { id: "SA", label: "Saudi Arabia" }, { id: "SN", label: "Senegal" }, { id: "RS", label: "Serbia" },
+    { id: "SC", label: "Seychelles" }, { id: "SL", label: "Sierra Leone" }, { id: "SG", label: "Singapore" },
+    { id: "SK", label: "Slovakia" }, { id: "SI", label: "Slovenia" }, { id: "SB", label: "Solomon Islands" },
+    { id: "SO", label: "Somalia" }, { id: "ZA", label: "South Africa" }, { id: "KR", label: "South Korea" },
+    { id: "SS", label: "South Sudan" }, { id: "ES", label: "Spain" }, { id: "LK", label: "Sri Lanka" },
+    { id: "SD", label: "Sudan" }, { id: "SR", label: "Suriname" }, { id: "SE", label: "Sweden" },
+    { id: "CH", label: "Switzerland" }, { id: "SY", label: "Syria" }, { id: "TW", label: "Taiwan" },
+    { id: "TJ", label: "Tajikistan" }, { id: "TZ", label: "Tanzania" }, { id: "TH", label: "Thailand" },
+    { id: "TL", label: "Timor-Leste" }, { id: "TG", label: "Togo" }, { id: "TO", label: "Tonga" },
+    { id: "TT", label: "Trinidad and Tobago" }, { id: "TN", label: "Tunisia" }, { id: "TR", label: "Turkey" },
+    { id: "TM", label: "Turkmenistan" }, { id: "TV", label: "Tuvalu" }, { id: "UG", label: "Uganda" },
+    { id: "UA", label: "Ukraine" }, { id: "AE", label: "United Arab Emirates" }, { id: "GB", label: "United Kingdom" },
+    { id: "US", label: "United States" }, { id: "UY", label: "Uruguay" }, { id: "UZ", label: "Uzbekistan" },
+    { id: "VU", label: "Vanuatu" }, { id: "VA", label: "Vatican City" }, { id: "VE", label: "Venezuela" },
+    { id: "VN", label: "Vietnam" }, { id: "YE", label: "Yemen" }, { id: "ZM", label: "Zambia" },
+    { id: "ZW", label: "Zimbabwe" },
   ],
   language: [
     { id: "any", label: "All languages" }, { id: "EN", label: "English" }, { id: "ES", label: "Spanish" }, { id: "FR", label: "French" },
@@ -550,6 +610,23 @@ export default function RelatedSitesPage() {
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
 
+  // Filters used to sit permanently open in a full-width bar — always
+  // visible whether or not anyone was using them, which is what read as
+  // "cluttered" rather than obviously a filter control. Collapsing them
+  // behind one explicit "Filters" toggle (closed by default, click-outside
+  // or Escape to dismiss) is the actual fix; the filter state/logic below
+  // is untouched, only where it renders changed.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const onDoc = (e: MouseEvent) => { if (!filtersPanelRef.current?.contains(e.target as Node)) setFiltersOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFiltersOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [filtersOpen]);
+
   // This table has an explicit minWidth:1180 for its extra Match column, so
   // its horizontally-scrolling wrapper is *routinely* narrower than the
   // table itself — an expanded row's price-comparison cards are a colSpan
@@ -898,59 +975,96 @@ export default function RelatedSitesPage() {
         )}
       </section>
 
-      {/* Split into two rows, each its own aligned layout, instead of one
-      flex-wrap row mixing dropdowns (fixed-ish width) with range sliders
-      (which need real room for a track + two number inputs). Mixed together,
-      flex-grow distributed leftover space unevenly across items with very
-      different internal content, so the three sliders never lined up cleanly
-      with each other or the dropdowns. Sliders now get their own equal-width
-      grid so Traffic/DR/Price stay visually aligned regardless of screen
-      width, and collapse to one column on mobile (.lp-range-grid below). */}
-      <section data-tour="filters" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16, boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
-        <style>{`@media (max-width: 860px) { .lp-range-grid { grid-template-columns: 1fr !important; } }`}</style>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
-          <RSDropdown label="Country" value={filters.country} options={RS_FILTERS.country} onChange={(v) => setFilters((f) => ({ ...f, country: v }))} searchable />
-          <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
-          <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
-          <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
+      {/* Filters used to sit permanently open in a full-width bar (always
+      rendered whether or not anyone touched them, four dropdowns and three
+      sliders all visible at once), which read as page clutter rather than
+      an obvious "these are search filters" control. Same state/logic below,
+      unchanged — just collapsed behind one explicit "Filters" toggle that
+      opens a floating panel, closed by default. */}
+      <div data-tour="filters" ref={filtersPanelRef} style={{ position: "relative", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={() => setFiltersOpen((o) => !o)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 9, padding: "10px 16px", borderRadius: 10,
+              border: `1px solid ${filtersOpen ? C.accent : C.line}`,
+              background: filtersOpen ? C.accent50 : "#fff", color: C.ink, fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+              <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+              <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
+            </svg>
+            Filters
+            {activeFilterCount > 0 && (
+              <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 999, background: C.accent, color: "#fff", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{activeFilterCount}</span>
+            )}
+            <span style={{ color: C.mute, fontSize: 10, marginLeft: 2, transform: filtersOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+          </button>
           {activeFilterCount > 0 && (
-            <button onClick={clearFilters} style={{ height: 38, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Clear ({activeFilterCount})</button>
+            <button onClick={clearFilters} style={{ height: 40, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 10, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Clear ({activeFilterCount})</button>
           )}
         </div>
 
-        <div className="lp-range-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 24, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.line2}` }}>
-          <DualRangeSlider
-            label="Traffic"
-            bounds={trafficBounds}
-            valueMin={trafficMin}
-            valueMax={trafficMax}
-            onChange={handleTrafficChange}
-            formatValue={fmtNum}
-            title="Minimum monthly organic traffic — drag or type an exact value"
-          />
-          <DualRangeSlider
-            label="DR range"
-            bounds={drBounds}
-            valueMin={drMin}
-            valueMax={drMax}
-            onChange={handleDrChange}
-            formatValue={(v) => String(v)}
-            title="Domain Rating range — drag or type an exact value"
-          />
-          <DualRangeSlider
-            label="Price range"
-            bounds={priceBounds}
-            valueMin={priceMin}
-            valueMax={priceMax}
-            onChange={handlePriceChange}
-            // Raw marketplace/supplier price (USD), same number the old
-            // fixed buckets filtered on — not the fee-inclusive "Buy $"
-            // price shown in the Actions column.
-            formatValue={(v) => `$${Math.round(v).toLocaleString()}`}
-            title="Marketplace price range (before fee) — drag or type an exact value"
-          />
-        </div>
-      </section>
+        {filtersOpen && (
+          <div style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 45, width: 320, maxWidth: "calc(100vw - 32px)", maxHeight: "min(72vh, 600px)", overflowY: "auto", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: "0 16px 40px rgba(15,23,42,0.16)", padding: 18 }}>
+            {/* Grid, not flex-column — RSDropdown's root div carries
+            flex: "1 1 128px" from its old life in a horizontal bar, so a
+            flex-column parent let each one flex-grow to fill the panel's
+            height, opening up huge gaps below each closed dropdown. Grid
+            items don't participate in flex sizing, so each row just takes
+            its natural height. */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", rowGap: 14 }}>
+              <RSDropdown label="Country" value={filters.country} options={RS_FILTERS.country} onChange={(v) => setFilters((f) => ({ ...f, country: v }))} searchable />
+              <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
+              <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
+              <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.line2}` }}>
+              <DualRangeSlider
+                label="Traffic"
+                bounds={trafficBounds}
+                valueMin={trafficMin}
+                valueMax={trafficMax}
+                onChange={handleTrafficChange}
+                formatValue={fmtNum}
+                title="Minimum monthly organic traffic — drag or type an exact value"
+              />
+              <DualRangeSlider
+                label="DR range"
+                bounds={drBounds}
+                valueMin={drMin}
+                valueMax={drMax}
+                onChange={handleDrChange}
+                formatValue={(v) => String(v)}
+                title="Domain Rating range — drag or type an exact value"
+              />
+              <DualRangeSlider
+                label="Price range"
+                bounds={priceBounds}
+                valueMin={priceMin}
+                valueMax={priceMax}
+                onChange={handlePriceChange}
+                // Raw marketplace/supplier price (USD), same number the old
+                // fixed buckets filtered on — not the fee-inclusive "Buy $"
+                // price shown in the Actions column.
+                formatValue={(v) => `$${Math.round(v).toLocaleString()}`}
+                title="Marketplace price range (before fee) — drag or type an exact value"
+              />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.line2}` }}>
+              {activeFilterCount > 0 && (
+                <button onClick={clearFilters} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "#fff", color: C.ink2, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>✕ Clear</button>
+              )}
+              <button onClick={() => setFiltersOpen(false)} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Done</button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {!hasSearched && !searching ? (
         <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: 60, textAlign: "center" }}>
