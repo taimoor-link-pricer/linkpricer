@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AuthProvider, useAuthContext } from "@/lib/contexts/auth-context";
+import { ChatDockProvider } from "@/components/admin/chat-dock";
 import { ROUTES } from "@/lib/constants";
 
 const ADMIN_NAV = [
@@ -150,7 +151,9 @@ function AdminShell({ children }: { children: React.ReactNode }) {
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider requireAdmin>
-      <AdminShell>{children}</AdminShell>
+      <ChatDockProvider>
+        <AdminShell>{children}</AdminShell>
+      </ChatDockProvider>
     </AuthProvider>
   );
 }
