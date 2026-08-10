@@ -925,13 +925,17 @@ export default function RelatedSitesPage() {
       </header>
 
       <section style={{ background: "linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%)", border: `1px solid ${C.line}`, borderRadius: 16, padding: 28, marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18, gap: 24, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 18, gap: 24, flexWrap: "wrap" }}>
           <div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.mute, fontSize: 12, fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 }}>🔍 Related Sites</div>
             <h1 style={{ margin: 0, fontSize: 30, fontWeight: 700, letterSpacing: -0.4, color: C.ink }}>Find sites by topic, not domain</h1>
             <p style={{ margin: "6px 0 0", color: C.ink3, fontSize: 14, maxWidth: 560 }}>Describe what you want in plain language. We rank every site in the marketplace by how well it matches — same prices, conditions and one-click ordering as Domain Analysis.</p>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
+          {/* marginLeft: auto (not the parent's justifyContent: space-between) so this
+          block still hugs the right edge on its own line if it wraps below the title —
+          space-between left a wrapped single item flush-left, stranding it in the middle
+          of the section instead of at the corner it's meant to occupy. */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10, marginLeft: "auto" }}>
             <button onClick={() => { setTourStep(0); setTourActive(true); }} style={{ padding: "7px 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ How to use this page</button>
             {quota && (
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, fontSize: 12, color: C.ink3, whiteSpace: "nowrap" }}>
