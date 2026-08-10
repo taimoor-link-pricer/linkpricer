@@ -106,6 +106,37 @@ function searchSignature(params: { query: string; filters?: CatalogSearchFilters
   });
 }
 
+// Atomically reserves one slot against the weekly quota, gated on the same
+// row's own related_sites_quota_override — a single UPDATE targeting one
+// users row, so Postgres's row lock serializes concurrent requests from the
+// same account instead of letting them all read the same pre-search count.
+// Without this, N concurrent POSTs (varying the query to dodge the catalog
+// cache and this-search's own re-sort dedup) all pass the same stale
+// getQuota() read before any of them finishes the ~10-30s search + logs
+// usage, blowing straight through the 10/week cap in one burst.
+async function reserveQuotaSlot(userId: string, weekStartIso: string): Promise<boolean> {
+  const result = await db.execute(sql`
+    UPDATE users
+    SET related_sites_week_count = CASE WHEN related_sites_week_start = ${weekStartIso} THEN related_sites_week_count + 1 ELSE 1 END,
+        related_sites_week_start = ${weekStartIso}
+    WHERE id = ${userId}
+      AND (
+        related_sites_week_start IS DISTINCT FROM ${weekStartIso}
+        OR related_sites_week_count < COALESCE(related_sites_quota_override, ${WEEKLY_LIMIT})
+      )
+    RETURNING related_sites_week_count
+  `);
+  return (result.rows ?? result).length > 0;
+}
+
+async function releaseQuotaSlot(userId: string, weekStartIso: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE users
+    SET related_sites_week_count = GREATEST(related_sites_week_count - 1, 0)
+    WHERE id = ${userId} AND related_sites_week_start = ${weekStartIso}
+  `).catch((err) => console.error("[/api/related-sites] Failed to release quota slot", err));
+}
+
 export async function POST(req: NextRequest) {
   const userId = await getUserId();
   if (!userId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -142,6 +173,15 @@ export async function POST(req: NextRequest) {
   const lastMetadata = (lastSearchRows.rows ?? lastSearchRows)[0]?.metadata as { signature?: string } | undefined;
   const countAsSearch = lastMetadata?.signature !== signature;
 
+  const weekStartIso = startOfWeekUTC().toISOString().slice(0, 10);
+  if (countAsSearch) {
+    const reserved = await reserveQuotaSlot(userId, weekStartIso);
+    if (!reserved) {
+      const freshQuota = await getQuota(userId);
+      return NextResponse.json({ error: "Weekly search limit reached", ...freshQuota }, { status: 429 });
+    }
+  }
+
   try {
     const { results, lowRelevance, degradedAhrefs, total } = await searchCatalog({
       query,
@@ -156,11 +196,15 @@ export async function POST(req: NextRequest) {
     });
 
     if (results.length === 0) {
+      // A no-hit search doesn't count — release the slot reserved above.
+      if (countAsSearch) await releaseQuotaSlot(userId, weekStartIso);
       return NextResponse.json({ results: [], lowRelevance: false, degradedAhrefs, total: 0, ...quota });
     }
 
     // Log usage against the weekly quota only on a successful, executed
-    // search that should actually count (not a sort-only re-fetch).
+    // search that should actually count (not a sort-only re-fetch). The slot
+    // itself is already reserved atomically above; this just records what it
+    // was for.
     if (countAsSearch) {
       await db.execute(sql`
         INSERT INTO user_activity_events (user_id, event_type, metadata)
@@ -172,6 +216,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ results, lowRelevance, degradedAhrefs, total, ...updatedQuota });
   } catch (err) {
     console.error("[/api/related-sites]", err instanceof Error ? err.message : err);
+    // The search never completed — release the reserved slot so a failed
+    // attempt doesn't burn the user's weekly quota.
+    if (countAsSearch) await releaseQuotaSlot(userId, weekStartIso);
     return NextResponse.json({ error: "Search failed" }, { status: 500 });
   }
 }

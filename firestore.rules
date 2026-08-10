@@ -16,11 +16,16 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Users collection — client-side profile mirror (source of truth is Postgres)
+    // Users collection — client-side profile mirror (source of truth is Postgres).
+    // Written server-side only, via the Admin SDK (which bypasses these rules
+    // entirely) — no client code path writes to this collection. Deny client
+    // create/update outright rather than trying to allow-list safe fields:
+    // `role` drives isAdmin() below, so any client write path here would be a
+    // self-service privilege escalation to admin (full read/write on every
+    // user's profile and every order's data and chat).
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId) || isAdmin();
+      allow create, update: if false;
       allow delete: if isAdmin();
     }
 

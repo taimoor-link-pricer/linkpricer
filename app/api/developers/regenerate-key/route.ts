@@ -36,16 +36,28 @@ export async function POST(req: NextRequest) {
     // still-active row; if another request already regenerated this same key,
     // `deactivated` is empty and we report a conflict instead of silently
     // adding a second active key.
+    //
+    // The replacement row also carries over the old row's request_count/
+    // usage_date/minute_count/minute_window (read via RETURNING off the same
+    // UPDATE, not a separate stale SELECT) instead of taking column defaults.
+    // Regenerating is a credential rotation, not a quota reset — without this,
+    // looping "burn quota -> regenerate -> get a fresh zeroed row" bypasses
+    // both the daily and per-minute limits entirely, since those checks are
+    // scoped to a single key's row.
     let inserted;
     try {
       inserted = await db.execute(sql`
         WITH deactivated AS (
           UPDATE api_keys SET is_active = false
           WHERE id = ${existing.id} AND is_active = true
-          RETURNING id
+          RETURNING id, request_count, usage_date, minute_count, minute_window
         )
-        INSERT INTO api_keys (user_id, key_hash, name, daily_limit, per_minute_limit, is_active, plain_key_temp)
-        SELECT ${userId}, ${hash}, ${existing.name}, ${existing.daily_limit}, ${existing.per_minute_limit}, true, ${plain}
+        INSERT INTO api_keys (
+          user_id, key_hash, name, daily_limit, per_minute_limit, is_active, plain_key_temp,
+          request_count, usage_date, minute_count, minute_window
+        )
+        SELECT ${userId}, ${hash}, ${existing.name}, ${existing.daily_limit}, ${existing.per_minute_limit}, true, ${plain},
+          request_count, usage_date, minute_count, minute_window
         FROM deactivated
         RETURNING id
       `);

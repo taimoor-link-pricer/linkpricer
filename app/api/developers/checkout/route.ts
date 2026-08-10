@@ -67,17 +67,31 @@ export async function POST(req: NextRequest) {
 
     const origin = req.headers.get("origin") ?? "https://linkpricer.ai";
 
-    const session = await stripe.checkout.sessions.create({
-      customer: customerId,
-      mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${origin}/developers/dashboard?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/developers/dashboard`,
-      metadata: { userId, plan },
-      subscription_data: {
+    // The "already has a plan" check above is a plain read with no locking,
+    // and stripe.checkout.sessions.create is a real network call — two
+    // concurrent requests (double-click, two tabs) can both read stripe_plan
+    // as null and both reach here, creating two live Checkout Sessions that,
+    // if both get paid, become two active subscriptions billing the same
+    // user forever (the webhook only dedupes API keys, not subscriptions).
+    // A deterministic idempotency key makes Stripe itself collapse concurrent
+    // or repeated calls for the same user+plan into the same session instead
+    // of creating a second one. Stripe retains idempotency keys for 24h,
+    // matching the default Checkout Session expiry, so a legitimate retry
+    // after an old session truly expired still gets a fresh session.
+    const session = await stripe.checkout.sessions.create(
+      {
+        customer: customerId,
+        mode: "subscription",
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${origin}/developers/dashboard?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/developers/dashboard`,
         metadata: { userId, plan },
+        subscription_data: {
+          metadata: { userId, plan },
+        },
       },
-    });
+      { idempotencyKey: `checkout:${userId}:${plan}` }
+    );
 
     return NextResponse.json({ url: session.url });
   } catch (err) {

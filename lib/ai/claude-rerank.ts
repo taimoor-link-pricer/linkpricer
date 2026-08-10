@@ -15,6 +15,19 @@ const MAX_SUMMARY_CHARS = 200;
 // to the naive word-overlap scoring on almost every request.
 const MAX_OUTPUT_TOKENS = 4000;
 
+// Splitting a large shortlist into concurrent batches cuts wall-clock
+// latency roughly in proportion to the number of batches — each batch is
+// its own parallel API call, so total time tracks the slowest single batch
+// instead of one call scoring every candidate serially. Measured impact:
+// related-sites' full 80-candidate shortlist was ~11s of a ~17s search on
+// its own, in one request. This doesn't change what gets scored — each
+// candidate already receives an independent 0-100 relevance judgment
+// regardless of which other candidates happen to share its API call, so
+// splitting the batch changes only how fast the call comes back, not the
+// scores themselves. Below this size (e.g. homepage search's 25-candidate
+// shortlist), nothing changes — a single batch, same as before.
+const BATCH_SIZE = 40;
+
 export interface RerankCandidate {
   domain: string;
   category: string;
@@ -60,9 +73,10 @@ function parseScores(raw: string): Map<string, number> | null {
 
 /**
  * Scores each candidate's relevance (0-100) to `query` using Claude. Returns
- * null on any failure (missing key, timeout, malformed response) so callers
- * fall back to the existing keyword-overlap scoring — this must never throw
- * or block a search.
+ * null on any failure (missing key, timeout, malformed response, or any
+ * batch failing once split — see BATCH_SIZE above) so callers fall back to
+ * the existing keyword-overlap scoring — this must never throw or block a
+ * search.
  */
 export async function rerankWithClaude(
   query: string,
@@ -71,6 +85,35 @@ export async function rerankWithClaude(
   const anthropic = getClient();
   if (!anthropic || candidates.length === 0) return null;
 
+  if (candidates.length <= BATCH_SIZE) {
+    return rerankBatch(anthropic, query, candidates);
+  }
+
+  const batches: RerankCandidate[][] = [];
+  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    batches.push(candidates.slice(i, i + BATCH_SIZE));
+  }
+  const results = await Promise.all(batches.map((batch) => rerankBatch(anthropic, query, batch)));
+
+  // All-or-nothing, same as the single-call path used to be: if any batch
+  // failed, there's no principled way to compare Claude-scored candidates
+  // against unscored ones, so the whole query falls back to word-overlap
+  // scoring exactly as it always has on a rerank failure — a batch split
+  // never produces a partially-Claude-scored result set.
+  if (results.some((r) => r === null)) return null;
+
+  const merged = new Map<string, number>();
+  for (const result of results) {
+    for (const [domain, score] of result!) merged.set(domain, score);
+  }
+  return merged;
+}
+
+async function rerankBatch(
+  anthropic: Anthropic,
+  query: string,
+  candidates: RerankCandidate[]
+): Promise<Map<string, number> | null> {
   const items = candidates.map((c) => ({
     domain: c.domain,
     category: c.category,

@@ -31,12 +31,26 @@ export async function GET() {
       if (decoded.email) {
         const emailMatch = await db.select().from(users).where(eq(users.email, decoded.email)).limit(1);
         if (emailMatch[0]) {
-          role = emailMatch[0].role;
-          hasCompletedOnboarding = emailMatch[0].hasCompletedOnboarding ?? false;
-          inheritedFirstName = emailMatch[0].firstName ?? firstName;
-          inheritedLastName = emailMatch[0].lastName ?? lastName;
-          // Free up the email on the old record so the new Firebase UID record can own it
-          await db.update(users).set({ email: null }).where(eq(users.id, emailMatch[0].id));
+          // decoded.email is a self-asserted claim for password signups (Firebase
+          // never verifies it), so anyone can sign up with someone else's email
+          // and land here. Only inherit an elevated role (e.g. vendor/admin) when
+          // Firebase itself has verified the email (true for Google sign-in,
+          // never true for a plain password signup) — otherwise this is an
+          // account-takeover path for old-app admin records. Plain "client"
+          // records carry no privilege, so they keep merging unconditionally.
+          const isElevatedRole = emailMatch[0].role !== "client";
+          if (!isElevatedRole || decoded.email_verified === true) {
+            role = emailMatch[0].role;
+            hasCompletedOnboarding = emailMatch[0].hasCompletedOnboarding ?? false;
+            inheritedFirstName = emailMatch[0].firstName ?? firstName;
+            inheritedLastName = emailMatch[0].lastName ?? lastName;
+            // Free up the email on the old record so the new Firebase UID record can own it
+            await db.update(users).set({ email: null }).where(eq(users.id, emailMatch[0].id));
+          } else {
+            console.warn(
+              `[/api/user/me] Blocked unverified-email merge into elevated-role record ${emailMatch[0].id} (role=${emailMatch[0].role})`
+            );
+          }
         }
       }
 

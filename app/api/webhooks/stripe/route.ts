@@ -68,6 +68,13 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
 async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
   const userId = sub.metadata?.userId;
+  // Derived from metadata (set once at creation), not sub.items price — safe
+  // only because the live Customer Portal config has subscription_update
+  // disabled (verified directly via stripe.billingPortal.configurations.list,
+  // Aug 2026), so a price change can never reach this handler. Enabling
+  // self-service plan switching in the Stripe Dashboard would silently break
+  // this — it would keep billing the new price while resetting quota/plan
+  // back to whatever the original metadata said.
   const plan = sub.metadata?.plan as PlanKey | undefined;
   if (!userId || !plan || !PLANS[plan]) return;
 
@@ -152,6 +159,17 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
     console.error("[stripe/webhook] Handler error:", err);
+    // The idempotency row was inserted before the handler ran, so a failure
+    // partway through (e.g. the API key insert succeeds but the following
+    // stripe_plan UPDATE times out) would otherwise strand the user in that
+    // half-updated state forever — Stripe's automatic retry would just hit
+    // the duplicate check above and get a silent 200 without ever re-running
+    // the handler. Release the claim so the retry actually retries.
+    await db.execute(sql`
+      DELETE FROM stripe_webhook_events WHERE stripe_event_id = ${event.id}
+    `).catch((cleanupErr) => {
+      console.error("[stripe/webhook] Failed to release idempotency claim after handler error:", cleanupErr);
+    });
     return NextResponse.json({ error: "Handler failed" }, { status: 500 });
   }
 
