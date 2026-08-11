@@ -40,6 +40,9 @@ function searchCacheKey(opts: CatalogSearchOptions): string {
     f.country ?? null, f.language ?? null, f.minTraffic ?? null, f.maxTraffic ?? null,
     f.minDr ?? null, f.maxDr ?? null, f.minPrice ?? null, f.maxPrice ?? null,
     f.category ?? null, f.grade ?? null,
+    // Sorted so ["com","de"] and ["de","com"] (same filter, different UI
+    // click order) hit the same cache entry instead of missing each other.
+    (f.tlds && f.tlds.length ? [...f.tlds].map((t) => t.toLowerCase()).sort() : null),
     opts.ownSite?.trim().toLowerCase() ?? null, opts.hideLinked ?? false,
     opts.claudeShortlistSize ?? DEFAULT_CLAUDE_SHORTLIST_SIZE,
     opts.finalResultSize ?? DEFAULT_FINAL_RESULT_SIZE,
@@ -134,6 +137,10 @@ export interface CatalogSearchFilters {
   maxPrice?: number;
   category?: string;
   grade?: string;
+  // Domain extension(s), no leading dot ("com", not ".com") — a domain
+  // matches if it ends in ANY of these (OR, not AND — a domain only has one
+  // TLD, so "must match every selected TLD" would always return nothing).
+  tlds?: string[];
 }
 
 export interface CatalogSearchResult {
@@ -193,60 +200,85 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
   // into orders.snapshot_offer_metadata->>'vendorUserId' at order creation
   // (see app/api/orders/route.ts) since supplier_offers rows can change or
   // be deleted after the order was placed.
-  const [marketplaceRows, vendorRows, exampleRows] = await Promise.all([
-    db.execute(sql`
-      SELECT LOWER(d.domain) AS domain, mo.marketplace_name AS name, mo.min_price, mo.max_price, mo.currency,
-             mo.delivery_time_days, mo.link_type, mo.tat, mo.updated_at,
-             rt.avg_rating, rt.rating_count
-      FROM marketplace_offers mo
-      JOIN domains d ON d.id = mo.domain_id
-      LEFT JOIN (
-        SELECT marketplace_name, AVG(rating)::float AS avg_rating, COUNT(*)::int AS rating_count
-        FROM (
-          -- Buyer reviews: attributed via the order they actually completed.
-          SELECT LOWER(o.snapshot_marketplace_name) AS marketplace_name, orr.rating
+  //
+  // These 3 queries are logically independent, but bundled into ONE round
+  // trip (json_agg per subquery, one row of 3 JSON columns) instead of 3
+  // separate awaited db.execute() calls — even run concurrently via
+  // Promise.all, each still pays its own full HTTP request/response latency
+  // against Neon's serverless (neon-http) driver, which has no persistent
+  // connection to amortize that cost across calls. Measured locally: a bare
+  // `SELECT 1` round trip alone costs 300ms-2s+ depending on connection
+  // warmth, independent of query complexity — so 3 concurrent round trips
+  // cost close to 3x a single round trip's latency floor, not free just
+  // because they're parallel. Each inner subquery's SELECT/JOIN/WHERE/ORDER
+  // is byte-identical to the original 3 separate queries — only the
+  // transport (1 combined round trip vs 3) changed.
+  const combined = (await db.execute(sql`
+    SELECT
+      (SELECT json_agg(row_to_json(mp)) FROM (
+        SELECT LOWER(d.domain) AS domain, mo.marketplace_name AS name, mo.min_price, mo.max_price, mo.currency,
+               mo.delivery_time_days, mo.link_type, mo.tat, mo.updated_at,
+               rt.avg_rating, rt.rating_count
+        FROM marketplace_offers mo
+        JOIN domains d ON d.id = mo.domain_id
+        LEFT JOIN (
+          SELECT marketplace_name, AVG(rating)::float AS avg_rating, COUNT(*)::int AS rating_count
+          FROM (
+            -- Buyer reviews: attributed via the order they actually completed.
+            SELECT LOWER(o.snapshot_marketplace_name) AS marketplace_name, orr.rating
+            FROM order_ratings orr
+            JOIN orders o ON o.id = orr.order_id
+            WHERE orr.order_id IS NOT NULL AND o.snapshot_marketplace_name IS NOT NULL
+            UNION ALL
+            -- Admin reviews: no order to attach to, marketplace set directly
+            -- (see app/api/admin/reviews/marketplaces/route.ts).
+            SELECT LOWER(orr.marketplace_name) AS marketplace_name, orr.rating
+            FROM order_ratings orr
+            WHERE orr.order_id IS NULL AND orr.marketplace_name IS NOT NULL
+          ) combined
+          GROUP BY marketplace_name
+        ) rt ON rt.marketplace_name = LOWER(mo.marketplace_name)
+        WHERE mo.available = true AND mo.min_price::float > 0 AND LOWER(d.domain) IN (${domainList})
+        ORDER BY mo.min_price::float ASC
+      ) mp) AS marketplace_json,
+      (SELECT json_agg(row_to_json(vd)) FROM (
+        SELECT LOWER(so.domain) AS domain, COALESCE(u.vendor_name, CONCAT(u.first_name, ' ', u.last_name), u.email) AS vendor_name,
+               so.min_price, so.max_price, so.currency, so.delivery_time_days, so.updated_at, so.status,
+               rt.avg_rating, rt.rating_count
+        FROM supplier_offers so
+        JOIN users u ON u.id = so.vendor_user_id
+        LEFT JOIN (
+          SELECT o.snapshot_offer_metadata->>'vendorUserId' AS vendor_user_id,
+                 AVG(orr.rating)::float AS avg_rating, COUNT(*)::int AS rating_count
           FROM order_ratings orr
           JOIN orders o ON o.id = orr.order_id
-          WHERE orr.order_id IS NOT NULL AND o.snapshot_marketplace_name IS NOT NULL
-          UNION ALL
-          -- Admin reviews: no order to attach to, marketplace set directly
-          -- (see app/api/admin/reviews/marketplaces/route.ts).
-          SELECT LOWER(orr.marketplace_name) AS marketplace_name, orr.rating
-          FROM order_ratings orr
-          WHERE orr.order_id IS NULL AND orr.marketplace_name IS NOT NULL
-        ) combined
-        GROUP BY marketplace_name
-      ) rt ON rt.marketplace_name = LOWER(mo.marketplace_name)
-      WHERE mo.available = true AND mo.min_price::float > 0 AND LOWER(d.domain) IN (${domainList})
-      ORDER BY mo.min_price::float ASC
-    `),
-    db.execute(sql`
-      SELECT LOWER(so.domain) AS domain, COALESCE(u.vendor_name, CONCAT(u.first_name, ' ', u.last_name), u.email) AS vendor_name,
-             so.min_price, so.max_price, so.currency, so.delivery_time_days, so.updated_at, so.status,
-             rt.avg_rating, rt.rating_count
-      FROM supplier_offers so
-      JOIN users u ON u.id = so.vendor_user_id
-      LEFT JOIN (
-        SELECT o.snapshot_offer_metadata->>'vendorUserId' AS vendor_user_id,
-               AVG(orr.rating)::float AS avg_rating, COUNT(*)::int AS rating_count
-        FROM order_ratings orr
-        JOIN orders o ON o.id = orr.order_id
-        WHERE o.snapshot_offer_metadata->>'vendorUserId' IS NOT NULL
-        GROUP BY o.snapshot_offer_metadata->>'vendorUserId'
-      ) rt ON rt.vendor_user_id = so.vendor_user_id
-      WHERE so.status = 'active' AND so.is_active = true AND so.min_price::float > 0 AND LOWER(so.domain) IN (${domainList})
-      ORDER BY so.min_price::float ASC
-    `),
-    db.execute(sql`
-      SELECT domain, example_url, example_title FROM domain_examples
-      WHERE domain IN (${domainList}) AND example_url IS NOT NULL AND example_url != ''
-    `),
-  ]);
+          WHERE o.snapshot_offer_metadata->>'vendorUserId' IS NOT NULL
+          GROUP BY o.snapshot_offer_metadata->>'vendorUserId'
+        ) rt ON rt.vendor_user_id = so.vendor_user_id
+        WHERE so.status = 'active' AND so.is_active = true AND so.min_price::float > 0 AND LOWER(so.domain) IN (${domainList})
+        ORDER BY so.min_price::float ASC
+      ) vd) AS vendor_json,
+      (SELECT json_agg(row_to_json(ex)) FROM (
+        SELECT domain, example_url, example_title FROM domain_examples
+        WHERE domain IN (${domainList}) AND example_url IS NOT NULL AND example_url != ''
+      ) ex) AS example_json
+  `)).rows[0];
+
+  type MarketplaceRow = { domain: string; name: string | null; min_price: unknown; max_price: unknown; currency: string | null; delivery_time_days: unknown; link_type: string | null; tat: unknown; updated_at: string | null; avg_rating: unknown; rating_count: unknown };
+  type VendorRow = { domain: string; vendor_name: string | null; min_price: unknown; max_price: unknown; currency: string | null; delivery_time_days: unknown; updated_at: string | null; status: string | null; avg_rating: unknown; rating_count: unknown };
+  type ExampleRow = { domain: string; example_url: string; example_title: string | null };
+
+  // json_agg over zero matching rows returns SQL NULL, not an empty JSON
+  // array — normalize to [] to match the original .rows-based empty-array
+  // behavior exactly.
+  const marketplaceRowsArr = (combined.marketplace_json as MarketplaceRow[] | null) ?? [];
+  const vendorRowsArr = (combined.vendor_json as VendorRow[] | null) ?? [];
+  const exampleRowsArr = (combined.example_json as ExampleRow[] | null) ?? [];
 
   const exampleMap = new Map<string, string>();
-  for (const r of exampleRows.rows) exampleMap.set(r.domain as string, r.example_url as string);
+  for (const r of exampleRowsArr) exampleMap.set(r.domain, r.example_url);
 
-  for (const r of marketplaceRows.rows) {
+  for (const r of marketplaceRowsArr) {
     const domain = r.domain as string;
     if (!offersMap.has(domain)) offersMap.set(domain, []);
     const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null, rates) ?? 0;
@@ -262,7 +294,7 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
       example: exampleMap.get(domain) ?? null,
     });
   }
-  for (const r of vendorRows.rows) {
+  for (const r of vendorRowsArr) {
     const domain = r.domain as string;
     if (!offersMap.has(domain)) offersMap.set(domain, []);
     const minUsd = toUsd(Number(r.min_price ?? 0), r.currency as string | null, rates) ?? 0;
@@ -382,6 +414,23 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     ? sql`AND (${sql.join(wordClauses, sql` OR `)})`
     : sql``;
 
+  // TLD filter — applied here, inside text_matched (before the `matched`
+  // CTE's candidatePoolLimit LIMIT), not as an outer post-aggregation
+  // filter. The `matched` CTE below has no ORDER BY before its LIMIT, so
+  // whatever gets past text_matched is an arbitrary plan-dependent subset —
+  // filtering by TLD *after* that LIMIT would silently starve the result
+  // set for any TLD that happened not to survive the cut, even when plenty
+  // of matching domains exist in the full (pre-LIMIT) candidate set.
+  // ILIKE + a literal ".tld" suffix, not a bare substring match — LIKE
+  // '%.com' can only match a string that actually ENDS in ".com"
+  // ("example.company" does not, since it ends in "pany"), same anchoring
+  // principle as the word-boundary regex above.
+  const tlds = (f.tlds ?? []).map((t) => t.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
+  const tldClauses = tlds.map((t) => sql`d.domain ILIKE ${"%." + t}`);
+  const tldClause = tldClauses.length
+    ? sql`AND (${sql.join(tldClauses, sql` OR `)})`
+    : sql``;
+
   // Main catalog query and the (optional) "already links to me" exclusion
   // lookup are independent — run them concurrently rather than serially.
   const [rows, exclusionResult] = await Promise.all([
@@ -396,6 +445,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
         WHERE 1 = 1
           ${matchClause}
+          ${tldClause}
       ),
       matched AS (
         SELECT t.* FROM text_matched t

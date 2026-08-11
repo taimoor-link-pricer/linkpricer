@@ -85,6 +85,100 @@ function RSDropdown({
   );
 }
 
+// ── searchable multi-select dropdown (TLD filter) ────────────────────────────
+// Same shell/behavior as RSDropdown above (search box, click-outside/Escape
+// to close, identical visual tokens) but for "select any number of these"
+// instead of "pick exactly one" — RSDropdown closes on selection and shows a
+// single label, which doesn't fit "filter by .com OR .de OR .fr at once."
+function RSMultiDropdown({
+  label, values, options, onChange, minWidth = 128,
+}: {
+  label?: string; values: string[]; options: DropdownOption[]; onChange: (ids: string[]) => void; minWidth?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) { setQ(""); return; }
+    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    setTimeout(() => searchRef.current?.focus(), 20);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  const ql = q.trim().toLowerCase();
+  const filtered = ql ? options.filter((o) => o.label.toLowerCase().includes(ql) || o.id.toLowerCase().includes(ql)) : options;
+  const selectedSet = new Set(values);
+
+  function toggle(id: string) {
+    onChange(selectedSet.has(id) ? values.filter((v) => v !== id) : [...values, id]);
+  }
+
+  const buttonLabel =
+    values.length === 0 ? `All ${(label ?? "").toLowerCase()}` :
+    values.length === 1 ? `.${values[0]}` :
+    `${values.length} ${(label ?? "").toLowerCase()} selected`;
+
+  return (
+    <div ref={ref} style={{ position: "relative", flex: label ? "1 1 128px" : "0 0 auto", minWidth }}>
+      {label && <div style={{ fontSize: 10.5, fontWeight: 700, color: C.mute, letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 6 }}>{label}</div>}
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "#fff", border: `1px solid ${open || values.length > 0 ? C.accent : C.line}`, borderRadius: 10, padding: "9px 11px", fontWeight: 600, fontSize: 13, color: values.length > 0 ? C.accent700 : C.ink2, cursor: "pointer", textAlign: "left" }}
+      >
+        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{buttonLabel}</span>
+        <span style={{ color: C.mute, fontSize: 11 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", zIndex: 40, left: 0, minWidth: "100%", width: "max-content", maxWidth: 280, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(15,22,32,0.12)", padding: 4, maxHeight: 320, overflow: "auto" }}>
+          <div style={{ position: "sticky", top: -4, background: "#fff", padding: "2px 2px 6px", margin: "-2px -2px 2px", borderBottom: `1px solid ${C.line2}` }}>
+            <input
+              ref={searchRef}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Quick search TLDs… (e.g. .lt)"
+              style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 8, border: `1px solid ${C.line}`, fontSize: 12.5, color: C.ink, outline: "none" }}
+            />
+          </div>
+          {values.length > 0 && (
+            <button
+              onClick={() => onChange([])}
+              style={{ display: "block", width: "100%", padding: "7px 10px", margin: "2px 0", borderRadius: 7, border: "none", background: "transparent", color: C.accent700, fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}
+            >
+              ✕ Clear selected TLDs ({values.length})
+            </button>
+          )}
+          {filtered.length === 0 ? (
+            <div style={{ padding: "12px 10px", fontSize: 12.5, color: C.mute, textAlign: "center" }}>No matches</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
+              {filtered.map((o) => {
+                const checked = selectedSet.has(o.id);
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => toggle(o.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 8px", borderRadius: 7, border: "none", background: checked ? C.accent50 : "transparent", color: checked ? C.accent700 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: "pointer", textAlign: "left" }}
+                  >
+                    <span style={{ width: 14, height: 14, flexShrink: 0, borderRadius: 4, border: `1.5px solid ${checked ? C.accent : C.line}`, background: checked ? C.accent : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, lineHeight: 1 }}>
+                      {checked ? "✓" : ""}
+                    </span>
+                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>.{o.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RSToggle({ checked, disabled, onChange }: { checked: boolean; disabled: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
@@ -256,6 +350,22 @@ const RS_FILTERS: Record<string, DropdownOption[]> = {
     { id: "any", label: "Any grade" }, { id: "A+", label: "A+ only" }, { id: "A", label: "A & above" }, { id: "B+", label: "B+ & above" }, { id: "B", label: "B & above" },
   ],
 };
+
+// Domain extension (TLD) options — a curated set covering the generic TLDs
+// and the ccTLDs actually common across the marketplace catalog (confirmed
+// against real scraped domains, not guessed), not every ccTLD that exists.
+// `id`/`label` are both the bare extension with no leading dot ("com", not
+// ".com") — RSMultiDropdown renders the dot itself, and catalog-search.ts's
+// tld filter strips any leading dot defensively either way.
+const RS_TLD_OPTIONS: DropdownOption[] = [
+  "com", "net", "org", "io", "co", "info", "biz", "us",
+  "uk", "de", "fr", "it", "es", "nl", "pl", "se", "no", "dk", "fi",
+  "be", "at", "ch", "pt", "gr", "cz", "sk", "hu", "ro", "bg", "hr",
+  "lt", "lv", "ee", "ie", "ua", "ru", "tr",
+  "br", "mx", "ar", "cl", "co.uk",
+  "in", "id", "my", "ph", "th", "vn", "sg", "hk", "jp", "kr", "cn",
+  "au", "nz", "za", "ae", "sa", "il",
+].map((tld) => ({ id: tld, label: tld }));
 
 // Sortable columns mirror lib/search/catalog-search.ts's CatalogSortBy —
 // "match" (Claude semantic rerank, the default) has no asc/desc concept, so
@@ -594,6 +704,11 @@ export default function RelatedSitesPage() {
   const [trafficFilterActive, setTrafficFilterActive] = useState(false);
   const [drFilterActive, setDrFilterActive] = useState(false);
   const [priceFilterActive, setPriceFilterActive] = useState(false);
+  // TLD is multi-select (a domain can only have one extension, but the user
+  // may want "any of .com/.de/.fr"), so unlike the single-value dropdowns
+  // above it doesn't fit RS_DEFAULT_FILTERS's "any" sentinel — an empty
+  // array already unambiguously means "no TLD filter."
+  const [tlds, setTlds] = useState<string[]>([]);
   // Traffic/DR/price are now sent to the server as real SQL filters (see
   // runSearch) instead of trimmed client-side after the fact, so `results`
   // already reflects them by the time it lands here.
@@ -656,7 +771,8 @@ export default function RelatedSitesPage() {
     Object.entries(filters).filter(([, v]) => v !== "any").length +
     (trafficFilterActive ? 1 : 0) +
     (drFilterActive ? 1 : 0) +
-    (priceFilterActive ? 1 : 0);
+    (priceFilterActive ? 1 : 0) +
+    (tlds.length > 0 ? 1 : 0);
 
   useEffect(() => {
     hydrateRates();
@@ -672,6 +788,7 @@ export default function RelatedSitesPage() {
     trafficMin?: number; trafficMax?: number; drMin?: number; drMax?: number; priceMin?: number; priceMax?: number;
     filters?: typeof RS_DEFAULT_FILTERS;
     trafficFilterActive?: boolean; drFilterActive?: boolean; priceFilterActive?: boolean;
+    tlds?: string[];
   }) {
     if (!query.trim() || searching) return;
     const useSortBy = overrides?.sortBy ?? sortBy;
@@ -690,6 +807,7 @@ export default function RelatedSitesPage() {
     const useTrafficFilterActive = overrides?.trafficFilterActive ?? trafficFilterActive;
     const useDrFilterActive = overrides?.drFilterActive ?? drFilterActive;
     const usePriceFilterActive = overrides?.priceFilterActive ?? priceFilterActive;
+    const useTlds = overrides?.tlds ?? tlds;
     setSearching(true);
     setError(null);
     try {
@@ -701,7 +819,7 @@ export default function RelatedSitesPage() {
       // keeps being sent on every subsequent search/sort/re-search until the
       // user hits Clear, and a fresh, never-touched slider never sends a
       // spurious constraint that could zero out a differently-scoped query.
-      const parsedFilters: Record<string, string | number> = {};
+      const parsedFilters: Record<string, string | number | string[]> = {};
       if (useFilters.country !== "any") parsedFilters.country = useFilters.country;
       if (useFilters.language !== "any") parsedFilters.language = useFilters.language;
       if (useFilters.niche !== "any") parsedFilters.category = useFilters.niche;
@@ -709,6 +827,7 @@ export default function RelatedSitesPage() {
       if (useTrafficFilterActive) { parsedFilters.minTraffic = useTrafficMin; parsedFilters.maxTraffic = useTrafficMax; }
       if (useDrFilterActive) { parsedFilters.minDr = useDrMin; parsedFilters.maxDr = useDrMax; }
       if (usePriceFilterActive) { parsedFilters.minPrice = usePriceMin; parsedFilters.maxPrice = usePriceMax; }
+      if (useTlds.length > 0) parsedFilters.tlds = useTlds;
 
       const res = await fetch("/api/related-sites", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -821,6 +940,7 @@ export default function RelatedSitesPage() {
     setTrafficFilterActive(false);
     setDrFilterActive(false);
     setPriceFilterActive(false);
+    setTlds([]);
     // Filters are now applied server-side (see runSearch), so clearing them
     // has to re-run the search to actually get the unfiltered set back —
     // explicit overrides sidestep the stale-closure trap of reading state
@@ -829,12 +949,14 @@ export default function RelatedSitesPage() {
       runSearch({
         filters: RS_DEFAULT_FILTERS,
         trafficFilterActive: false, drFilterActive: false, priceFilterActive: false,
+        tlds: [],
       });
     }
   }
   function handleTrafficChange(min: number, max: number) { setTrafficMin(min); setTrafficMax(max); setTrafficFilterActive(true); setPage(1); }
   function handleDrChange(min: number, max: number) { setDrMin(min); setDrMax(max); setDrFilterActive(true); setPage(1); }
   function handlePriceChange(min: number, max: number) { setPriceMin(min); setPriceMax(max); setPriceFilterActive(true); setPage(1); }
+  function handleTldsChange(next: string[]) { setTlds(next); setPage(1); }
   function toggleRow(domain: string) { setExpanded((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
   function toggleFav(row: RelatedSite) {
     const wasFav = favorites.has(row.domain);
@@ -1025,6 +1147,7 @@ export default function RelatedSitesPage() {
               <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
               <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
               <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
+              <RSMultiDropdown label="Domain extension (TLD)" values={tlds} options={RS_TLD_OPTIONS} onChange={handleTldsChange} />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.line2}` }}>

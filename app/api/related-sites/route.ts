@@ -114,7 +114,11 @@ function searchSignature(params: { query: string; filters?: CatalogSearchFilters
 // cache and this-search's own re-sort dedup) all pass the same stale
 // getQuota() read before any of them finishes the ~10-30s search + logs
 // usage, blowing straight through the 10/week cap in one burst.
-async function reserveQuotaSlot(userId: string, weekStartIso: string): Promise<boolean> {
+// Returns the row's post-update week_count on success (so the caller can
+// derive `remaining` locally instead of paying a second getQuota() round
+// trip for a value this UPDATE already computed and returned), or null if
+// the slot wasn't reserved (quota exhausted).
+async function reserveQuotaSlot(userId: string, weekStartIso: string): Promise<number | null> {
   const result = await db.execute(sql`
     UPDATE users
     SET related_sites_week_count = CASE WHEN related_sites_week_start = ${weekStartIso} THEN related_sites_week_count + 1 ELSE 1 END,
@@ -126,7 +130,8 @@ async function reserveQuotaSlot(userId: string, weekStartIso: string): Promise<b
       )
     RETURNING related_sites_week_count
   `);
-  return (result.rows ?? result).length > 0;
+  const rows = result.rows ?? result;
+  return rows.length > 0 ? Number(rows[0].related_sites_week_count) : null;
 }
 
 async function releaseQuotaSlot(userId: string, weekStartIso: string): Promise<void> {
@@ -174,9 +179,10 @@ export async function POST(req: NextRequest) {
   const countAsSearch = lastMetadata?.signature !== signature;
 
   const weekStartIso = startOfWeekUTC().toISOString().slice(0, 10);
+  let reservedCount: number | null = null;
   if (countAsSearch) {
-    const reserved = await reserveQuotaSlot(userId, weekStartIso);
-    if (!reserved) {
+    reservedCount = await reserveQuotaSlot(userId, weekStartIso);
+    if (reservedCount === null) {
       const freshQuota = await getQuota(userId);
       return NextResponse.json({ error: "Weekly search limit reached", ...freshQuota }, { status: 429 });
     }
@@ -212,7 +218,13 @@ export async function POST(req: NextRequest) {
       `);
     }
 
-    const updatedQuota = countAsSearch ? await getQuota(userId) : quota;
+    // reservedCount is exactly what a fresh getQuota() would read right now —
+    // reserveQuotaSlot's UPDATE...RETURNING already gave us the post-reservation
+    // count atomically, and `limit`/`resetsAt` can't change within one request —
+    // so this avoids a second DB round trip for a value already in hand.
+    const updatedQuota = countAsSearch && reservedCount !== null
+      ? { used: reservedCount, remaining: Math.max(0, quota.limit - reservedCount), limit: quota.limit, resetsAt: quota.resetsAt }
+      : quota;
     return NextResponse.json({ results, lowRelevance, degradedAhrefs, total, ...updatedQuota });
   } catch (err) {
     console.error("[/api/related-sites]", err instanceof Error ? err.message : err);
