@@ -791,6 +791,63 @@ function ResultsTable({
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [marketplaceSearch, setMarketplaceSearch] = useState("");
+
+  // Every distinct offer.name across the current result set — "Marketplace"
+  // in the loose sense: a DB/API marketplace hostname (e.g. "tool.growwer.com")
+  // or a "Vendor: X" entry, whichever an offer actually carries. Recomputed
+  // from `results` each render (not memoized) — results tops out at 200
+  // domains with a handful of offers each, cheap enough that memoizing would
+  // just be extra bookkeeping for no measurable win.
+  const allMarketplaceNames = Array.from(new Set(results.flatMap((r) => r.offers.map((o) => o.name)))).sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  // null = "not yet initialized for this result set." Distinct from an empty
+  // Set (user deliberately deselected everything) — both render the same
+  // "0 marketplaces shown" state, but only null triggers the effect below to
+  // default to "all selected" the first time a given `results` array shows up.
+  const [selectedMarketplaces, setSelectedMarketplaces] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    setSelectedMarketplaces(new Set(results.flatMap((r) => r.offers.map((o) => o.name))));
+    // Re-init whenever a genuinely new result set arrives (new array identity
+    // from a fresh /api/analyze call) — a re-render of the *same* results
+    // (e.g. a parent state update unrelated to search) must not silently
+    // wipe out a filter the user just set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results]);
+
+  const allSelected = selectedMarketplaces != null && allMarketplaceNames.every((m) => selectedMarketplaces.has(m));
+  function toggleSelectAll() {
+    setSelectedMarketplaces(allSelected ? new Set() : new Set(allMarketplaceNames));
+  }
+  function toggleMarketplace(name: string) {
+    setSelectedMarketplaces((prev) => {
+      const next = new Set(prev ?? allMarketplaceNames);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  }
+
+  // The actual displayed/exported result set — each domain's offers trimmed
+  // to only the selected marketplaces, with bestPrice/noPrice recomputed
+  // from that trimmed set so the collapsed row's price and the expanded
+  // panel's "Best price" card never disagree with each other or with what's
+  // actually shown. A domain is never dropped outright just because every
+  // one of its offers got filtered out — it still shows as a row, with
+  // noPrice: true, same as a domain that genuinely has zero live offers.
+  const filteredResults: Domain[] =
+    selectedMarketplaces == null
+      ? results
+      : results.map((r) => {
+          const offers = r.offers.filter((o) => selectedMarketplaces.has(o.name));
+          return {
+            ...r,
+            offers,
+            bestPrice: offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null,
+            noPrice: offers.length === 0,
+          };
+        });
 
   // This table's own columns (Domain/Actions/Value/Country/DR/Traffic/
   // Keywords/Category) routinely need more width than fits on screen — that's
@@ -895,10 +952,10 @@ function ResultsTable({
   // trail after — but still in their original relative entry order.
   function buildRows(): TableRow[] {
     const notFoundSet = new Set(notFound);
-    const byDomain = new Map(results.map((r) => [r.domain, r]));
+    const byDomain = new Map(filteredResults.map((r) => [r.domain, r]));
 
     if (sortKey === null) {
-      const seq = order.length > 0 ? order : [...results.map((r) => r.domain), ...notFound];
+      const seq = order.length > 0 ? order : [...filteredResults.map((r) => r.domain), ...notFound];
       const rows: TableRow[] = [];
       const seen = new Set<string>();
       for (const d of seq) {
@@ -910,14 +967,14 @@ function ResultsTable({
       }
       // Safety net for any result/not-found domain that fell outside `order`
       // (e.g. stale order state) — still show it rather than drop it.
-      for (const r of results) if (!seen.has(r.domain)) { rows.push({ kind: "found", row: r }); seen.add(r.domain); }
+      for (const r of filteredResults) if (!seen.has(r.domain)) { rows.push({ kind: "found", row: r }); seen.add(r.domain); }
       for (const d of notFound) if (!seen.has(d)) { rows.push({ kind: "notfound", domain: d }); seen.add(d); }
       return rows;
     }
 
     const orderedNotFound = order.length > 0 ? order.filter((d) => notFoundSet.has(d)) : notFound;
     return [
-      ...sortFound(results).map((row): TableRow => ({ kind: "found", row })),
+      ...sortFound(filteredResults).map((row): TableRow => ({ kind: "found", row })),
       ...orderedNotFound.map((domain): TableRow => ({ kind: "notfound", domain })),
     ];
   }
@@ -1018,17 +1075,25 @@ function ResultsTable({
         <button
           onClick={() => setFilterOpen((v) => !v)}
           style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
             padding: "6px 14px",
-            border: `1px solid ${C.line}`,
+            border: `1px solid ${filterOpen || !allSelected ? C.accent : C.line}`,
             borderRadius: 7,
-            background: "#fff",
-            color: C.ink2,
+            background: filterOpen || !allSelected ? C.accent50 : "#fff",
+            color: filterOpen || !allSelected ? C.accent700 : C.ink2,
             fontSize: 12,
             fontWeight: 600,
             cursor: "pointer",
           }}
         >
-          ▾ Filter
+          {filterOpen ? "▴" : "▾"} Marketplaces
+          {selectedMarketplaces != null && !allSelected && (
+            <span style={{ minWidth: 16, height: 16, padding: "0 4px", borderRadius: 999, background: C.accent, color: "#fff", fontSize: 10, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+              {selectedMarketplaces.size}/{allMarketplaceNames.length}
+            </span>
+          )}
         </button>
         <button
           onClick={handleDownloadCSV}
@@ -1048,16 +1113,59 @@ function ResultsTable({
       </div>
 
       {filterOpen && (
-        <div
-          style={{
-            padding: "10px 20px",
-            background: C.line2,
-            borderBottom: `1px solid ${C.line}`,
-            fontSize: 12,
-            color: C.ink3,
-          }}
-        >
-          Filter panel — coming soon
+        <div style={{ padding: "14px 20px", background: C.line2, borderBottom: `1px solid ${C.line}` }}>
+          {allMarketplaceNames.length === 0 ? (
+            <div style={{ fontSize: 12, color: C.mute }}>No marketplace offers in the current results to filter by.</div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Marketplaces</span>
+                  <span style={{ fontSize: 11.5, color: C.ink3 }}>
+                    {selectedMarketplaces?.size ?? allMarketplaceNames.length} of {allMarketplaceNames.length} shown
+                  </span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    value={marketplaceSearch}
+                    onChange={(e) => setMarketplaceSearch(e.target.value)}
+                    placeholder="Search marketplaces…"
+                    style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 12, color: C.ink, outline: "none", minWidth: 180 }}
+                  />
+                  <button
+                    onClick={toggleSelectAll}
+                    style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "#fff", color: C.accent700, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+                  >
+                    {allSelected ? "Deselect all" : "Select all"}
+                  </button>
+                </div>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
+                  gap: "4px 10px",
+                  maxHeight: 220,
+                  overflowY: "auto",
+                  padding: 2,
+                }}
+              >
+                {allMarketplaceNames
+                  .filter((name) => !marketplaceSearch.trim() || name.toLowerCase().includes(marketplaceSearch.trim().toLowerCase()) || prettyMarketplaceName(name).toLowerCase().includes(marketplaceSearch.trim().toLowerCase()))
+                  .map((name) => {
+                    const checked = selectedMarketplaces?.has(name) ?? true;
+                    const isVendor = name.startsWith("Vendor: ");
+                    const label = isVendor ? name : prettyMarketplaceName(name);
+                    return (
+                      <label key={name} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 6px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: checked ? C.ink2 : C.mute }}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleMarketplace(name)} style={{ accentColor: C.accent, width: 14, height: 14, flexShrink: 0, cursor: "pointer" }} />
+                        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={label}>{label}</span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </>
+          )}
         </div>
       )}
 
