@@ -1,17 +1,16 @@
 "use client";
 
 import React, { useState, Suspense, useRef, useEffect } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ref as storageRef, uploadBytes } from "firebase/storage";
 import { storage } from "@/lib/firebase/client";
-import { ProfileMenu } from "@/components/dashboard/profile-menu";
+import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
-import type { PriceType } from "@/lib/orders/types";
-import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT, currencySymbol } from "@/lib/orders/types";
+import type { PriceType, OrderLinkPair } from "@/lib/orders/types";
+import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT, currencySymbol, MAX_ADDITIONAL_LINKS } from "@/lib/orders/types";
 import { RatingBadge } from "@/components/dashboard/results-shared";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
@@ -330,14 +329,15 @@ function ExpandedPanel({
       {/* Top-3 view: fixed N-column grid (N = however many of the 3 slots are
       filled) so the cards always stretch to fill the row on a big screen,
       instead of auto-fit's 320px cap leaving dead whitespace to the right
-      when there are only 3 (or fewer) cards to lay out. "Show all" can have
-      many more cards than fit in one row, so it keeps the auto-fit/320px cap
-      there — that's still what avoids over-wide cards for a long list.
-      lp-offer-grid + the @media rule below collapses the fixed N-column
+      when there are only 3 (or fewer) cards to lay out. "Show all" is capped
+      at a fixed 3-column grid too — auto-fit used to let a wide screen pack
+      5+ cards onto one line, which read as a broken layout once the list
+      grew past 3. Extra offers just wrap onto additional rows of 3.
+      lp-offer-grid + the @media rule below collapses either fixed-column
       layout back to a single column on mobile — a hardcoded 1fr-per-offer
       grid has no room to shrink on a narrow screen otherwise, unlike
       auto-fit which already wraps naturally. */}
-      <div className={showAll ? undefined : "lp-offer-grid"} style={{ display: "grid", gridTemplateColumns: showAll ? "repeat(auto-fit, minmax(240px, 320px))" : `repeat(${offers.length}, minmax(0, 1fr))`, gap: 14 }}>
+      <div className="lp-offer-grid" style={{ display: "grid", gridTemplateColumns: showAll ? "repeat(3, minmax(240px, 1fr))" : `repeat(${offers.length}, minmax(0, 1fr))`, gap: 14 }}>
         {offers.map((offer) => (
           <OfferCard
             key={offer.name}
@@ -1545,6 +1545,12 @@ function DomainRow({
 // ─── Checkout Modal ───────────────────────────────────────────────────────────
 type BriefItem = CartItem & {
   title: string; targetUrl: string; anchorText: string; niche: string;
+  // Optional extra target-url/anchor-text pairs beyond the primary one above —
+  // same shape as orders.additionalLinks server-side (lib/orders/types.ts).
+  // The primary pair stays its own targetUrl/anchorText fields, unchanged,
+  // so nothing about the single-link path (still the overwhelming common
+  // case) changes shape or behavior.
+  additionalLinks: OrderLinkPair[];
   contentMode: "linkpricer" | "upload" | "url";
   brief: string; articleUrl: string; tone: string; contentPrice: number;
   selectedFile: File | null; uploadError: string | null;
@@ -1560,6 +1566,15 @@ type BriefItem = CartItem & {
 // forever).
 function isBriefItemReady(item: BriefItem): boolean {
   if (!item.targetUrl || !item.anchorText) return false;
+  // A half-filled extra pair (one field typed, the other blank) blocks
+  // "ready" the same way the primary pair would — a customer who started
+  // typing a second link almost certainly meant to finish it, not have it
+  // silently dropped at submit time (see the submit-time filter below).
+  for (const pair of item.additionalLinks) {
+    const hasAny = !!pair.targetUrl || !!pair.anchorText;
+    const hasBoth = !!pair.targetUrl && !!pair.anchorText;
+    if (hasAny && !hasBoth) return false;
+  }
   if (item.contentMode === "linkpricer") return !!item.title && !!item.brief;
   if (item.contentMode === "url") return !!item.articleUrl;
   return !!item.selectedFile;
@@ -1592,7 +1607,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 }) {
   const { profile } = useAuthContext();
   const [items, setItems] = useState<BriefItem[]>(() =>
-    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: CONTENT_FEE_USD, selectedFile: null, uploadError: null }))
+    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", additionalLinks: [], niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: CONTENT_FEE_USD, selectedFile: null, uploadError: null }))
   );
   const [expandedIdx, setExpandedIdx] = useState(0);
   const [placing, setPlacing] = useState(false);
@@ -1615,6 +1630,26 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+  }
+
+  // Extra target-url/anchor-text pairs beyond the primary one — one flat
+  // array per item, addressed by index rather than a separate id per pair
+  // (they're reordered/removed by position, not referenced from elsewhere,
+  // so an id would just be bookkeeping with no consumer).
+  function addLinkPair(idx: number) {
+    setItems(prev => prev.map((it, i) => i === idx
+      ? (it.additionalLinks.length >= MAX_ADDITIONAL_LINKS ? it : { ...it, additionalLinks: [...it.additionalLinks, { targetUrl: "", anchorText: "" }] })
+      : it));
+  }
+  function updateLinkPair(idx: number, pairIdx: number, patch: Partial<OrderLinkPair>) {
+    setItems(prev => prev.map((it, i) => i === idx
+      ? { ...it, additionalLinks: it.additionalLinks.map((p, pi) => pi === pairIdx ? { ...p, ...patch } : p) }
+      : it));
+  }
+  function removeLinkPair(idx: number, pairIdx: number) {
+    setItems(prev => prev.map((it, i) => i === idx
+      ? { ...it, additionalLinks: it.additionalLinks.filter((_, pi) => pi !== pairIdx) }
+      : it));
   }
 
   function handleFileSelect(idx: number, file: File | undefined) {
@@ -1707,6 +1742,13 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
             articleTitle: i.title || undefined,
             targetUrl: i.targetUrl,
             anchorText: i.anchorText,
+            // Fully-empty pairs (never touched — the common case for anyone
+            // who never clicked "+ Add another link") are dropped rather
+            // than sent as ["",""] and rejected by the server's url()/min(1)
+            // validation. A half-filled pair can't reach this point at all —
+            // isBriefItemReady already blocks submit until every started
+            // pair is completed.
+            additionalLinks: i.additionalLinks.filter(p => p.targetUrl.trim() && p.anchorText.trim()),
             contentNiche: i.niche || undefined,
             contentTone: i.tone || undefined,
             contentOption: i.contentMode === "linkpricer" ? "provided" : i.contentMode === "upload" ? "uploaded" : "url",
@@ -1827,16 +1869,60 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                   <div className="checkout-brief-grid" style={{ padding: "18px 22px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                     {/* Left column */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                      {[
-                        { label: "Article title", key: "title", type: "text", ph: "e.g. Why fintech founders should rethink onboarding in 2026" },
-                        { label: "Target URL (where the link points)", key: "targetUrl", type: "url", ph: "https://yourbrand.com/blog/article-slug" },
-                        { label: "Anchor text", key: "anchorText", type: "text", ph: "e.g. fintech onboarding flow" },
-                      ].map(({ label, key, type, ph }) => (
-                        <div key={key}>
-                          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>{label}</label>
-                          <input type={type} value={(item as unknown as Record<string, string>)[key]} onChange={e => change(i, { [key]: e.target.value } as Partial<BriefItem>)} style={key === "targetUrl" || key === "anchorText" ? { ...inp, fontFamily: C.mono } : inp} placeholder={ph} />
+                      <div>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Article title</label>
+                        <input type="text" value={item.title} onChange={e => change(i, { title: e.target.value })} style={inp} placeholder="e.g. Why fintech founders should rethink onboarding in 2026" />
+                      </div>
+
+                      {/* Target URL / anchor text — repeatable pair. The primary
+                      pair (item.targetUrl/anchorText) is always present and
+                      required, same as before this existed; "+ Add another
+                      link" appends optional extra pairs for a customer who
+                      wants more than one link placed in the same article. */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                          <div>
+                            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Target URL (where the link points)</label>
+                            <input type="url" value={item.targetUrl} onChange={e => change(i, { targetUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-slug" />
+                          </div>
+                          <div>
+                            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Anchor text</label>
+                            <input type="text" value={item.anchorText} onChange={e => change(i, { anchorText: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="e.g. fintech onboarding flow" />
+                          </div>
                         </div>
-                      ))}
+
+                        {item.additionalLinks.map((pair, pairIdx) => (
+                          <div key={pairIdx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+                            <div>
+                              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Target URL #{pairIdx + 2}</label>
+                              <input type="url" value={pair.targetUrl} onChange={e => updateLinkPair(i, pairIdx, { targetUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/another-slug" />
+                            </div>
+                            <div>
+                              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Anchor text #{pairIdx + 2}</label>
+                              <input type="text" value={pair.anchorText} onChange={e => updateLinkPair(i, pairIdx, { anchorText: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="e.g. another anchor" />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeLinkPair(i, pairIdx)}
+                              title="Remove this link"
+                              style={{ height: 38, width: 38, flexShrink: 0, borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", color: C.mute, fontSize: 15, cursor: "pointer" }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+
+                        {item.additionalLinks.length < MAX_ADDITIONAL_LINKS && (
+                          <button
+                            type="button"
+                            onClick={() => addLinkPair(i)}
+                            style={{ alignSelf: "flex-start", padding: "7px 12px", borderRadius: 8, border: `1px dashed ${C.line}`, background: "#fff", color: C.accent700, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                          >
+                            + Add another link
+                          </button>
+                        )}
+                      </div>
+
                       {/* Niche / Category */}
                       <div>
                         <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Niche / Category</label>
@@ -2494,11 +2580,6 @@ function SearchPageInner() {
         @media (max-width: 768px) {
           .search-root { padding: 12px 12px 32px !important; }
           .search-root, .search-root * { min-width: 0 !important; }
-          .search-header { flex-wrap: wrap; gap: 10px; }
-          .search-header-brand { order: 1; }
-          .search-nav { order: 2; flex-wrap: wrap; width: 100%; gap: 2px !important; }
-          .search-nav a, .search-nav span:not(.search-breadcrumb) { padding: 6px 8px !important; font-size: 12.5px !important; }
-          .search-breadcrumb { display: none; }
           .search-2col { grid-template-columns: 1fr !important; }
           .search-hero-actions { flex-shrink: 1 !important; width: 100%; }
           .lp-offer-grid { grid-template-columns: 1fr !important; }
@@ -2541,32 +2622,7 @@ function SearchPageInner() {
 
       <div className="search-root" style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
 
-        {/* ── TopBar ── */}
-        <header className="search-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
-          <div className="search-header-brand" style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
-            <span className="search-breadcrumb" style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / analyze</span>
-          </div>
-          <nav className="search-nav" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            {([
-              { label: "Analyze", href: null },
-              { label: "Related Sites", href: "/dashboard/related-sites" },
-              { label: "Favorites", href: "/dashboard/favorites" },
-              { label: "Orders", href: "/dashboard/orders" },
-            ] as { label: string; href: string | null }[]).map(({ label, href }) =>
-              href ? (
-                <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: C.mute, background: "transparent", textDecoration: "none" }}>
-                  {label}
-                </Link>
-              ) : (
-                <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "default", color: C.ink }}>
-                  {label}
-                </span>
-              )
-            )}
-            <ProfileMenu />
-          </nav>
-        </header>
+        <DashboardNav active="analyze" />
 
         {/* Floating cart button */}
         {cartItems.length > 0 && (

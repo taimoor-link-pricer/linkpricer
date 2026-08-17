@@ -77,11 +77,43 @@ function HeaderProfileMenu({ user }: { user: User }) {
   );
 }
 
+const shimmerBg: React.CSSProperties = {
+  background: "linear-gradient(90deg, #eef0f4 0%, #f6f7f9 50%, #eef0f4 100%)",
+  backgroundSize: "200% 100%", animation: "lp-shimmer 1.4s infinite",
+};
+
+// Signed-out (Log in / Sign up) is the common case, so the skeleton takes
+// that shape — two pills sized to match the real Log in link and Sign up
+// button — rather than presupposing a signed-in avatar. If auth resolves
+// to a logged-in user, this collapses to the single avatar circle instead.
+function AuthSkeleton({ mobile = false }: { mobile?: boolean }) {
+  if (mobile) {
+    return (
+      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+        <div style={{ ...shimmerBg, flex: 1, height: 40, borderRadius: 10 }} />
+        <div style={{ ...shimmerBg, flex: 1, height: 40, borderRadius: 10 }} />
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ ...shimmerBg, width: 56, height: 32, borderRadius: 8 }} />
+      <div style={{ ...shimmerBg, width: 72, height: 40, borderRadius: 10 }} />
+    </div>
+  );
+}
+
 export function SiteHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
   const [user, setUser] = useState<User | null>(null);
-  useEffect(() => onAuthStateChanged(auth, setUser), []);
+  // Firebase's onAuthStateChanged resolves asynchronously after mount, so
+  // for a beat we don't yet know if the visitor is signed in. Rendering
+  // "Log in / Sign up" then popping to the avatar (or vice versa) once it
+  // resolves reads as a glitch — show a neutral skeleton in that same slot
+  // until we actually know which one to render.
+  const [authLoading, setAuthLoading] = useState(true);
+  useEffect(() => onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); }), []);
 
   return (
     <>
@@ -130,7 +162,9 @@ export function SiteHeader() {
             );
           })}
           <span style={{ width: 1, height: 18, background: "var(--lp-line)", margin: "0 6px" }} />
-          {user ? (
+          {authLoading ? (
+            <AuthSkeleton />
+          ) : user ? (
             <HeaderProfileMenu user={user} />
           ) : (
             <>
@@ -159,7 +193,9 @@ export function SiteHeader() {
               {l.label}
             </Link>
           ))}
-          {user ? (
+          {authLoading ? (
+            <AuthSkeleton mobile />
+          ) : user ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 0, marginTop: 8 }}>
               <Link href={ROUTES.search} onClick={() => setMenuOpen(false)} style={{ padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>Dashboard</Link>
               <Link href={ROUTES.settings} onClick={() => setMenuOpen(false)} style={{ padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>My profile</Link>
