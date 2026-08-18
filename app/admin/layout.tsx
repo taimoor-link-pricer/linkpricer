@@ -30,6 +30,27 @@ const BLOG_NAV = [
 function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { profile, handleSignOut } = useAuthContext();
   const pathname = usePathname();
+  const [switching, setSwitching] = useState(false);
+
+  // Hard navigation (not router.push) so AuthProvider re-fetches /api/user/me
+  // from scratch under the new view_mode cookie and re-runs its redirect logic.
+  async function switchToClient() {
+    setSwitching(true);
+    try {
+      await fetch("/api/auth/view-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "client" }),
+      });
+    } finally {
+      window.location.href = ROUTES.dashboard;
+    }
+  }
+
+  // Only shown for genuine dual-capability accounts -- role stays "client"
+  // for these, unlike legacy vendor-role admins who have no real client
+  // account/data to switch into.
+  const canSwitchToClient = profile?.isAdmin && profile.role === "client";
 
   function isActive(href: string) {
     return href === ROUTES.admin ? pathname === href : pathname.startsWith(href);
@@ -94,6 +115,13 @@ function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
           <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{profile?.displayName ?? profile?.email?.split("@")[0] ?? "Admin"}</div>
           <div style={{ fontSize: 11, color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile?.email ?? ""}</div>
         </div>
+        {canSwitchToClient && (
+          <button onClick={switchToClient} disabled={switching} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", background: "none", border: "none", cursor: switching ? "default" : "pointer", padding: 0, marginBottom: 10 }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#2563eb"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}>
+            <span>👤</span><span>{switching ? "Switching…" : "Switch to Client view"}</span>
+          </button>
+        )}
 <button onClick={handleSignOut} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: 0 }}
           onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#dc2626"; }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}>

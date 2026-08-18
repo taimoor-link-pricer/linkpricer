@@ -22,6 +22,7 @@ export const ROUTES = {
   orders: "/dashboard/orders",
   favorites: "/dashboard/favorites",
   monitors: "/dashboard/monitors",
+  profile: "/dashboard/profile",
   settings: "/dashboard/settings",
   admin: "/admin",
   adminUsers: "/admin/users",

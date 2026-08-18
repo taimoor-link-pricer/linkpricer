@@ -8,6 +8,7 @@ export type CurrentUser = {
   uid: string;
   email: string | null;
   role: string;
+  isAdmin: boolean;
   companyId: string | null;
 };
 
@@ -20,7 +21,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     const decoded = await adminAuth.verifySessionCookie(session, true);
 
     const result = await db
-      .select({ email: users.email, role: users.role, companyId: users.companyId })
+      .select({ email: users.email, role: users.role, isAdmin: users.isAdmin, companyId: users.companyId })
       .from(users)
       .where(eq(users.id, decoded.uid))
       .limit(1);
@@ -31,6 +32,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       uid: decoded.uid,
       email: result[0].email,
       role: result[0].role,
+      isAdmin: result[0].isAdmin,
       companyId: result[0].companyId,
     };
   } catch {

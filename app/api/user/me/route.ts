@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { syncAdminClaim } from "@/lib/admin-auth";
 
 export async function GET() {
   try {
@@ -74,7 +75,23 @@ export async function GET() {
 
     if (!result[0]) return NextResponse.json(null, { status: 404 });
 
-    return NextResponse.json(result[0]);
+    // Awaited (unlike requireAdminSession()'s fire-and-forget) because this
+    // is the one request the client always makes before it trusts `isAdmin`
+    // and acts on it (entering /admin, force-refreshing its ID token) -- if
+    // the claim write hasn't landed yet, the client's refreshed token still
+    // won't carry it, and Firestore rules that read it (e.g. the admin chat
+    // dock) 403 until the next natural token refresh.
+    if (result[0].isAdmin) {
+      await syncAdminClaim(decoded.uid);
+    }
+
+    // view_mode is a UI-only preference (which side of the app an isAdmin
+    // user currently wants to see) -- never an authorization signal, so it's
+    // safe to just echo the cookie back. Defaults to "admin" so existing
+    // admins land where they always have until they explicitly switch.
+    const viewMode = cookieStore.get("view_mode")?.value === "client" ? "client" : "admin";
+
+    return NextResponse.json({ ...result[0], viewMode });
   } catch {
     return NextResponse.json(null, { status: 401 });
   }

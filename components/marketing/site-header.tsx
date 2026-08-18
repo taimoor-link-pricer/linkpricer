@@ -62,7 +62,7 @@ function HeaderProfileMenu({ user }: { user: User }) {
           </div>
           <div style={{ padding: "6px 0" }}>
             <Link href={ROUTES.search} onClick={() => setOpen(false)} style={{ display: "block", padding: "9px 16px", fontSize: 13, color: "var(--lp-ink-2)", textDecoration: "none" }}>Dashboard</Link>
-            <Link href={ROUTES.settings} onClick={() => setOpen(false)} style={{ display: "block", padding: "9px 16px", fontSize: 13, color: "var(--lp-ink-2)", textDecoration: "none" }}>My profile</Link>
+            <Link href={ROUTES.profile} onClick={() => setOpen(false)} style={{ display: "block", padding: "9px 16px", fontSize: 13, color: "var(--lp-ink-2)", textDecoration: "none" }}>My profile</Link>
             <div style={{ height: 1, background: "var(--lp-line-2)", margin: "4px 0" }} />
             <button
               onClick={() => { setOpen(false); signOut(); }}
@@ -198,7 +198,7 @@ export function SiteHeader() {
           ) : user ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 0, marginTop: 8 }}>
               <Link href={ROUTES.search} onClick={() => setMenuOpen(false)} style={{ padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>Dashboard</Link>
-              <Link href={ROUTES.settings} onClick={() => setMenuOpen(false)} style={{ padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>My profile</Link>
+              <Link href={ROUTES.profile} onClick={() => setMenuOpen(false)} style={{ padding: "12px 0", fontSize: 15, fontWeight: 500, color: "var(--lp-ink-3)", textDecoration: "none", borderBottom: "1px solid var(--lp-line-2)" }}>My profile</Link>
               <button onClick={() => { setMenuOpen(false); signOut(); }} style={{ padding: "12px 0", fontSize: 15, fontWeight: 500, color: "#dc2626", background: "none", border: "none", textAlign: "left", cursor: "pointer" }}>Sign out</button>
             </div>
           ) : (

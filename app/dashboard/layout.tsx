@@ -1,4 +1,5 @@
 import { AuthProvider } from "@/lib/contexts/auth-context";
+import { UnreadOrdersProvider } from "@/lib/contexts/unread-orders-context";
 import { TipsBanner } from "@/components/dashboard/TipsBanner";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -13,7 +14,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      <DashboardShell>{children}</DashboardShell>
+      <UnreadOrdersProvider>
+        <DashboardShell>{children}</DashboardShell>
+      </UnreadOrdersProvider>
     </AuthProvider>
   );
 }

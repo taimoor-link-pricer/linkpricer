@@ -552,6 +552,10 @@ export const orders = pgTable("orders", {
 	articleTitle: text("article_title"),
 	targetUrl: text("target_url").notNull(),
 	anchorText: text("anchor_text"),
+	// Optional extra target-url/anchor-text pairs beyond the primary one above
+	// (see OrderLinkPair in lib/orders/types.ts) — an array of {targetUrl,
+	// anchorText}, or null/empty when the order only has the one primary link.
+	additionalLinks: jsonb("additional_links"),
 	requirements: text(),
 	priceType: text("price_type").default('base').notNull(),
 	selectedPrice: numeric("selected_price", { precision: 10, scale:  2 }).notNull(),
@@ -784,6 +788,12 @@ export const users = pgTable("users", {
 	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow(),
 	role: varchar().default('client').notNull(),
 	status: varchar().default('live').notNull(),
+	// Durable grant of admin capability, decoupled from `role` -- lets a
+	// genuine client account (role stays "client", own company/orders/data
+	// intact) also be permitted into /admin. requireAdminSession() checks
+	// this, not `role`. Legacy vendor-role admins are backfilled to true by
+	// migration 0004 so their access doesn't change.
+	isAdmin: boolean("is_admin").default(false).notNull(),
 	vendorName: varchar("vendor_name"),
 	companyId: varchar("company_id"),
 	stripeCustomerId: varchar("stripe_customer_id"),

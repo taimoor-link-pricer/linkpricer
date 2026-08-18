@@ -20,7 +20,12 @@ export type UserProfile = {
   firstName: string | null;
   lastName: string | null;
   displayName: string | null;
+  profileImageUrl: string | null;
   role: "client" | "vendor";
+  isAdmin: boolean;
+  // Which side of the app an isAdmin user currently wants to see -- UI-only,
+  // never an authorization signal. Meaningless when isAdmin is false.
+  viewMode: "admin" | "client";
   hasCompletedOnboarding: boolean;
 };
 
@@ -65,17 +70,34 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
             firstName: data.firstName,
             lastName: data.lastName,
             displayName: [data.firstName, data.lastName].filter(Boolean).join(" ") || user.displayName || null,
+            profileImageUrl: data.profileImageUrl ?? user.photoURL ?? null,
             role: data.role as "client" | "vendor",
+            isAdmin: Boolean(data.isAdmin),
+            viewMode: data.viewMode === "client" ? "client" : "admin",
             hasCompletedOnboarding: data.hasCompletedOnboarding,
           };
           setProfile(resolved);
 
-          if (requireAdmin && resolved.role !== "vendor") {
+          if (requireAdmin && !resolved.isAdmin) {
             router.replace(ROUTES.dashboard);
             return;
           }
 
-          if (!requireAdmin && resolved.role === "vendor") {
+          // requireAdminSession() sets the Firestore custom claim `admin:
+          // true` server-side (fire-and-forget) the moment isAdmin becomes
+          // true, but this client's cached ID token was issued before that
+          // and won't carry it until refreshed -- Firestore rules that read
+          // the claim (e.g. the admin chat dock) would 403 until then.
+          // Force-refresh once per admin-page load; fire-and-forget like the
+          // server side, so a hiccup here never blocks navigation.
+          if (requireAdmin && resolved.isAdmin) {
+            user.getIdToken(true).catch(() => {});
+          }
+
+          // Defaults to admin view -- an isAdmin user who hasn't explicitly
+          // switched to "client view" still gets bounced to /admin from
+          // dashboard pages, same as the old role==="vendor" behavior.
+          if (!requireAdmin && resolved.isAdmin && resolved.viewMode === "admin") {
             router.replace(ROUTES.admin);
             return;
           }
@@ -103,7 +125,10 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
             firstName: null,
             lastName: null,
             displayName: user.displayName,
+            profileImageUrl: user.photoURL ?? null,
             role: "client",
+            isAdmin: false,
+            viewMode: "admin",
             hasCompletedOnboarding: false,
           });
 
@@ -118,7 +143,10 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
           firstName: null,
           lastName: null,
           displayName: user.displayName,
+          profileImageUrl: user.photoURL ?? null,
           role: "client",
+          isAdmin: false,
+          viewMode: "admin",
           hasCompletedOnboarding: false,
         });
       } finally {
@@ -154,7 +182,10 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
         firstName: data.firstName,
         lastName: data.lastName,
         displayName: [data.firstName, data.lastName].filter(Boolean).join(" ") || user.displayName || null,
+        profileImageUrl: data.profileImageUrl ?? user.photoURL ?? null,
         role: data.role as "client" | "vendor",
+        isAdmin: Boolean(data.isAdmin),
+        viewMode: data.viewMode === "client" ? "client" : "admin",
         hasCompletedOnboarding: data.hasCompletedOnboarding,
       }));
     } catch {

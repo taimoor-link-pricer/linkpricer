@@ -37,6 +37,7 @@ interface AdminUser {
   name: string;
   email: string;
   role: "client" | "admin";
+  isAdmin: boolean;
   status: "Active" | "Suspended";
   createdAt: string;
 }
@@ -57,7 +58,10 @@ export default function AdminUsersPage() {
       const params = new URLSearchParams({ page: String(page) });
       if (search.trim()) params.set("search", search.trim());
       if (roleFilter === "Clients") params.set("role", "client");
-      if (roleFilter === "Admins") params.set("role", "vendor");
+      // Filters on the isAdmin capability, not role="vendor" -- a
+      // dual-capability admin keeps role="client", so filtering by role
+      // alone would hide them from this tab.
+      if (roleFilter === "Admins") params.set("admin", "true");
       const res = await fetch(`/api/admin/users?${params}`);
       const data = await res.json();
       setUsers(data.users ?? []);
@@ -88,6 +92,24 @@ export default function AdminUsersPage() {
       setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, status: user.status } : u)));
       const data = await res.json().catch(() => ({}));
       alert(data.error ?? "Failed to update user.");
+    }
+  }
+
+  async function toggleAdmin(user: AdminUser) {
+    const nextIsAdmin = !user.isAdmin;
+    const verb = nextIsAdmin ? "grant" : "revoke";
+    if (!confirm(`Are you sure you want to ${verb} admin access for ${user.name} (${user.email})?`)) return;
+
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isAdmin: nextIsAdmin } : u)));
+    const res = await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id, isAdmin: nextIsAdmin }),
+    });
+    if (!res.ok) {
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isAdmin: user.isAdmin } : u)));
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Failed to update admin access.");
     }
   }
 
@@ -213,7 +235,7 @@ export default function AdminUsersPage() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f9fafb" }}>
-                  {["Name / Email", "Role", "Status", "Created", "Actions"].map((h) => (
+                  {["Name / Email", "Role", "Admin Access", "Status", "Created", "Actions"].map((h) => (
                     <th
                       key={h}
                       style={{
@@ -237,7 +259,7 @@ export default function AdminUsersPage() {
                 {users.map((user, idx) => {
                   const isLast = idx === users.length - 1;
                   return (
-                    <UserRow key={user.id} user={user} isLast={isLast} onToggleSuspend={() => toggleSuspend(user)} />
+                    <UserRow key={user.id} user={user} isLast={isLast} onToggleSuspend={() => toggleSuspend(user)} onToggleAdmin={() => toggleAdmin(user)} />
                   );
                 })}
               </tbody>
@@ -274,13 +296,16 @@ function UserRow({
   user,
   isLast,
   onToggleSuspend,
+  onToggleAdmin,
 }: {
   user: AdminUser;
   isLast: boolean;
   onToggleSuspend: () => void;
+  onToggleAdmin: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const [suspendHover, setSuspendHover] = useState(false);
+  const [adminHover, setAdminHover] = useState(false);
   const suspended = user.status === "Suspended";
 
   return (
@@ -321,6 +346,25 @@ function UserRow({
           }}
         >
           {user.role}
+        </span>
+      </td>
+      <td
+        style={{
+          padding: "14px 20px",
+          borderBottom: isLast ? "none" : "1px solid #f0f2f5",
+        }}
+      >
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            padding: "3px 10px",
+            borderRadius: 99,
+            background: user.isAdmin ? "#ede9fe" : "#f3f4f6",
+            color: user.isAdmin ? "#6d28d9" : "#6b7280",
+          }}
+        >
+          {user.isAdmin ? "Yes" : "No"}
         </span>
       </td>
       <td
@@ -377,6 +421,24 @@ function UserRow({
             }}
           >
             {suspended ? "Restore" : "Suspend"}
+          </button>
+          <button
+            onClick={onToggleAdmin}
+            onMouseEnter={() => setAdminHover(true)}
+            onMouseLeave={() => setAdminHover(false)}
+            style={{
+              padding: "5px 12px",
+              background: adminHover ? "#ede9fe" : "transparent",
+              border: "1px solid #6d28d9",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: 12,
+              color: "#6d28d9",
+              fontWeight: 500,
+              transition: "background 0.15s",
+            }}
+          >
+            {user.isAdmin ? "Revoke Admin" : "Make Admin"}
           </button>
         </div>
       </td>

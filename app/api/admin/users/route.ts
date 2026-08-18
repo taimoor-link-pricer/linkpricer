@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search")?.trim() ?? "";
   const roleFilter = searchParams.get("role"); // "client" | "vendor" | null (all)
+  const adminFilter = searchParams.get("admin"); // "true" | null
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10));
 
   const conditions = [];
@@ -32,6 +33,12 @@ export async function GET(req: NextRequest) {
   }
   if (roleFilter === "client" || roleFilter === "vendor") {
     conditions.push(eq(users.role, roleFilter));
+  }
+  // Filters on the isAdmin capability, not role -- a dual-capability admin
+  // keeps role="client" (see requireAdminSession()), so a plain role="vendor"
+  // filter would miss them.
+  if (adminFilter === "true") {
+    conditions.push(eq(users.isAdmin, true));
   }
   const where = conditions.length ? and(...conditions) : undefined;
 
@@ -44,6 +51,7 @@ export async function GET(req: NextRequest) {
           firstName: users.firstName,
           lastName: users.lastName,
           role: users.role,
+          isAdmin: users.isAdmin,
           status: users.status,
           createdAt: users.createdAt,
         })
@@ -61,6 +69,7 @@ export async function GET(req: NextRequest) {
         name: [u.firstName, u.lastName].filter(Boolean).join(" ") || "Unknown",
         email: u.email ?? "—",
         role: displayRole(u.role),
+        isAdmin: u.isAdmin,
         status: u.status === "live" ? "Active" : "Suspended",
         createdAt: u.createdAt ? new Date(u.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "—",
       })),
@@ -74,22 +83,41 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// PATCH — suspend/restore a user account. Deliberately can't be used to grant
-// or revoke the admin role itself — that's a much higher-stakes action than
-// this page's UI exposes, and shouldn't be a side effect of a "Suspend" button.
+// PATCH — suspend/restore a user account, or grant/revoke admin access.
+// Kept as two distinct request shapes rather than folding isAdmin into the
+// same suspended toggle, purely so a "Suspend" click can never accidentally
+// carry an admin-access change as a side effect -- both are gated by the
+// same plain admin session.
 export async function PATCH(req: NextRequest) {
   const admin = await requireAdminSession();
   if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  let body: { userId?: string; suspended?: boolean };
+  let body: { userId?: string; suspended?: boolean; isAdmin?: boolean };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  if (!body.userId || typeof body.suspended !== "boolean") {
-    return NextResponse.json({ error: "userId and suspended are required" }, { status: 400 });
+  if (!body.userId) {
+    return NextResponse.json({ error: "userId is required" }, { status: 400 });
+  }
+
+  if (typeof body.isAdmin === "boolean") {
+    if (body.userId === admin.uid) {
+      return NextResponse.json({ error: "You can't change your own admin access." }, { status: 400 });
+    }
+    try {
+      await db.update(users).set({ isAdmin: body.isAdmin }).where(eq(users.id, body.userId));
+      return NextResponse.json({ ok: true });
+    } catch (err) {
+      console.error("[/api/admin/users PATCH isAdmin]", err);
+      return NextResponse.json({ error: "Failed to update user" }, { status: 500 });
+    }
+  }
+
+  if (typeof body.suspended !== "boolean") {
+    return NextResponse.json({ error: "suspended or isAdmin is required" }, { status: 400 });
   }
   if (body.userId === admin.uid && body.suspended) {
     return NextResponse.json({ error: "You can't suspend your own account." }, { status: 400 });
