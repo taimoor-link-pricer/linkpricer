@@ -1923,7 +1923,12 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                     {ready ? "✓" : i + 1}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {/* flexWrap so a longer marketplace name (e.g. "Backlinksglobal"
+                    vs "MeUp") drops to its own line on narrow viewports instead of
+                    overflowing into the fixed-width Ready/Brief-needed pill next
+                    to it -- same "second line" treatment the title below already
+                    gets when it doesn't fit. */}
+                    <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap" as const, gap: "2px 10px" }}>
                       <span style={{ fontFamily: C.mono, fontWeight: 700, fontSize: 14 }}>{item.domain}</span>
                       <span style={{ fontSize: 11, color: C.mute }}>via {item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</span>
                     </div>
