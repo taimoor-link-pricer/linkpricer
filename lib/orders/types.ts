@@ -30,6 +30,29 @@ export type PriceType = (typeof PRICE_TYPES)[number];
 export const CONTENT_OPTIONS = ["provided", "uploaded", "url"] as const;
 export type ContentOption = (typeof CONTENT_OPTIONS)[number];
 
+// A single order still has exactly one primary target/anchor pair (orders.targetUrl/
+// anchorText, unchanged — still required, still what search/CSV export filter on).
+// This is for the OPTIONAL extra pairs beyond that first one, stored as a JSON array
+// in orders.additionalLinks — same shape client and server side so there's one
+// definition of "what a link pair looks like," not two that can drift.
+export type OrderLinkPair = { targetUrl: string; anchorText: string };
+export const MAX_ADDITIONAL_LINKS = 9; // +1 primary = 10 links per order, a sane ceiling
+
+export function parseAdditionalLinks(raw: unknown): OrderLinkPair[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OrderLinkPair[] = [];
+  for (const entry of raw) {
+    if (
+      entry && typeof entry === "object" &&
+      typeof (entry as Record<string, unknown>).targetUrl === "string" &&
+      typeof (entry as Record<string, unknown>).anchorText === "string"
+    ) {
+      out.push({ targetUrl: (entry as OrderLinkPair).targetUrl, anchorText: (entry as OrderLinkPair).anchorText });
+    }
+  }
+  return out;
+}
+
 // Single source of truth for the "Linkpricer writes it" content fee — used
 // server-side (lib/orders/pricing.ts, the actual charge) and client-side
 // (the checkout estimate) so the two can't drift the way they used to

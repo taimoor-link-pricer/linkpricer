@@ -253,7 +253,12 @@ export function AiSearchHome() {
   const [value, setValue] = useState("");
   const [thinking, setThinking] = useState(false);
   const [signup, setSignup] = useState<SignupReason | null>(null);
-  const slots = useRef<{ domain: CatalogSearchResult | null }>({ domain: null });
+  // Which domain the signup modal should name — set from whichever result
+  // card's Buy/View more the user actually clicked (passed through
+  // requireSignup below), not from "whatever was searched most recently".
+  // A shared ref keyed only by last-fetched-result showed the wrong domain
+  // whenever an earlier card in the thread was clicked after a later search.
+  const [signupDomain, setSignupDomain] = useState<string | undefined>(undefined);
   const threadRef = useRef<HTMLDivElement>(null);
   const started = thread.length > 0;
 
@@ -261,7 +266,10 @@ export function AiSearchHome() {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [thread, thinking]);
 
-  const requireSignup = (reason: SignupReason) => setSignup(reason);
+  const requireSignup = (reason: SignupReason, domain?: string) => {
+    setSignup(reason);
+    setSignupDomain(domain);
+  };
 
   async function respond(text: string) {
     try {
@@ -313,7 +321,6 @@ export function AiSearchHome() {
       }
 
       const d = data.result;
-      slots.current.domain = d;
       const intro = `Found it — ${d.domain}, ${d.category || "General"} niche, DR ${d.dr}. Here's the best price we found:`;
       setThread((t) => [...t, { role: "assistant", text: intro }, { role: "assistant", domain: d }]);
     } catch {
@@ -359,7 +366,7 @@ export function AiSearchHome() {
             <div style={{ maxWidth: 760, margin: "0 auto", padding: "0 20px" }}>
               {thread.map((m, i) => {
                 if (m.role === "user") return <UserBubble key={i} text={m.text} />;
-                if ("domain" in m) return <MatchResult key={i} d={m.domain} onBuy={() => requireSignup("buy")} onViewMore={() => requireSignup("search")} />;
+                if ("domain" in m) return <MatchResult key={i} d={m.domain} onBuy={() => requireSignup("buy", m.domain.domain)} onViewMore={() => requireSignup("search", m.domain.domain)} />;
                 return <AssistantText key={i} text={m.text} suggestions={m.suggestions} onSuggestionClick={(s) => send(s)} />;
               })}
               {thinking && <TypingRow />}
@@ -373,7 +380,7 @@ export function AiSearchHome() {
         </div>
       )}
 
-      {signup && <SignupModal reason={signup} onClose={() => setSignup(null)} domain={slots.current.domain?.domain} />}
+      {signup && <SignupModal reason={signup} onClose={() => setSignup(null)} domain={signupDomain} />}
     </div>
   );
 }

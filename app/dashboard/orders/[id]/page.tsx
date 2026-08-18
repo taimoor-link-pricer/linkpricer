@@ -2,10 +2,13 @@
 
 import { useState, useRef, useEffect, use } from "react";
 import Link from "next/link";
+import { collection, addDoc, onSnapshot, orderBy, query, serverTimestamp, type Timestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
+import { useUnreadOrders } from "@/lib/contexts/unread-orders-context";
 import { ROUTES } from "@/lib/constants";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
-import { ORDER_STATUSES, type OrderStatus, type ClientOrderAction, currencySymbol } from "@/lib/orders/types";
+import { ORDER_STATUSES, type OrderStatus, type ClientOrderAction, currencySymbol, parseAdditionalLinks } from "@/lib/orders/types";
 import type { OrderStatusChangedMeta, OrderMessageMeta } from "@/lib/orders/events";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 
@@ -64,6 +67,7 @@ interface ApiOrder {
   createdAt: string | null;
   targetUrl: string;
   anchorText: string | null;
+  additionalLinks: unknown;
   wordCount: number | null;
   contentOption: string;
   requirements: string | null;
@@ -178,6 +182,16 @@ function DetailsCard({ order }: { order: ApiOrder }) {
         </a>
       } />
       {order.anchorText && <KV label="Anchor text" value={`"${order.anchorText}"`} mono />}
+      {parseAdditionalLinks(order.additionalLinks).map((pair, idx) => (
+        <div key={idx}>
+          <KV label={`Target URL #${idx + 2}`} value={
+            <a href={pair.targetUrl} target="_blank" rel="noopener noreferrer" style={{ fontFamily: "monospace", fontSize: 12, color: "#0052cc", textDecoration: "none" }}>
+              {pair.targetUrl} ↗
+            </a>
+          } />
+          <KV label={`Anchor text #${idx + 2}`} value={`"${pair.anchorText}"`} mono />
+        </div>
+      ))}
       {order.wordCount != null && <KV label="Word count" value={`${order.wordCount} words`} />}
       <KV label="Content" value={CONTENT_OPTION_LABEL[order.contentOption] ?? order.contentOption} />
 
@@ -465,61 +479,131 @@ function SystemEvent({ entry }: { entry: Extract<TimelineEntry, { kind: "status"
 }
 
 function Chat({ orderId, domain, title }: { orderId: string; domain: string; title: string }) {
-  const [entries, setEntries] = useState<TimelineEntry[]>([]);
+  // Was Postgres REST (poll-on-mount, /api/orders/[id]/messages) — completely
+  // disconnected from the admin chat dock (components/admin/chat-dock.tsx),
+  // which has always lived in Firestore (orders/{id}/messages, addDoc +
+  // onSnapshot). Two mailboxes neither side ever read: an admin reply written
+  // to Firestore never reached this page, and a message sent from here never
+  // reached the admin's dock. Confirmed live — writing directly to one store
+  // never surfaced in the other, in either direction — not just reasoned
+  // through. This rewires the client side onto the exact same Firestore
+  // collection/shape the dock already uses, so both are finally one system.
+  // firestore.rules already had the client-owns-this-order read/create rule
+  // in place for this (see orders/{orderId}/messages/{messageId}) — it just
+  // had no caller until now.
+  const { profile } = useAuthContext();
+  const { markRead } = useUnreadOrders();
+  const [messageEntries, setMessageEntries] = useState<TimelineEntry[]>([]);
+  const [statusEntries, setStatusEntries] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [chatError, setChatError] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [msgRes, orderRes] = await Promise.all([
-        fetch(`/api/orders/${orderId}/messages`),
-        fetch(`/api/orders/${orderId}`),
-      ]);
-      const msgData = await msgRes.json();
-      const orderData = await orderRes.json();
-      const msgEntries: TimelineEntry[] = (msgData.messages ?? []).map((m: OrderMessageMeta & { id: string; createdAt: string }) => ({
-        kind: "message" as const, id: m.id, createdAt: m.createdAt, msg: m,
-      }));
-      const statusEntries: TimelineEntry[] = (orderData.statusHistory ?? []).map((e: { id: string; timestamp: string; metadata: OrderStatusChangedMeta }) => ({
-        kind: "status" as const, id: e.id, createdAt: e.timestamp, evt: e.metadata,
-      }));
-      const merged = [...msgEntries, ...statusEntries].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-      setEntries(merged);
-    } catch (err) {
-      console.error("[Chat load]", err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const entries = [...messageEntries, ...statusEntries].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
 
+  // Status history is unrelated to the chat bug — still a plain fetch off
+  // the order record, untouched.
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    fetch(`/api/orders/${orderId}`)
+      .then((r) => r.json())
+      .then((orderData) => {
+        if (cancelled) return;
+        const se: TimelineEntry[] = (orderData.statusHistory ?? []).map((e: { id: string; timestamp: string; metadata: OrderStatusChangedMeta }) => ({
+          kind: "status" as const, id: e.id, createdAt: e.timestamp, evt: e.metadata,
+        }));
+        setStatusEntries(se);
+      })
+      .catch((err) => console.error("[Chat] status history load", err));
+    return () => { cancelled = true; };
   }, [orderId]);
+
+  // Real-time messages: same chat-init + onSnapshot pattern as
+  // ConversationThread in chat-dock.tsx. chat-init (already existed, already
+  // customer-ownership-gated) makes sure the Firestore orders/{id} mirror doc
+  // exists before this attaches a listener to its messages subcollection —
+  // needed for orders placed before this doc existed, self-heals on open.
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    setLoading(true);
+    setChatError("");
+    (async () => {
+      try {
+        const res = await fetch(`/api/orders/${orderId}/chat-init`, { method: "POST" });
+        if (!res.ok) throw new Error("chat-init failed");
+        if (cancelled) return;
+
+        const q = query(collection(db, "orders", orderId, "messages"), orderBy("createdAt", "asc"));
+        unsubscribe = onSnapshot(
+          q,
+          (snap) => {
+            const next: TimelineEntry[] = snap.docs.map((d) => {
+              const data = d.data() as { senderType: "admin" | "client"; senderId: string | null; senderName: string | null; body: string; createdAt: Timestamp | null };
+              const ts = data.createdAt?.toDate();
+              return {
+                kind: "message" as const,
+                id: d.id,
+                // Server timestamp is null for the split-second between an
+                // optimistic local write and the server round trip — falling
+                // back to "now" keeps sort order sane for that instant
+                // instead of the entry jumping position once it resolves.
+                createdAt: (ts ?? new Date()).toISOString(),
+                msg: { orderId, senderType: data.senderType, senderId: data.senderId, senderName: data.senderName, body: data.body },
+              };
+            });
+            setMessageEntries(next);
+            setLoading(false);
+            // Re-marked read on every snapshot, not just once on mount — see
+            // the identical comment in dashboard/orders/page.tsx's ChatModal
+            // and admin/chat-dock.tsx's adminLastReadAt re-stamp for why.
+            markRead(orderId);
+          },
+          (err) => {
+            console.error("[Chat] onSnapshot", err);
+            setChatError("Couldn't load messages.");
+            setLoading(false);
+          }
+        );
+      } catch (err) {
+        console.error("[Chat] chat-init", err);
+        setChatError("Couldn't open this chat.");
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, [orderId, markRead]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [entries]);
+  }, [entries.length]);
 
   async function send() {
     const text = message.trim();
-    if (!text || sending) return;
+    if (!text || sending || !profile) return;
     setSending(true);
+    setMessage("");
     try {
-      const res = await fetch(`/api/orders/${orderId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: text }),
+      // Direct client write, not a server round trip — matches the admin
+      // dock exactly. firestore.rules' create rule on this subcollection
+      // enforces senderId === request.auth.uid and the body constraints
+      // server-side (Firestore's own server, not this app's), so this isn't
+      // trusting the client any more than the REST route did.
+      await addDoc(collection(db, "orders", orderId, "messages"), {
+        senderId: profile.uid,
+        senderType: "client",
+        senderName: profile.displayName || profile.email || "You",
+        body: text,
+        createdAt: serverTimestamp(),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to send message");
-      setEntries((prev) => [...prev, { kind: "message", id: data.message.id, createdAt: data.message.createdAt, msg: data.message }]);
-      setMessage("");
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to send message");
+      console.error("[Chat] send failed", err);
+      setChatError("Message didn't send.");
+      setMessage(text); // give it back so the user doesn't retype it
     } finally {
       setSending(false);
     }
@@ -561,6 +645,8 @@ function Chat({ orderId, domain, title }: { orderId: string; domain: string; tit
       <div style={{ flex: 1, overflow: "auto", padding: "18px 18px", display: "flex", flexDirection: "column", gap: 16, background: "#f5f6f8" }}>
         {loading ? (
           <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: 24 }}>Loading conversation…</div>
+        ) : chatError ? (
+          <div style={{ textAlign: "center", color: "#dc2626", fontSize: 13, padding: 24 }}>{chatError}</div>
         ) : entries.length === 0 ? (
           <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: 24 }}>No messages yet — send a note below.</div>
         ) : (

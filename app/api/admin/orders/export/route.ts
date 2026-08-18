@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { orders, users } from "@/lib/db/schema";
 import { and, desc, eq, ilike, or } from "drizzle-orm";
 import { requireAdminSession } from "@/lib/admin-auth";
+import { parseAdditionalLinks } from "@/lib/orders/types";
 
 export const dynamic = "force-dynamic";
 
@@ -45,16 +46,23 @@ export async function GET(req: NextRequest) {
     const header = [
       "Order ID", "Order Date", "Client Email", "Domain", "Marketplace",
       "Order Type", "Content Option", "Word Count", "Article Title",
-      "Target URL", "Anchor Text", "Requirements", "Price Type",
+      "Target URL", "Anchor Text", "Additional Links", "Requirements", "Price Type",
       "Guest Post Price", "Content Price", "Total Amount", "Currency",
       "Status", "Published URL",
     ];
     const lines = [header.join(",")];
     for (const { order: o, clientEmail } of rows) {
+      // Flattened to one readable cell ("url -> anchor; url -> anchor") rather
+      // than raw JSON — this is a human-opened CSV (see the "Export orders"
+      // button), not a re-import format, so legibility wins over roundtrip
+      // fidelity.
+      const additionalLinks = parseAdditionalLinks(o.additionalLinks)
+        .map((p) => `${p.targetUrl} -> ${p.anchorText}`)
+        .join("; ");
       lines.push([
         o.id, o.createdAt, clientEmail, o.snapshotDomain, o.snapshotMarketplaceName,
         o.orderType, o.contentOption, o.wordCount, o.articleTitle,
-        o.targetUrl, o.anchorText, o.requirements, o.priceType,
+        o.targetUrl, o.anchorText, additionalLinks, o.requirements, o.priceType,
         o.selectedPrice, o.contentPrice, o.totalAmount, o.snapshotCurrency,
         o.status, o.liveUrl,
       ].map(csvEscape).join(","));

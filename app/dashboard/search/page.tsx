@@ -776,6 +776,9 @@ function ResultsTable({
   currency,
   onAddToCart,
   forceExpandDomain,
+  registryMarketplaces,
+  selectedMarketplaces,
+  setSelectedMarketplaces,
 }: {
   results: Domain[];
   notFound: string[];
@@ -783,6 +786,15 @@ function ResultsTable({
   currency: Currency;
   onAddToCart: (item: Omit<CartItem, "priceType">) => void;
   forceExpandDomain?: string;
+  // Full marketplace registry + the user's filter selection, owned by the
+  // parent page (not this component) precisely because this component gets
+  // unmounted and remounted on every search — see the comment by these
+  // useState calls in SearchPage for why that matters. Passed down rather
+  // than re-derived here so the selection is a genuine persistent search
+  // filter, not one scoped to whatever result set happens to be mounted.
+  registryMarketplaces: string[] | null;
+  selectedMarketplaces: Set<string> | null;
+  setSelectedMarketplaces: React.Dispatch<React.SetStateAction<Set<string> | null>>;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
@@ -793,29 +805,16 @@ function ResultsTable({
   const [filterOpen, setFilterOpen] = useState(false);
   const [marketplaceSearch, setMarketplaceSearch] = useState("");
 
-  // Every distinct offer.name across the current result set — "Marketplace"
-  // in the loose sense: a DB/API marketplace hostname (e.g. "tool.growwer.com")
-  // or a "Vendor: X" entry, whichever an offer actually carries. Recomputed
-  // from `results` each render (not memoized) — results tops out at 200
-  // domains with a handful of offers each, cheap enough that memoizing would
-  // just be extra bookkeeping for no measurable win.
-  const allMarketplaceNames = Array.from(new Set(results.flatMap((r) => r.offers.map((o) => o.name)))).sort((a, b) =>
-    a.localeCompare(b)
+  // "Vendor: X" offers are ad hoc (created per order, not a registered
+  // marketplace) so they can't come from the registry fetch — fold in
+  // whichever ones actually show up in the current results so they're still
+  // filterable, without that being the *only* source of truth for the list.
+  const vendorNamesInResults = Array.from(
+    new Set(results.flatMap((r) => r.offers.map((o) => o.name)).filter((n) => n.startsWith("Vendor: ")))
   );
-
-  // null = "not yet initialized for this result set." Distinct from an empty
-  // Set (user deliberately deselected everything) — both render the same
-  // "0 marketplaces shown" state, but only null triggers the effect below to
-  // default to "all selected" the first time a given `results` array shows up.
-  const [selectedMarketplaces, setSelectedMarketplaces] = useState<Set<string> | null>(null);
-  useEffect(() => {
-    setSelectedMarketplaces(new Set(results.flatMap((r) => r.offers.map((o) => o.name))));
-    // Re-init whenever a genuinely new result set arrives (new array identity
-    // from a fresh /api/analyze call) — a re-render of the *same* results
-    // (e.g. a parent state update unrelated to search) must not silently
-    // wipe out a filter the user just set.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results]);
+  const allMarketplaceNames = Array.from(new Set([...(registryMarketplaces ?? []), ...vendorNamesInResults])).sort(
+    (a, b) => a.localeCompare(b)
+  );
 
   const allSelected = selectedMarketplaces != null && allMarketplaceNames.every((m) => selectedMarketplaces.has(m));
   function toggleSelectAll() {
@@ -1114,8 +1113,10 @@ function ResultsTable({
 
       {filterOpen && (
         <div style={{ padding: "14px 20px", background: C.line2, borderBottom: `1px solid ${C.line}` }}>
-          {allMarketplaceNames.length === 0 ? (
-            <div style={{ fontSize: 12, color: C.mute }}>No marketplace offers in the current results to filter by.</div>
+          {registryMarketplaces == null ? (
+            <div style={{ fontSize: 12, color: C.mute }}>Loading marketplaces…</div>
+          ) : allMarketplaceNames.length === 0 ? (
+            <div style={{ fontSize: 12, color: C.mute }}>No marketplaces to filter by.</div>
           ) : (
             <>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
@@ -2286,6 +2287,42 @@ function SearchPageInner() {
   // domains included in their original position rather than shoved to the
   // bottom.
   const [order, setOrder] = useState<string[]>([]);
+
+  // Marketplace filter state, lifted up from ResultsTable: handleAnalyze
+  // (below) does setResults(null) while a search is in flight and only
+  // setResults(found) once data lands, which unmounts and remounts
+  // <ResultsTable> on every single search. Local state there — which is
+  // where this used to live — gets wiped on every remount, so a "persistent
+  // search filter" ends up behaving like a per-result table filter that
+  // silently resets. Living here instead means it survives that cycle.
+  const [registryMarketplaces, setRegistryMarketplaces] = useState<string[] | null>(null);
+  useEffect(() => {
+    fetch("/api/marketplaces")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => data && setRegistryMarketplaces(data.marketplaces as string[]))
+      .catch(() => {});
+  }, []);
+
+  // null = "no explicit selection yet," rendered as "everything shown" —
+  // see ResultsTable's use of this for how that default plays out. Only
+  // auto-admit newly-seen "Vendor: X" names (ad hoc, per-order offers that
+  // can't come from the /api/marketplaces registry) into an *already
+  // explicit* selection, so a fresh vendor offer isn't silently hidden just
+  // because the user had deselected some real marketplaces earlier.
+  const [selectedMarketplaces, setSelectedMarketplaces] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    const vendorNames = (results ?? []).flatMap((r) => r.offers.map((o) => o.name)).filter((n) => n.startsWith("Vendor: "));
+    if (vendorNames.length === 0) return;
+    setSelectedMarketplaces((prev) => {
+      if (prev == null) return prev;
+      const missing = vendorNames.filter((n) => !prev.has(n));
+      if (missing.length === 0) return prev;
+      const next = new Set(prev);
+      missing.forEach((n) => next.add(n));
+      return next;
+    });
+  }, [results]);
+
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -3101,6 +3138,9 @@ function SearchPageInner() {
             currency={currency}
             onAddToCart={handleAddToCart}
             forceExpandDomain={tourActive && tourStep === 2 ? TOUR_DEMO_ROW.domain : (domainParam ?? undefined)}
+            registryMarketplaces={registryMarketplaces}
+            selectedMarketplaces={selectedMarketplaces}
+            setSelectedMarketplaces={setSelectedMarketplaces}
           />
         )}
 

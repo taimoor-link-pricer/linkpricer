@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { useChatDock } from "@/components/admin/chat-dock";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
-import { ORDER_STATUSES, type OrderStatus } from "@/lib/orders/types";
+import { ORDER_STATUSES, type OrderStatus, type OrderLinkPair, parseAdditionalLinks } from "@/lib/orders/types";
 
 function LoadingSpinner() {
   return (
@@ -63,6 +63,7 @@ interface AdminOrder {
   reviewNotes: string | null;
   targetUrl: string;
   anchorText: string | null;
+  additionalLinks: OrderLinkPair[];
 }
 
 // Raw shape returned by GET /api/admin/orders.
@@ -82,6 +83,7 @@ type ApiRow = {
     createdAt: string | null;
     targetUrl: string;
     anchorText: string | null;
+    additionalLinks: unknown;
     snapshotOfferMetadata: unknown;
   };
   clientEmail: string | null;
@@ -131,6 +133,7 @@ function mapApiRow(row: ApiRow): AdminOrder {
     reviewNotes: row.order.reviewNotes,
     targetUrl: row.order.targetUrl,
     anchorText: row.order.anchorText,
+    additionalLinks: parseAdditionalLinks(row.order.additionalLinks),
   };
 }
 
@@ -400,6 +403,10 @@ function DetailsModal({ order, onClose }: { order: AdminOrder; onClose: () => vo
     ["Article title", order.articleTitle],
     ["Target URL", order.targetUrl],
     ["Anchor text", order.anchorText ?? "—"],
+    ...order.additionalLinks.flatMap((pair, idx): [string, string][] => [
+      [`Target URL #${idx + 2}`, pair.targetUrl],
+      [`Anchor text #${idx + 2}`, pair.anchorText],
+    ]),
     ["Content", order.contentOption],
     ["Word count", order.wordCount ? String(order.wordCount) : "—"],
     ["Niche", order.niche],

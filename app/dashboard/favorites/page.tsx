@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
-import { ProfileMenu } from "@/components/dashboard/profile-menu";
+import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { ROUTES } from "@/lib/constants";
 import { fmt } from "@/lib/design-v1/format";
 
@@ -69,40 +69,6 @@ interface FavoriteDomain {
   category: string | null;
 }
 
-// Same TopBar markup/style as Analyze, Related Sites, and Orders — kept
-// local (not extracted to a shared component yet, matching how those three
-// pages each already have their own copy) so this page's nav looks and
-// behaves identically to the others rather than as a separate design.
-function DashboardNav() {
-  return (
-    <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: "#0f1620" }}>Linkpricer</span>
-        <span style={{ marginLeft: 4, color: "#9ca3af", fontSize: 12 }}>/ app / favorites</span>
-      </div>
-      <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {([
-          { label: "Analyze", href: ROUTES.search },
-          { label: "Related Sites", href: "/dashboard/related-sites" },
-          { label: "Favorites", href: null },
-          { label: "Orders", href: ROUTES.orders },
-        ] as { label: string; href: string | null }[]).map(({ label, href }) =>
-          href ? (
-            <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: "#9ca3af", background: "transparent", textDecoration: "none" }}>
-              {label}
-            </Link>
-          ) : (
-            <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "default", color: "#0f1620" }}>
-              {label}
-            </span>
-          )
-        )}
-        <ProfileMenu />
-      </nav>
-    </header>
-  );
-}
-
 export default function FavoritesPage() {
   const { loading } = useAuthContext();
   const [favorites, setFavorites] = useState<FavoriteDomain[]>([]);
@@ -143,7 +109,7 @@ export default function FavoritesPage() {
       }
     `}</style>
     <div className="favs-page">
-      <DashboardNav />
+      <DashboardNav active="favorites" />
       {/* Header */}
       <div className="favs-header">
         <div>

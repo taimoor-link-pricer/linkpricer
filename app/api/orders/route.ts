@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { orders } from "@/lib/db/schema";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/get-current-user";
-import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS, DEFAULT_CONTENT_WORD_COUNT } from "@/lib/orders/types";
+import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS, DEFAULT_CONTENT_WORD_COUNT, MAX_ADDITIONAL_LINKS } from "@/lib/orders/types";
 import { computeOrderPricing, centsToAmount, OfferResolutionError, resolveOffer } from "@/lib/orders/pricing";
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { withOrderMetaExt } from "@/lib/orders/metadata";
@@ -26,6 +26,14 @@ const itemSchema = z.object({
   articleTitle: z.string().optional(),
   targetUrl: z.string().url(),
   anchorText: z.string().min(1),
+  // Optional extra target-url/anchor-text pairs beyond the primary one above —
+  // same {targetUrl, anchorText} shape, just more of them. The primary pair
+  // stays required/unchanged for backward compat with everything that already
+  // reads orders.targetUrl/anchorText directly (admin search, CSV export).
+  additionalLinks: z.array(z.object({
+    targetUrl: z.string().url(),
+    anchorText: z.string().min(1),
+  })).max(MAX_ADDITIONAL_LINKS).optional(),
   contentNiche: z.string().optional(),
   contentTone: z.string().optional(),
   contentOption: z.enum(CONTENT_OPTIONS),
@@ -228,6 +236,7 @@ export async function POST(req: NextRequest) {
           articleTitle: item.articleTitle,
           targetUrl: item.targetUrl,
           anchorText: item.anchorText,
+          additionalLinks: item.additionalLinks && item.additionalLinks.length > 0 ? item.additionalLinks : undefined,
           requirements: item.requirements,
           priceType: item.priceType,
           selectedPrice: centsToAmount(pricing.selectedBasePriceCents),

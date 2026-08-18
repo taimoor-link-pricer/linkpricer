@@ -13,9 +13,8 @@
 // match the reference screenshots exactly; that's a disclosed, known gap
 // pending an embeddings API key decision, not something faked here.
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useAuthContext } from "@/lib/contexts/auth-context";
-import { ProfileMenu } from "@/components/dashboard/profile-menu";
+import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, hydrateRates, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
 
 // ── searchable dropdown (ported from RSDropdown) ────────────────────────────
@@ -1032,19 +1031,7 @@ export default function RelatedSitesPage() {
 
       {tourActive && <Tour stepIndex={tourStep} setStepIndex={setTourStep} onClose={() => setTourActive(false)} />}
 
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
-          <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / related sites</span>
-        </div>
-        <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <Link href="/dashboard/search" style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: C.mute, textDecoration: "none" }}>Analyze</Link>
-          <span style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Related Sites</span>
-          <Link href="/dashboard/favorites" style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: C.mute, textDecoration: "none" }}>Favorites</Link>
-          <Link href="/dashboard/orders" style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: C.mute, textDecoration: "none" }}>Orders</Link>
-          <ProfileMenu />
-        </nav>
-      </header>
+      <DashboardNav active="relatedSites" />
 
       <section style={{ background: "linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%)", border: `1px solid ${C.line}`, borderRadius: 16, padding: 28, marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 18, gap: 24, flexWrap: "wrap" }}>

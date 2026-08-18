@@ -12,11 +12,11 @@
 // Stripe/company-details gating in front of "Pay Now" (he was explicit that
 // sequencing there is still undecided — "you figure out what's best").
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { collection, addDoc, onSnapshot, orderBy, query, serverTimestamp, Timestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
-import { ProfileMenu } from "@/components/dashboard/profile-menu";
+import { useUnreadOrders } from "@/lib/contexts/unread-orders-context";
+import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
 import type { ClientOrderAction } from "@/lib/orders/types";
 import { currencySymbol } from "@/lib/orders/types";
@@ -122,6 +122,7 @@ function fmtSize(b: number) {
 
 function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
   const { profile } = useAuthContext();
+  const { markRead } = useUnreadOrders();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [ready, setReady] = useState(false);
   const [chatError, setChatError] = useState("");
@@ -161,6 +162,12 @@ function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
             });
             setMessages(next);
             setReady(true);
+            // Re-marked read on every snapshot, not just once on open — a
+            // reply arriving while this modal is already sitting open is
+            // visible in the thread immediately, so it shouldn't leave the
+            // nav/list badge showing unread the next time either fetches.
+            // Same pattern as the admin dock's adminLastReadAt re-stamp.
+            markRead(order.id);
           },
           (err) => {
             console.error("[ChatModal] onSnapshot", err);
@@ -179,7 +186,7 @@ function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [order.id]);
+  }, [order.id, markRead]);
 
   function addFiles(fileList: FileList | null) {
     const incoming = Array.from(fileList ?? []);
@@ -368,6 +375,8 @@ function OrderCard({
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const config = STATUS_CONFIG[order.status];
+  const { isOrderUnread } = useUnreadOrders();
+  const unread = isOrderUnread(order.id);
 
   useEffect(() => { if (forceExpanded != null) setExpanded(forceExpanded); }, [forceExpanded]);
 
@@ -411,7 +420,12 @@ function OrderCard({
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Words</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{order.wordCount.toLocaleString()}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Amount</div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtPrice(order.newPrice ?? order.price, order.currency)}</div></div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }} {...tourAttr("tools")}>
-          <button onClick={(e) => { e.stopPropagation(); setChatOpen(true); }} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.ink3 }}><Icon name="chat" size={18} /></button>
+          <button onClick={(e) => { e.stopPropagation(); setChatOpen(true); }} title={unread ? "New message" : "Chat"} style={{ position: "relative", width: 36, height: 36, borderRadius: 8, border: `1px solid ${unread ? C.accent : C.line}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: unread ? C.accent : C.ink3 }}>
+            <Icon name="chat" size={18} />
+            {unread && (
+              <span aria-hidden style={{ position: "absolute", top: -3, right: -3, width: 10, height: 10, borderRadius: "50%", background: "#dc2626", border: "2px solid #fff" }} />
+            )}
+          </button>
           {(order.status === "published" || order.status === "complete") && (
             <button onClick={(e) => { e.stopPropagation(); setLinkMonitoringOpen(true); }} title="Link Monitoring" style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.ink3 }}><Icon name="link" size={18} /></button>
           )}
@@ -683,32 +697,7 @@ export default function OrdersPage() {
 
       {tourActive && <Tour steps={tourSteps} stepIndex={tourStep} setStepIndex={setTourStep} onClose={endTour} />}
 
-      {/* ── TopBar (same nav as Analyze/Related Sites/Favorites) ── */}
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 24px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: -0.4, color: C.ink }}>Linkpricer</span>
-          <span style={{ marginLeft: 4, color: C.mute, fontSize: 12 }}>/ app / orders</span>
-        </div>
-        <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {([
-            { label: "Analyze", href: "/dashboard/search" },
-            { label: "Related Sites", href: "/dashboard/related-sites" },
-            { label: "Favorites", href: "/dashboard/favorites" },
-            { label: "Orders", href: null },
-          ] as { label: string; href: string | null }[]).map(({ label, href }) =>
-            href ? (
-              <Link key={label} href={href} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", color: C.mute, background: "transparent", textDecoration: "none" }}>
-                {label}
-              </Link>
-            ) : (
-              <span key={label} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "default", color: C.ink }}>
-                {label}
-              </span>
-            )
-          )}
-          <ProfileMenu />
-        </nav>
-      </header>
+      <DashboardNav active="orders" />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <div>
