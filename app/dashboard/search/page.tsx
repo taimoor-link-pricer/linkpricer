@@ -1677,6 +1677,16 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   // re-render lands. This ref is checked synchronously at the very top of
   // handlePlace to close that race independent of the state-driven disable.
   const placingRef = useRef(false);
+  // Minted once per checkout session (not once per handlePlace call) so a
+  // retry after a failed submit reuses the SAME ids. The server's insert
+  // loop (POST /api/orders) writes each item's order row one at a time, not
+  // inside a transaction, and relies on onConflictDoNothing(id) to make a
+  // retry idempotent instead of creating duplicates for whichever items
+  // already succeeded before the failure. That guarantee only holds if the
+  // client actually resubmits the same ids -- freshly randomizing them on
+  // every call (the previous behavior) would silently defeat it and create
+  // real duplicate orders on a partial-batch failure + retry.
+  const orderIdsRef = useRef<Map<number, string>>(new Map(cartItems.map((_, idx) => [idx, crypto.randomUUID()])));
 
   const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
   const readyCount = items.filter(isBriefItemReady).length;
@@ -1760,11 +1770,10 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
     placingRef.current = true;
     setPlacing(true);
     try {
-      // Minted for every item up front (not just uploads) so a network retry or
-      // double-submit of this same handlePlace call replays identical order ids —
-      // the server treats a repeat id as a no-op instead of creating a duplicate
-      // order (see the onConflictDoNothing handling in /api/orders POST).
-      const orderIds = new Map<number, string>(items.map((_, idx) => [idx, crypto.randomUUID()]));
+      // orderIdsRef (not minted here) so a retry after a failed submit -- not
+      // just a within-call double-submit -- replays identical order ids; see
+      // its declaration above for why that matters.
+      const orderIds = orderIdsRef.current;
 
       // Upload phase: every selected file goes straight to its final,
       // order-scoped path (order-uploads/orders/{clientOrderId}/{uid}/...)
