@@ -1557,16 +1557,45 @@ type BriefItem = CartItem & {
   selectedFile: File | null; uploadError: string | null;
 };
 
-// Single source of truth for "is this placement ready to submit" — used by
-// both the header's readyCount and each card's own status badge, so they
-// can't disagree the way they used to (the badge had its own separate check
-// that ignored contentMode entirely, always requiring title+brief even for
-// modes that don't use them, and never checking selectedFile for "upload"
-// mode — so a freshly-switched-to-upload item with no file could show a
-// false "✓ Ready" while a fully-valid "url"-mode item showed "Brief needed"
+// The server rejects anything that isn't a well-formed http(s) URL (zod's
+// .url() in app/api/orders/route.ts) but nothing here ever checked that
+// client-side — the target/article URL inputs use type="url", but that's an
+// inert attribute with no <form onSubmit>/submit button wiring it up, so a
+// value like "test" sailed straight through to the API and came back as a
+// generic "Validation failed" with no indication of which field was wrong.
+const URL_ERROR_MSG = "isn't a valid URL — include https:// (e.g. https://example.com/page)";
+function isLikelyUrl(value: string): boolean {
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// Single source of truth for "is this placement ready to submit," "why
+// not," and which specific field is at fault — used by the header's
+// readyCount, each card's status badge, the inline per-field errors below,
+// and handlePlace's not-ready message, so they can't disagree the way
+// ready/not-ready used to (the badge had its own separate check that
+// ignored contentMode entirely, always requiring title+brief even for modes
+// that don't use them, and never checking selectedFile for "upload" mode —
+// so a freshly-switched-to-upload item with no file could show a false
+// "✓ Ready" while a fully-valid "url"-mode item showed "Brief needed"
 // forever).
-function isBriefItemReady(item: BriefItem): boolean {
-  if (!item.targetUrl || !item.anchorText) return false;
+function validateBriefItem(item: BriefItem): {
+  ready: boolean;
+  targetUrlError: string | null;
+  additionalLinkErrors: (string | null)[];
+  articleUrlError: string | null;
+} {
+  const targetUrlError = item.targetUrl && !isLikelyUrl(item.targetUrl) ? URL_ERROR_MSG : null;
+  const additionalLinkErrors = item.additionalLinks.map((pair) =>
+    pair.targetUrl && !isLikelyUrl(pair.targetUrl) ? URL_ERROR_MSG : null
+  );
+  const articleUrlError = item.contentMode === "url" && item.articleUrl && !isLikelyUrl(item.articleUrl) ? URL_ERROR_MSG : null;
+
+  let ready = !!item.targetUrl && !!item.anchorText && !targetUrlError;
   // A half-filled extra pair (one field typed, the other blank) blocks
   // "ready" the same way the primary pair would — a customer who started
   // typing a second link almost certainly meant to finish it, not have it
@@ -1574,11 +1603,41 @@ function isBriefItemReady(item: BriefItem): boolean {
   for (const pair of item.additionalLinks) {
     const hasAny = !!pair.targetUrl || !!pair.anchorText;
     const hasBoth = !!pair.targetUrl && !!pair.anchorText;
-    if (hasAny && !hasBoth) return false;
+    if (hasAny && !hasBoth) ready = false;
   }
-  if (item.contentMode === "linkpricer") return !!item.title && !!item.brief;
-  if (item.contentMode === "url") return !!item.articleUrl;
-  return !!item.selectedFile;
+  if (additionalLinkErrors.some(Boolean)) ready = false;
+  if (item.contentMode === "linkpricer") ready = ready && !!item.title && !!item.brief;
+  else if (item.contentMode === "url") ready = ready && !!item.articleUrl && !articleUrlError;
+  else ready = ready && !!item.selectedFile;
+
+  return { ready, targetUrlError, additionalLinkErrors, articleUrlError };
+}
+
+function isBriefItemReady(item: BriefItem): boolean {
+  return validateBriefItem(item).ready;
+}
+
+// Defense in depth: if a validation issue somehow still reaches the server
+// (a field this page doesn't validate yet, a future schema change, etc.),
+// surface zod's actual per-field issue instead of the generic "Validation
+// failed" banner that used to show regardless of what was actually wrong.
+function describeOrderApiError(data: { error?: string; details?: unknown }, items: BriefItem[]): string {
+  if (Array.isArray(data.details) && data.details.length > 0) {
+    const issue = data.details[0] as { path?: (string | number)[]; message?: string };
+    const path = issue.path;
+    if (Array.isArray(path) && path[0] === "items" && typeof path[1] === "number") {
+      const idx = path[1];
+      const domain = items[idx]?.domain ?? `#${idx + 1}`;
+      const field = path[path.length - 1];
+      const fieldLabel =
+        field === "targetUrl" ? "target URL" :
+        field === "anchorText" ? "anchor text" :
+        field === "articleUrl" ? "article URL" :
+        String(field);
+      return `Placement ${idx + 1} (${domain}): ${fieldLabel} — ${issue.message ?? "invalid value"}.`;
+    }
+  }
+  return data.error ?? "Failed to place order";
 }
 
 const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
@@ -1685,10 +1744,12 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
       setExpandedIdx(first);
       itemRefs.current[first]?.scrollIntoView({ behavior: "smooth", block: "center" });
       const domain = items[first].domain;
+      const v = validateBriefItem(items[first]);
+      const reason = v.targetUrlError ?? v.articleUrlError ?? v.additionalLinkErrors.find((e): e is string => !!e) ?? "is missing a required field";
       setPlaceError(
         notReadyIdx.length === 1
-          ? `Placement ${first + 1} (${domain}) is missing a required field — see below.`
-          : `${notReadyIdx.length} placements are missing required fields, starting with #${first + 1} (${domain}).`
+          ? `Placement ${first + 1} (${domain}): ${reason}`
+          : `${notReadyIdx.length} placements need attention, starting with #${first + 1} (${domain}): ${reason}`
       );
       return;
     }
@@ -1763,7 +1824,7 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error ?? "Failed to place order");
+        throw new Error(describeOrderApiError(data, items));
       }
       onPlaced(data.orders as PlacedOrder[]);
     } catch (err) {
@@ -1776,6 +1837,10 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
   }
 
   const inp: React.CSSProperties = { width: "100%", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", fontSize: 13, color: C.ink, outline: "none", boxSizing: "border-box" };
+  const inpErr: React.CSSProperties = { ...inp, border: "1px solid #fecaca", background: "#fff7f7" };
+  const fieldErr = (msg: string) => (
+    <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 6, fontWeight: 600 }}>{msg}</div>
+  );
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", overflowY: "auto" }}>
@@ -1833,8 +1898,13 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
             </div>
 
             {items.map((item, i) => {
-              const ready = isBriefItemReady(item);
+              const v = validateBriefItem(item);
+              const ready = v.ready;
               const flagged = attemptedSubmit && !ready;
+              // Only shown once the user has tried to submit — same gate as
+              // the card's own red-flagged styling, so a freshly opened
+              // checkout doesn't look pre-broken before anyone's typed a URL.
+              const showFieldErrors = attemptedSubmit;
               return (
               <div
                 key={item.domain + i}
@@ -1884,7 +1954,8 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
                             <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Target URL (where the link points)</label>
-                            <input type="url" value={item.targetUrl} onChange={e => change(i, { targetUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-slug" />
+                            <input type="url" value={item.targetUrl} onChange={e => change(i, { targetUrl: e.target.value })} style={{ ...(showFieldErrors && v.targetUrlError ? inpErr : inp), fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-slug" />
+                            {showFieldErrors && v.targetUrlError && fieldErr(v.targetUrlError)}
                           </div>
                           <div>
                             <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Anchor text</label>
@@ -1896,7 +1967,8 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                           <div key={pairIdx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
                             <div>
                               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Target URL #{pairIdx + 2}</label>
-                              <input type="url" value={pair.targetUrl} onChange={e => updateLinkPair(i, pairIdx, { targetUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/another-slug" />
+                              <input type="url" value={pair.targetUrl} onChange={e => updateLinkPair(i, pairIdx, { targetUrl: e.target.value })} style={{ ...(showFieldErrors && v.additionalLinkErrors[pairIdx] ? inpErr : inp), fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/another-slug" />
+                              {showFieldErrors && v.additionalLinkErrors[pairIdx] && fieldErr(v.additionalLinkErrors[pairIdx]!)}
                             </div>
                             <div>
                               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Anchor text #{pairIdx + 2}</label>
@@ -1984,7 +2056,10 @@ function CheckoutModal({ cartItems, onClose, onPlaced }: {
                             {item.uploadError && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 6, fontWeight: 600 }}>{item.uploadError}</div>}
                           </div>
                         ) : (
-                          <input type="url" value={item.articleUrl} onChange={e => change(i, { articleUrl: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-title" />
+                          <>
+                            <input type="url" value={item.articleUrl} onChange={e => change(i, { articleUrl: e.target.value })} style={{ ...(showFieldErrors && v.articleUrlError ? inpErr : inp), fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-title" />
+                            {showFieldErrors && v.articleUrlError && fieldErr(v.articleUrlError)}
+                          </>
                         )}
                       </div>
                       <div>
