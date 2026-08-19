@@ -163,6 +163,20 @@ function DashboardContent() {
     return unsub;
   }, []);
 
+  // Chrome/Safari can restore this page from the back-forward cache (bfcache)
+  // on a back-navigation -- repainting the exact signed-in `firebaseUser`
+  // state from before the tab was left, without re-running the effect above
+  // or re-checking Firebase. That's how "I signed out, then came back to the
+  // dashboard and it still showed me logged in" happens. A real reload is the
+  // only thing that discards the frozen heap and forces a fresh check.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) window.location.reload();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   useEffect(() => {
     if (firebaseUser) {
       if (sessionId) {

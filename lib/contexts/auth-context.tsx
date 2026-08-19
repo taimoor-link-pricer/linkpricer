@@ -49,6 +49,25 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
   const router = useRouter();
   const pathname = usePathname();
 
+  // Chrome/Safari can restore a fully-hydrated dashboard page from the
+  // back-forward cache (bfcache) on a back-navigation -- repainting the
+  // exact in-memory React state from before the tab was left, including a
+  // signed-in `profile`, without re-running this effect or re-checking
+  // Firebase. That's how "I signed out, then went back to a page I'd had
+  // open and it still showed me logged in" happens: nothing re-verifies
+  // anything, the frozen snapshot just gets shown again. router.refresh()
+  // wouldn't help -- it re-fetches server data but leaves this already-ran
+  // effect and its `profile` state untouched. Only a real reload discards
+  // the frozen heap and forces onAuthStateChanged to read Firebase's actual
+  // current persisted state.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) window.location.reload();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
