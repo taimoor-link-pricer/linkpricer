@@ -8,12 +8,15 @@
 // best match since this UI shows one domain at a time.
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Icon, RatingBadge } from "@/lib/design-v1/icons";
 import { fmt } from "@/lib/design-v1/format";
 import { Pill, btn, chip, priceLbl, priceVal } from "@/components/design-v1/primitives";
 import type { CatalogSearchResult, CatalogSearchOffer } from "@/lib/search/catalog-search";
 import { SignupModal, type SignupReason } from "./signup-modal";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import { finishGoogleSignIn } from "@/lib/firebase/auth-client";
+import { ROUTES } from "@/lib/constants";
 
 const CHIPS = ["Finance guest post", "iGaming niche edit", "Tech blog under $200", "SaaS website about VPN"];
 
@@ -249,10 +252,25 @@ interface HomepageSearchResponse {
 }
 
 export function AiSearchHome() {
+  const router = useRouter();
   const [thread, setThread] = useState<ThreadMessage[]>([]);
   const [value, setValue] = useState("");
   const [thinking, setThinking] = useState(false);
   const [signup, setSignup] = useState<SignupReason | null>(null);
+
+  // Picks up a Google sign-in that fell back to a full-page redirect (see
+  // startGoogleSignIn's POPUP_FALLBACK_CODES) — that navigates away from and
+  // back to this page, so the SignupModal that started it is long unmounted
+  // by the time Google redirects back. The domain the user was viewing
+  // doesn't survive that round trip, so this always lands on the generic
+  // search page rather than a specific compare-offers view.
+  useEffect(() => {
+    finishGoogleSignIn()
+      .then((result) => {
+        if (result) router.push(ROUTES.search);
+      })
+      .catch(() => {});
+  }, [router]);
   // Which domain the signup modal should name — set from whichever result
   // card's Buy/View more the user actually clicked (passed through
   // requireSignup below), not from "whatever was searched most recently".

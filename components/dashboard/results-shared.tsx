@@ -8,10 +8,12 @@
 import { useState } from "react";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import type { PriceType } from "@/lib/orders/types";
 
 export { hydrateRates };
 
 export const C = {
+  bg: "#f6f7f9",
   ink: "#0f1620", ink2: "#374151", ink3: "#6b7280", mute: "#9ca3af", mute2: "#d1d5db",
   line: "#e5e7eb", line2: "#f3f4f6", bg3: "#f3f4f6",
   accent: "#0052cc", accent700: "#003a99", accent50: "#e6f2ff",
@@ -103,6 +105,16 @@ export type DomainLike = {
 export type CartItem = {
   domain: string; dr: number; traffic: number; offerName: string; offerType: "API" | "Vendor" | "DB";
   price: number; delivery: number; link: string;
+  // "managed" = Linkpricer handles the order with the marketplace directly
+  // (the "We'll handle it" button, fee included in `price`); "direct" = the
+  // raw marketplace price, no fee — same distinction search/page.tsx's cart
+  // already made, just missing here before this type was shared checkout
+  // infrastructure. Required so every onAddToCart call site picks one.
+  orderType: "managed" | "direct";
+  // Only Analyze/search's niche selector resolves this (see
+  // nicheToPriceType in app/dashboard/search/page.tsx) — everywhere else
+  // (e.g. Related Sites) omits it and the server defaults to "base".
+  priceType?: PriceType;
 };
 
 // maxWidth caps this panel to its table's visible (scrolled) width instead
@@ -265,14 +277,14 @@ export function OfferCard({
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <button
           onMouseEnter={() => setHandleHover(true)} onMouseLeave={() => setHandleHover(false)}
-          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: ourPrice, delivery: offer.delivery, link: offer.link })}
+          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: ourPrice, delivery: offer.delivery, link: offer.link, orderType: "managed" })}
           style={{ padding: "9px 0", background: handleHover ? C.accent700 : C.accent, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "background 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
         >
           <span style={{ fontSize: 11 }}>◎</span> We&apos;ll handle it
         </button>
         <button
           onMouseEnter={() => setBuyHover(true)} onMouseLeave={() => setBuyHover(false)}
-          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link })}
+          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link, orderType: "direct" })}
           style={{ padding: "9px 0", background: buyHover ? C.line2 : "#fff", color: C.ink2, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "background 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
         >
           Buy direct <span style={{ fontSize: 11 }}>↗</span>

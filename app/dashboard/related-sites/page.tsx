@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, hydrateRates, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
+import { CartPopup, CheckoutModal, OrderPlacedModal, type PlacedOrder } from "@/components/dashboard/checkout-flow";
 
 // ── searchable dropdown (ported from RSDropdown) ────────────────────────────
 interface DropdownOption { id: string; label: string }
@@ -587,7 +588,7 @@ function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, on
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <button onClick={onFav} style={{ background: "transparent", border: `1px solid ${isFav ? "#fca5a5" : C.line}`, borderRadius: 7, padding: "5px 8px", cursor: "pointer", fontSize: 15, lineHeight: 1, color: isFav ? C.bad : C.mute }}>{isFav ? "♥" : "♡"}</button>
             {row.bestPrice ? (
-              <button onClick={() => onAddToCart({ domain: row.domain, dr: row.dr, traffic: row.traffic, offerName: row.offers[0]?.name ?? "Marketplace", offerType: row.offers[0]?.type ?? "DB", price: row.bestPrice ?? 0, delivery: row.offers[0]?.delivery ?? 14, link: row.offers[0]?.link ?? "Dofollow" })} style={{ padding: "5px 12px", background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+              <button onClick={() => onAddToCart({ domain: row.domain, dr: row.dr, traffic: row.traffic, offerName: row.offers[0]?.name ?? "Marketplace", offerType: row.offers[0]?.type ?? "DB", price: row.bestPrice ?? 0, delivery: row.offers[0]?.delivery ?? 14, link: row.offers[0]?.link ?? "Dofollow", orderType: "managed" })} style={{ padding: "5px 12px", background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                 Buy {priceFmt(withFee(row.bestPrice), currency)}
               </button>
             ) : (
@@ -721,6 +722,10 @@ export default function RelatedSitesPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [orderPlaced, setOrderPlaced] = useState(false);
+  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
 
@@ -969,7 +974,13 @@ export default function RelatedSitesPage() {
       }).catch(() => {});
     }
   }
-  function addToCart(item: CartItem) { setCartItems((prev) => [...prev, item]); }
+  function addToCart(item: CartItem) {
+    setCartItems((prev) => [...prev, item]);
+    setCartOpen(true);
+  }
+  function removeFromCart(idx: number) {
+    setCartItems((prev) => prev.filter((_, i) => i !== idx));
+  }
 
   // Sorting now happens server-side (lib/search/catalog-search.ts) — `results`
   // already arrives in the correct order for the active sortBy/sortDir, and
@@ -1256,9 +1267,42 @@ export default function RelatedSitesPage() {
         </section>
       )}
       {cartItems.length > 0 && (
-        <div style={{ position: "fixed", bottom: 24, right: 32, background: C.accent, color: "#fff", borderRadius: 99, padding: "10px 20px", fontSize: 13, fontWeight: 700, boxShadow: "0 4px 16px rgba(0,82,204,0.3)" }}>
+        <button
+          onClick={() => setCartOpen(true)}
+          style={{ position: "fixed", bottom: 24, right: 32, background: C.accent, color: "#fff", border: "none", borderRadius: 99, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 16px rgba(0,82,204,0.3)" }}
+        >
           🛒 {cartItems.length} in cart
-        </div>
+        </button>
+      )}
+
+      {cartOpen && cartItems.length > 0 && (
+        <CartPopup
+          items={cartItems}
+          currency="USD"
+          onClose={() => setCartOpen(false)}
+          onRemove={removeFromCart}
+          onCheckout={() => {
+            setCartOpen(false);
+            setCheckoutOpen(true);
+          }}
+        />
+      )}
+
+      {checkoutOpen && (
+        <CheckoutModal
+          cartItems={cartItems}
+          onClose={() => setCheckoutOpen(false)}
+          onPlaced={(orders) => {
+            setCheckoutOpen(false);
+            setOrderPlaced(true);
+            setCartItems([]);
+            setPlacedOrders(orders);
+          }}
+        />
+      )}
+
+      {orderPlaced && (
+        <OrderPlacedModal orders={placedOrders} onClose={() => setOrderPlaced(false)} />
       )}
     </div>
   );
