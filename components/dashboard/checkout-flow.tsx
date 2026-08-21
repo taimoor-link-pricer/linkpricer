@@ -302,17 +302,18 @@ function validateBriefItem(item: BriefItem): BriefItemValidation {
   const targetUrlError = urlFieldError("Target URL", item.targetUrl, true);
   const anchorTextError = item.anchorText.trim() ? null : "Anchor text is required.";
 
-  // An extra pair left completely untouched is dropped at submit time rather
-  // than flagged — but once either half is typed the customer meant to finish
-  // it, so both halves become required for that pair.
-  const additionalTargetUrlErrors = item.additionalLinks.map((pair) => {
-    const started = !!pair.targetUrl.trim() || !!pair.anchorText.trim();
-    return started ? urlFieldError("Target URL", pair.targetUrl, true) : null;
-  });
-  const additionalAnchorTextErrors = item.additionalLinks.map((pair) => {
-    const started = !!pair.targetUrl.trim() || !!pair.anchorText.trim();
-    return started && !pair.anchorText.trim() ? "Anchor text is required." : null;
-  });
+  // Every pair "+ Add another link" adds is required, same as the primary
+  // target-URL/anchor-text pair — not just once the customer has typed into
+  // it. A pair they don't actually want gets removed with its own ✕ button
+  // instead of being left blank and silently dropped at submit; that way a
+  // 2nd pair being empty and a 3rd pair being empty are flagged identically,
+  // regardless of what's filled in around them.
+  const additionalTargetUrlErrors = item.additionalLinks.map((pair) =>
+    urlFieldError("Target URL", pair.targetUrl, true)
+  );
+  const additionalAnchorTextErrors = item.additionalLinks.map((pair) =>
+    pair.anchorText.trim() ? null : "Anchor text is required."
+  );
 
   // Only the field belonging to the selected content mode is required — the
   // other two modes' fields aren't rendered at all, so validating them would
@@ -628,12 +629,14 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
             articleTitle: i.title || undefined,
             targetUrl: i.targetUrl,
             anchorText: i.anchorText,
-            // Fully-empty pairs (never touched — the common case for anyone
-            // who never clicked "+ Add another link") are dropped rather
-            // than sent as ["",""] and rejected by the server's url()/min(1)
-            // validation. A half-filled pair can't reach this point at all —
-            // isBriefItemReady already blocks submit until every started
-            // pair is completed.
+            // The common case (nobody clicked "+ Add another link") leaves
+            // this empty, so nothing to filter there. Every pair that DOES
+            // exist is now required (validateBriefItem above), so this
+            // filter is just a defensive no-op by the time submit is
+            // actually reachable — kept rather than trusting that
+            // invariant blindly, since sending an incomplete pair as
+            // ["",""] would get rejected by the server's url()/min(1)
+            // validation anyway.
             additionalLinks: i.additionalLinks.filter(p => p.targetUrl.trim() && p.anchorText.trim()),
             contentNiche: i.niche || undefined,
             // Tone is only collected for the mode that actually uses it, so
