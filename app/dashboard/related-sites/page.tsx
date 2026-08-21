@@ -13,10 +13,12 @@
 // match the reference screenshots exactly; that's a disclosed, known gap
 // pending an embeddings API key decision, not something faked here.
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, hydrateRates, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
-import { CartPopup, CheckoutModal, OrderPlacedModal, type PlacedOrder } from "@/components/dashboard/checkout-flow";
+import { CartPopup } from "@/components/dashboard/checkout-flow";
+import { loadCart, persistCart } from "@/lib/cart-storage";
 import type { PriceType } from "@/lib/orders/types";
 
 // ── searchable dropdown (ported from RSDropdown) ────────────────────────────
@@ -675,6 +677,7 @@ function ResultRow({ row, isLast, expanded, onToggle, isFav, onFav, currency, on
 
 export default function RelatedSitesPage() {
   const { loading } = useAuthContext();
+  const router = useRouter();
   const [query, setQuery] = useState("football news");
   const [ownSite, setOwnSite] = useState("");
   const [hideLinked, setHideLinked] = useState(true);
@@ -739,13 +742,22 @@ export default function RelatedSitesPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  // Hydrated from localStorage (lib/cart-storage) rather than starting empty
+  // — same reasoning as search/page.tsx: checkout lives at its own route
+  // (/checkout) now, so this page needs to pick the cart back up on a
+  // return visit instead of finding it reset. This page always prices in
+  // USD (no currency toggle here), so only items round-trip through storage.
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => loadCart().items);
   const [cartOpen, setCartOpen] = useState(false);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const [orderPlaced, setOrderPlaced] = useState(false);
-  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
+
+  // Write-through on every change instead of wrapping each setCartItems call
+  // site — cheaper to keep correct as more "add to cart" entry points get
+  // added later.
+  useEffect(() => {
+    persistCart({ items: cartItems, currency: "USD" });
+  }, [cartItems]);
 
   // Filters used to sit permanently open in a full-width bar — always
   // visible whether or not anyone was using them, which is what read as
@@ -1305,28 +1317,13 @@ export default function RelatedSitesPage() {
           onClose={() => setCartOpen(false)}
           onRemove={removeFromCart}
           onCheckout={() => {
+            // Cart's already persisted (the write-through effect above ran
+            // on the last add/remove), so /checkout picks it straight up —
+            // no state to hand off through the navigation itself.
             setCartOpen(false);
-            setCheckoutOpen(true);
+            router.push("/checkout");
           }}
         />
-      )}
-
-      {checkoutOpen && (
-        <CheckoutModal
-          cartItems={cartItems}
-          currency="USD"
-          onClose={() => setCheckoutOpen(false)}
-          onPlaced={(orders) => {
-            setCheckoutOpen(false);
-            setOrderPlaced(true);
-            setCartItems([]);
-            setPlacedOrders(orders);
-          }}
-        />
-      )}
-
-      {orderPlaced && (
-        <OrderPlacedModal orders={placedOrders} currency="USD" onClose={() => setOrderPlaced(false)} />
       )}
     </div>
   );

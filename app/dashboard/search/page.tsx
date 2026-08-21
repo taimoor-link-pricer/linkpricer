@@ -11,7 +11,8 @@ import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
 import { RatingBadge, type CartItem } from "@/components/dashboard/results-shared";
-import { CartPopup, CheckoutModal, OrderPlacedModal, type PlacedOrder } from "@/components/dashboard/checkout-flow";
+import { CartPopup } from "@/components/dashboard/checkout-flow";
+import { loadCart, persistCart } from "@/lib/cart-storage";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -1478,6 +1479,7 @@ function SearchPageInner() {
   // flow land the user directly on this domain's real compare-offers view
   // instead of an empty search page.
   const searchParams = useSearchParams();
+  const router = useRouter();
   const domainParam = (() => {
     const raw = searchParams.get("domain");
     return raw ? normalizeDomain(raw) || null : null;
@@ -1534,12 +1536,23 @@ function SearchPageInner() {
     });
   }, [results]);
 
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  // Hydrated from localStorage (lib/cart-storage) rather than starting empty
+  // — checkout now lives at its own route (/checkout), so a customer who
+  // adds items, navigates there, then comes back here (browser back, or the
+  // checkout page's own "back" close button) needs this page to pick the
+  // cart back up instead of finding it reset to empty.
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => loadCart().items);
   const [cartOpen, setCartOpen] = useState(false);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const [orderPlaced, setOrderPlaced] = useState(false);
-  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
   const [analyzeHover, setAnalyzeHover] = useState(false);
+
+  // Write-through on every change instead of wrapping each setCartItems call
+  // site — cheaper to keep correct as more "add to cart" entry points get
+  // added later, and currency (picked independently, above) needs to travel
+  // with the cart too so /checkout prices in whatever the customer was
+  // actually comparing in.
+  useEffect(() => {
+    persistCart({ items: cartItems, currency });
+  }, [cartItems, currency]);
 
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(() => loadRecentSearches());
   const [recentOpen, setRecentOpen] = useState(false);
@@ -1845,28 +1858,13 @@ function SearchPageInner() {
           onClose={() => setCartOpen(false)}
           onRemove={handleRemoveFromCart}
           onCheckout={() => {
+            // Cart's already persisted (the write-through effect above ran
+            // on the last add/remove), so /checkout picks it straight up —
+            // no state to hand off through the navigation itself.
             setCartOpen(false);
-            setCheckoutOpen(true);
+            router.push("/checkout");
           }}
         />
-      )}
-
-      {checkoutOpen && (
-        <CheckoutModal
-          cartItems={cartItems}
-          currency={currency}
-          onClose={() => setCheckoutOpen(false)}
-          onPlaced={(orders) => {
-            setCheckoutOpen(false);
-            setOrderPlaced(true);
-            setCartItems([]);
-            setPlacedOrders(orders);
-          }}
-        />
-      )}
-
-      {orderPlaced && (
-        <OrderPlacedModal orders={placedOrders} currency={currency} onClose={() => setOrderPlaced(false)} />
       )}
 
       <div className="search-root" style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>

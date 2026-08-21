@@ -17,15 +17,14 @@ import {
   contentPriceCents,
   DEFAULT_CONTENT_WORD_COUNT,
   MAX_ADDITIONAL_LINKS,
-  PRICE_TYPES,
   type OrderLinkPair,
   type PriceType,
 } from "@/lib/orders/types";
 
-// Human labels for the restricted-niche price tiers a marketplace offer can
-// have its own price for (lib/orders/pricing.ts's priceByType) — shown in
-// the checkout pricing-niche picker below, scoped to whichever of these an
-// offer actually has a price set for.
+// Human labels for the restricted-content price tiers a marketplace offer can
+// have its own price for (lib/orders/pricing.ts's priceByType) — shown in the
+// checkout niche picker below, scoped to whichever of these an offer actually
+// has a price set for.
 const PRICE_TYPE_LABELS: Record<PriceType, string> = {
   base: "General",
   gambling: "Gambling / iGaming",
@@ -37,6 +36,21 @@ const PRICE_TYPE_LABELS: Record<PriceType, string> = {
   tradingForex: "Trading / Forex",
   insertion: "Link insertion",
 };
+
+// Editorial-only niches — no marketplace prices content differently for
+// these, so they're always available at the offer's base price. Kept
+// separate from PREMIUM_PRICE_TYPES below (not folded into PriceType) so
+// adding one doesn't require a new priceByType column server-side.
+const TOPICAL_NICHES = [
+  "Fintech", "SaaS", "E-commerce", "Health & Wellness", "Travel",
+  "Real Estate", "Education", "Marketing", "Legal", "Other",
+];
+
+// The restricted-content verticals a marketplace CAN have its own price for.
+// "insertion" is deliberately excluded — that's a different service (link
+// inserted into an already-published page, paired with contentMode "url"),
+// not a content topic a customer picks alongside an article brief.
+const PREMIUM_PRICE_TYPES: PriceType[] = ["gambling", "adult", "cbd", "loan", "dating", "crypto", "tradingForex"];
 
 // Mirrors computeOrderPricing's integer-cent math (lib/orders/pricing.ts) so the
 // quote shown here matches what /api/orders actually charges to the cent — the
@@ -467,49 +481,54 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
 
   const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
   const readyCount = items.filter(isBriefItemReady).length;
-  // Server/upload failures only. The "you left a field blank" banner is
-  // derived below instead of stored, so it can't go stale — a stored message
-  // kept naming the first bad field even after that field was fixed.
+  // Server/upload failures only — the only way "Place order" can fail now
+  // that it's disabled until every placement validates, so there's nothing
+  // left for a client-side "you left a field blank" banner to say.
   const [placeError, setPlaceError] = useState<string | null>(null);
-  // Set once the user has actually tried to submit with something missing —
-  // gates the not-ready cards' red-flagged styling below so a freshly opened
-  // checkout (nothing filled in yet, nothing "wrong") doesn't look like it's
-  // already full of errors.
-  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
-  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // Recomputed every render from the live field values, so it always names a
-  // field that is actually still wrong — and disappears on its own once the
-  // last one is filled, instead of waiting for another submit attempt.
+  // Recomputed every render from the live field values, so it always reflects
+  // which placements are actually still incomplete — this is what disables
+  // "Place order" below, not a one-time check at submit time.
   const notReadyIdx = items.map((it, i) => (isBriefItemReady(it) ? -1 : i)).filter(i => i !== -1);
-  const validationBanner = attemptedSubmit && notReadyIdx.length > 0
-    ? (() => {
-        const first = notReadyIdx[0];
-        const reason = validateBriefItem(items[first]).firstError ?? "is missing a required field.";
-        const where = `Placement ${first + 1} (${items[first].domain}): ${reason}`;
-        return notReadyIdx.length === 1
-          ? where
-          : `${notReadyIdx.length} placements need attention, starting with ${where}`;
-      })()
-    : null;
-  // A server/upload failure isn't self-resolving, so it outranks the derived
-  // banner until the next submit clears it.
-  const visiblePlaceError = placeError ?? validationBanner;
+
+  // Which cards have been expanded and then moved away from (collapsed, or
+  // the user opened a different one) — gates each card's inline field errors
+  // and red-flagged border. A freshly opened checkout has item 0 expanded by
+  // default but nothing touched yet, so it doesn't greet the customer with a
+  // wall of red before they've typed anything; errors for a card only appear
+  // once they've actually visited it and moved on.
+  const [touchedIdx, setTouchedIdx] = useState<Set<number>>(new Set());
+  function toggleExpanded(i: number) {
+    setExpandedIdx(prev => {
+      if (prev !== -1) setTouchedIdx(t => (t.has(prev) ? t : new Set(t).add(prev)));
+      return prev === i ? -1 : i;
+    });
+  }
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
   }
 
-  // item.price is always the RAW marketplace price for whichever priceType
-  // is currently selected (cartCentsTotals/computeOrderPricing both apply
-  // the managed fee on top of it independently) — so switching niches only
-  // needs to swap in that niche's raw price from the already-fetched
-  // priceByType map; every downstream total recomputes on its own from
-  // there, same as it already does for any other field edit.
-  function changePriceType(idx: number, priceType: PriceType) {
+  // Niche and price used to be two disconnected fields — a "Fintech vs SaaS"
+  // editorial picker with no price effect, plus a separate "Pricing tier"
+  // picker for the few niches a marketplace actually prices differently
+  // (gambling/cbd/dating/etc). That split let the same real-world niche
+  // (e.g. crypto) show up in both, with no visible link between the one you
+  // pick for the editor and the one that changes what you pay — confusing,
+  // and easy to leave mismatched. Now there's one control: every niche shows
+  // this offer's real price (or "Not available" if it doesn't sell that
+  // niche), and picking one sets niche + priceType + price together. item.price
+  // is always the RAW marketplace price for whichever priceType is now
+  // selected (cartCentsTotals/computeOrderPricing both apply the managed fee
+  // on top of it independently), so this only needs to swap in the chosen
+  // niche's raw price from the already-fetched priceByType map — every
+  // downstream total recomputes on its own from there, same as any other
+  // field edit.
+  function changeNiche(idx: number, label: string) {
+    const priceType = PREMIUM_PRICE_TYPES.find((pt) => PRICE_TYPE_LABELS[pt] === label) ?? "base";
     const raw = priceTypesByIdx[idx]?.[priceType];
     const price = raw != null ? parseFloat(raw) : items[idx].price;
-    change(idx, { priceType, price });
+    change(idx, { niche: label, priceType, price });
   }
 
   // Extra target-url/anchor-text pairs beyond the primary one — one flat
@@ -555,17 +574,10 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
   }
 
   async function handlePlace() {
-    if (placingRef.current) return;
+    // Defense in depth only — the button itself is disabled while any
+    // placement is incomplete, so this shouldn't be reachable in that state.
+    if (placingRef.current || notReadyIdx.length > 0) return;
     setPlaceError(null);
-    if (notReadyIdx.length > 0) {
-      // The banner text itself is derived above — this only has to reveal it
-      // and move the user to the first placement that needs work.
-      setAttemptedSubmit(true);
-      const first = notReadyIdx[0];
-      setExpandedIdx(first);
-      itemRefs.current[first]?.scrollIntoView({ behavior: "smooth", block: "center" });
-      return;
-    }
     if (!profile) {
       setPlaceError("You must be signed in to place an order.");
       return;
@@ -741,15 +753,15 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
             {items.map((item, i) => {
               const v = validateBriefItem(item);
               const ready = v.ready;
-              const flagged = attemptedSubmit && !ready;
-              // Only shown once the user has tried to submit — same gate as
-              // the card's own red-flagged styling, so a freshly opened
-              // checkout doesn't look pre-broken before anyone's typed a URL.
-              const showFieldErrors = attemptedSubmit;
+              const touched = touchedIdx.has(i);
+              const flagged = touched && !ready;
+              // Only shown for a card the user has actually visited and moved
+              // on from (see touchedIdx above) — a freshly opened checkout
+              // doesn't look pre-broken before anyone's typed anything.
+              const showFieldErrors = touched;
               return (
               <div
                 key={item.domain + i}
-                ref={(el) => { itemRefs.current[i] = el; }}
                 style={{
                   background: "#fff",
                   border: `1px solid ${expandedIdx === i ? C.accent : flagged ? "#f3a5a5" : C.line}`,
@@ -759,7 +771,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                 }}
               >
                 {/* Card header row */}
-                <div onClick={() => setExpandedIdx(prev => prev === i ? -1 : i)} style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, borderBottom: expandedIdx === i ? `1px solid ${C.line2}` : "none", background: expandedIdx === i ? C.accent50 : "transparent", cursor: "pointer" }}>
+                <div onClick={() => toggleExpanded(i)} style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, borderBottom: expandedIdx === i ? `1px solid ${C.line2}` : "none", background: expandedIdx === i ? C.accent50 : "transparent", cursor: "pointer" }}>
                   <div style={{ width: 28, height: 28, borderRadius: 7, flexShrink: 0, background: ready ? "#e8f6ee" : "#fdf2dd", color: ready ? C.good : "#a35d00", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12, border: `1px solid ${ready ? "#bbf0c8" : "#f3d99c"}` }}>
                     {ready ? "✓" : i + 1}
                   </div>
@@ -883,50 +895,57 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                         )}
                       </div>
 
-                      {/* Niche / Category — editorial classification only
-                      (assigns an editor fluent in the topic), has no effect
-                      on price. The pricing-tier picker below is the separate
-                      axis that actually changes what this placement costs. */}
-                      <div>
-                        <FieldLabel hint="optional">Niche / Category</FieldLabel>
-                        <select value={item.niche} onChange={e => change(i, { niche: e.target.value })} style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}>
-                          <option value="">Select niche…</option>
-                          {["Fintech", "SaaS", "E-commerce", "Health & Wellness", "Travel", "Real Estate", "Education", "Marketing", "Legal", "Crypto / Web3", "Other"].map(n => <option key={n} value={n}>{n}</option>)}
-                        </select>
-                      </div>
-
-                      {/* Pricing tier — only rendered when this specific
-                      offer actually has a price for more than one tier
-                      (most offers only have "base", so most placements never
-                      show this at all). Restricted-content marketplaces
-                      often charge a premium for e.g. gambling/CBD/dating —
-                      switching tiers here swaps in that tier's real price via
-                      changePriceType so the estimate matches what the server
-                      will actually charge, instead of only finding out at
-                      submit time. The server independently re-validates and
-                      rejects if the chosen tier turns out to have no price
-                      (app/api/orders/route.ts), so this is a UX improvement
-                      on top of an already-enforced backstop, not a
-                      replacement for it. */}
+                      {/* Niche / Category — one control for both "which topic
+                      is this article about" (assigns an editor fluent in it)
+                      and "does this marketplace charge extra for that topic."
+                      Topical niches (Fintech, SaaS, ...) never carry their own
+                      price, so they're always selectable at the offer's base
+                      price. Restricted-content niches (gambling, CBD, dating,
+                      ...) show this specific offer's real price when it has
+                      one, via priceTypesByIdx (fetched once above), and render
+                      disabled with "Not available" when it doesn't — so a
+                      customer never picks a niche this marketplace won't
+                      actually sell, instead of finding out at submit time.
+                      The server still independently re-validates and rejects
+                      if the chosen tier turns out to have no price
+                      (app/api/orders/route.ts); this is a UX improvement on
+                      top of that backstop, not a replacement for it. */}
                       {(() => {
                         const available = priceTypesByIdx[i];
-                        if (!available) return null;
-                        const options = PRICE_TYPES.filter((pt) => available[pt] != null);
-                        if (options.length <= 1) return null;
-                        const selected = options.includes((item.priceType ?? "base") as PriceType) ? (item.priceType ?? "base") : "base";
+                        // Reflects whichever niche is actually driving the
+                        // current price even before the customer touches this
+                        // field — e.g. an item added to cart while searching
+                        // under a "Crypto" filter already carries priceType
+                        // "crypto", so this shows "Crypto / Web3" selected
+                        // instead of a blank placeholder that contradicts the
+                        // price already quoted.
+                        const priceTypeLabel = item.priceType && PREMIUM_PRICE_TYPES.includes(item.priceType)
+                          ? PRICE_TYPE_LABELS[item.priceType]
+                          : null;
+                        const selected = item.niche || priceTypeLabel || "";
+                        const baseRaw = available?.base;
                         return (
                           <div>
-                            <FieldLabel hint="changes price">Pricing tier</FieldLabel>
+                            <FieldLabel hint="optional — some niches change price">Niche / Category</FieldLabel>
                             <select
                               value={selected}
-                              onChange={e => changePriceType(i, e.target.value as PriceType)}
+                              onChange={e => changeNiche(i, e.target.value)}
                               style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}
                             >
-                              {options.map((pt) => (
-                                <option key={pt} value={pt}>
-                                  {PRICE_TYPE_LABELS[pt]} — {priceFmt(parseFloat(available[pt]!), currency)}
-                                </option>
-                              ))}
+                              <option value="">Select niche…</option>
+                              <option value="General">
+                                General{baseRaw ? ` — ${priceFmt(parseFloat(baseRaw), currency)}` : ""}
+                              </option>
+                              {TOPICAL_NICHES.map(n => <option key={n} value={n}>{n}</option>)}
+                              {PREMIUM_PRICE_TYPES.map((pt) => {
+                                const raw = available?.[pt];
+                                const label = PRICE_TYPE_LABELS[pt];
+                                return (
+                                  <option key={pt} value={label} disabled={!raw}>
+                                    {label} — {raw ? priceFmt(parseFloat(raw), currency) : "Not available"}
+                                  </option>
+                                );
+                              })}
                             </select>
                           </div>
                         );
@@ -1077,14 +1096,42 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                 </div>
               </div>
             </div>
-            {visiblePlaceError && (
+            {placeError && (
               <div role="alert" style={{ padding: "10px 12px", borderRadius: 9, background: "#fee2e2", border: "1px solid #fca5a5", color: C.bad, fontSize: 12.5, fontWeight: 600 }}>
-                {visiblePlaceError}
+                {placeError}
               </div>
             )}
-            <button onClick={handlePlace} disabled={placing} style={{ padding: 16, background: placing ? C.ink2 : C.ink, color: "#fff", border: "none", borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: placing ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            {/* Nothing left to submit-and-fail on: the button itself stays
+            disabled (and visibly greyed out) until every placement is ready,
+            so there's no click-then-get-told-what's-wrong step anymore — the
+            per-card "Brief needed" pill above and this count are the only
+            signal needed, and neither reads as an error. */}
+            <button
+              onClick={handlePlace}
+              disabled={placing || notReadyIdx.length > 0}
+              style={{
+                padding: 16,
+                background: placing || notReadyIdx.length > 0 ? C.ink2 : C.ink,
+                color: "#fff",
+                border: "none",
+                borderRadius: 12,
+                fontWeight: 700,
+                fontSize: 15,
+                cursor: placing || notReadyIdx.length > 0 ? "default" : "pointer",
+                opacity: notReadyIdx.length > 0 && !placing ? 0.55 : 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
               {placingStage === "uploading" ? "Uploading article…" : placingStage === "submitting" ? "Placing order…" : "✓ Place order"}
             </button>
+            {notReadyIdx.length > 0 && !placing && (
+              <div style={{ fontSize: 11.5, color: C.mute, textAlign: "center" as const }}>
+                {notReadyIdx.length === 1 ? "1 placement still needs a brief" : `${notReadyIdx.length} placements still need a brief`}
+              </div>
+            )}
             <div style={{ fontSize: 11.5, color: C.mute, textAlign: "center" as const, lineHeight: 1.5 }}>
               By placing this order you agree to the <span style={{ color: C.accent, cursor: "pointer" }}>marketplace terms</span>. We&apos;ll send an invoice for each placement once the publication URL is delivered.
             </div>
