@@ -46,6 +46,11 @@ export default function CheckoutPage() {
         setPlacedOrders(orders);
         setOrderPlaced(true);
       }}
+      // Removing the last placement empties the cart while already on this
+      // page — the mount-time effect above can't catch that (it only ever
+      // sees the page's initial, non-reactive `cart` snapshot), so this is
+      // the one live signal for "nothing left, leave."
+      onEmpty={() => router.replace("/dashboard/search")}
     />
   );
 }

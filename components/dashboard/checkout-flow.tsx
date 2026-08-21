@@ -13,6 +13,7 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import { C, priceFmt, type Currency, type CartItem } from "@/components/dashboard/results-shared";
 import { RATES, SYMS } from "@/lib/design-v1/format";
+import { persistCart } from "@/lib/cart-storage";
 import {
   contentPriceCents,
   DEFAULT_CONTENT_WORD_COUNT,
@@ -424,10 +425,14 @@ export type PlacedOrder = {
   createdAt: string | null;
 };
 
-export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
+export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty }: {
   cartItems: CartItem[];
   currency: Currency;
   onClose: () => void; onPlaced: (orders: PlacedOrder[]) => void;
+  // Called once removing a placement leaves nothing left to check out —
+  // this component has nowhere sensible to navigate to on its own (it
+  // doesn't own routing), so the caller decides where "empty" goes.
+  onEmpty?: () => void;
 }) {
   const { profile } = useAuthContext();
   const [items, setItems] = useState<BriefItem[]>(() =>
@@ -505,6 +510,40 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
       return prev === i ? -1 : i;
     });
   }
+
+  // Dropping a placement means re-indexing every OTHER piece of state keyed
+  // by cart position, not just `items` — priceTypesByIdx (fetched once,
+  // above) and orderIdsRef (minted once, above; the retry-idempotency ids
+  // POST /api/orders relies on) both line up with `items` by index, and a
+  // stale/misaligned index in orderIdsRef specifically would attach the
+  // wrong id to the wrong domain at submit time. touchedIdx/expandedIdx are
+  // just UI state, so those reset rather than being surgically re-indexed —
+  // nothing data-critical rides on them surviving a removal.
+  function removeItem(idx: number) {
+    setItems(prev => {
+      const next = prev.filter((_, i) => i !== idx);
+      persistCart({ items: next, currency });
+      return next;
+    });
+    setPriceTypesByIdx(prev => prev.filter((_, i) => i !== idx));
+    const nextIds = new Map<number, string>();
+    orderIdsRef.current.forEach((id, i) => {
+      if (i === idx) return;
+      nextIds.set(i < idx ? i : i - 1, id);
+    });
+    orderIdsRef.current = nextIds;
+    setTouchedIdx(new Set());
+    setExpandedIdx(0);
+  }
+
+  // CheckoutModal is only ever mounted with a non-empty cart (the caller
+  // guards that), so this only fires once a removal empties it out — not
+  // this component's call to decide where to go, since it doesn't own
+  // routing.
+  useEffect(() => {
+    if (items.length === 0) onEmpty?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length]);
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
@@ -793,6 +832,15 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                   <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999, background: ready ? "#e8f6ee" : "#fdf2dd", color: ready ? C.good : "#a35d00", flexShrink: 0 }}>
                     {ready ? "Ready" : "Brief needed"}
                   </span>
+                  <button
+                    type="button"
+                    title="Remove this placement"
+                    disabled={placing}
+                    onClick={(e) => { e.stopPropagation(); removeItem(i); }}
+                    style={{ width: 26, height: 26, flexShrink: 0, borderRadius: 7, border: `1px solid ${C.line}`, background: "#fff", color: C.mute, fontSize: 13, lineHeight: 1, cursor: placing ? "default" : "pointer", opacity: placing ? 0.5 : 1 }}
+                  >
+                    ✕
+                  </button>
                   <span style={{ color: C.mute }}>{expandedIdx === i ? "▲" : "▼"}</span>
                 </div>
 
