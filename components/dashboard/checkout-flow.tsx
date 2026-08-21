@@ -914,14 +914,19 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                         const available = priceTypesByIdx[i];
                         // Reflects whichever niche is actually driving the
                         // current price even before the customer touches this
-                        // field — e.g. an item added to cart while searching
-                        // under a "Crypto" filter already carries priceType
-                        // "crypto", so this shows "Crypto / Web3" selected
-                        // instead of a blank placeholder that contradicts the
-                        // price already quoted.
-                        const priceTypeLabel = item.priceType && PREMIUM_PRICE_TYPES.includes(item.priceType)
-                          ? PRICE_TYPE_LABELS[item.priceType]
-                          : null;
+                        // field — most items default to "base" (every offer
+                        // has a general price; that's what's already in the
+                        // Estimated cost total on the right), so this defaults
+                        // to showing "General" selected rather than a blank
+                        // placeholder that would contradict the price already
+                        // being charged. An item added to cart while search
+                        // was filtered to e.g. "Crypto" carries priceType
+                        // "crypto" instead, so this shows "Crypto / Web3"
+                        // selected here for the same reason. "insertion" is
+                        // excluded — that priceType isn't one of this
+                        // dropdown's options (see PREMIUM_PRICE_TYPES above),
+                        // so falls through to the blank placeholder.
+                        const priceTypeLabel = item.priceType === "insertion" ? null : PRICE_TYPE_LABELS[item.priceType ?? "base"];
                         const selected = item.niche || priceTypeLabel || "";
                         const baseRaw = available?.base;
                         return (
