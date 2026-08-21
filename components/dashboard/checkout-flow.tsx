@@ -1077,13 +1077,6 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                       via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
                     </div>
                   </div>
-                  {/* Placement price only — what this specific offer charges
-                  for the slot itself. Content-writing and the managed fee are
-                  cart-wide costs that don't vary per domain the way this
-                  does, so they're broken out as their own lines below instead
-                  of being folded into a per-item total that would then need
-                  its own separate breakdown to explain. */}
-                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>{priceFmt(item.price, currency)}</div>
                 </div>
               ))}
               <div style={{ marginTop: 14, fontSize: 13 }}>
@@ -1109,7 +1102,13 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                   const feeDisplay = totalDisplay - placementDisplay - writingDisplay;
                   return [
                     { l: `${items.length} placements subtotal`, v: `${SYMS[currency]}${placementDisplay.toLocaleString()}` },
-                    { l: "Article writing", v: `${SYMS[currency]}${writingDisplay.toLocaleString()}` },
+                    // Every item chose a free content option (upload/already
+                    // published) — nothing to charge for writing, so this
+                    // reads the same "nothing here" way VAT does rather than
+                    // a "$0" that looks like a stray/broken line.
+                    writingSubtotalCents === 0
+                      ? { l: "Article writing", v: "—", m: true }
+                      : { l: "Article writing", v: `${SYMS[currency]}${writingDisplay.toLocaleString()}` },
                     { l: "Linkpricer fee (15%)", v: `${SYMS[currency]}${feeDisplay.toLocaleString()}` },
                     { l: "VAT (added per invoice)", v: "—", m: true },
                   ];
