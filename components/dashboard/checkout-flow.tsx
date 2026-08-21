@@ -12,6 +12,7 @@ import { storage } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import { C, priceFmt, type Currency, type CartItem } from "@/components/dashboard/results-shared";
+import { RATES, SYMS } from "@/lib/design-v1/format";
 import {
   contentPriceCents,
   DEFAULT_CONTENT_WORD_COUNT,
@@ -1105,19 +1106,25 @@ function buildReceiptText(orders: PlacedOrder[], currency: Currency): string {
   lines.push("LINKPRICER — ORDER RECEIPT");
   lines.push(`Generated ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`);
   lines.push("");
-  let totalUsd = 0;
+  // Sum the already-rounded per-line display amounts, not the raw USD sum
+  // (then rounded once at the end) — priceFmt rounds each converted amount
+  // to a whole currency unit, and summing pre-rounding can land the "Total"
+  // line a dollar or two off from what the individual lines actually show
+  // added up, on a receipt that's supposed to visibly foot.
+  let totalDisplay = 0;
   for (const o of orders) {
     const amountUsd = o.totalAmount ? parseFloat(o.totalAmount) : 0;
-    totalUsd += amountUsd;
+    const amountDisplay = Math.round(amountUsd * RATES[currency]);
+    totalDisplay += amountDisplay;
     lines.push(`Order #${o.id.slice(0, 8)}`);
     lines.push(`  Domain:       ${o.snapshotDomain ?? "—"}`);
     lines.push(`  Marketplace:  ${o.snapshotMarketplaceName ?? "—"}`);
     lines.push(`  Article:      ${o.articleTitle ?? "—"}`);
     lines.push(`  Placed:       ${o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-US", { dateStyle: "medium" }) : "—"}`);
-    lines.push(`  Amount:       ${priceFmt(amountUsd, currency)}`);
+    lines.push(`  Amount:       ${SYMS[currency]}${amountDisplay.toLocaleString()}`);
     lines.push("");
   }
-  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${priceFmt(totalUsd, currency)}`);
+  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${SYMS[currency]}${totalDisplay.toLocaleString()}`);
   lines.push("");
   if (currency !== "USD") {
     lines.push(`Amounts above are shown in ${currency} for reference — invoices are issued in USD.`);
