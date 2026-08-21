@@ -23,6 +23,67 @@ export const C = {
 
 export type Currency = "USD" | "EUR" | "GBP";
 
+// ─── Buy-direct confirmation ─────────────────────────────────────────────────
+// "Buy direct" sends the customer off Linkpricer entirely to purchase on the
+// marketplace's own site, so it gets an explicit are-you-sure rather than
+// silently navigating away mid-comparison (the designer brief calls for the
+// same: "User is redirected to the marketplace to purchase themselves").
+//
+// The confirm control is a real <a>, not an onClick handler, on purpose: the
+// destination is resolved server-side by /api/marketplace-redirect (most are
+// revenue-bearing affiliate links that shouldn't ship to the browser), and a
+// genuine link click can't be swallowed by a popup blocker the way a scripted
+// window.open() after an await would be.
+export function BuyDirectModal({
+  domain,
+  marketplaceName,
+  onClose,
+}: {
+  domain: string;
+  marketplaceName: string;
+  onClose: () => void;
+}) {
+  const label = marketplaceName.startsWith("Vendor: ") ? marketplaceName : prettyMarketplaceName(marketplaceName);
+  const href = `/api/marketplace-redirect?marketplace=${encodeURIComponent(marketplaceName)}&domain=${encodeURIComponent(domain)}`;
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(15,22,32,0.45)", backdropFilter: "blur(3px)", zIndex: 2500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{ background: "#fff", borderRadius: 16, width: 440, maxWidth: "100%", padding: "22px 24px", boxShadow: "0 24px 60px rgba(15,22,32,0.28)" }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>Continue to {label}?</div>
+        <p style={{ margin: "8px 0 0", fontSize: 13, color: C.ink3, lineHeight: 1.5 }}>
+          You&apos;ll be taken to <strong style={{ color: C.ink2 }}>{label}</strong> to buy this placement on{" "}
+          <strong style={{ color: C.ink2, fontFamily: C.mono }}>{domain}</strong> yourself.
+        </p>
+        <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 9, background: C.bg3, fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+          Buying direct means you pay the marketplace and handle the article and
+          publication with them. Linkpricer&apos;s managed service — editors,
+          escrow and pay-after-publication — doesn&apos;t apply to direct purchases.
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button
+            onClick={onClose}
+            style={{ flex: 1, padding: "11px 0", borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", color: C.ink2, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
+          >
+            Cancel
+          </button>
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={onClose}
+            style={{ flex: 1, padding: "11px 0", borderRadius: 9, background: C.accent, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+          >
+            Continue ↗
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function fmtNum(n: number | null): string {
   if (n == null) return "—";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -199,6 +260,11 @@ export function OfferCard({
 }) {
   const [buyHover, setBuyHover] = useState(false);
   const [handleHover, setHandleHover] = useState(false);
+  // "Buy direct" no longer adds to the Linkpricer cart -- it never really
+  // belonged there: a direct purchase happens on the marketplace's own site,
+  // so an in-app checkout for it was quietly collecting briefs and payment
+  // details for an order Linkpricer wasn't going to fulfil.
+  const [buyDirectOpen, setBuyDirectOpen] = useState(false);
   const ourPrice = withFee(offer.minPrice);
 
   const cmp = (() => {
@@ -284,12 +350,19 @@ export function OfferCard({
         </button>
         <button
           onMouseEnter={() => setBuyHover(true)} onMouseLeave={() => setBuyHover(false)}
-          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link, orderType: "direct" })}
+          onClick={() => setBuyDirectOpen(true)}
           style={{ padding: "9px 0", background: buyHover ? C.line2 : "#fff", color: C.ink2, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "background 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
         >
           Buy direct <span style={{ fontSize: 11 }}>↗</span>
         </button>
       </div>
+      {buyDirectOpen && (
+        <BuyDirectModal
+          domain={domainName}
+          marketplaceName={offer.name}
+          onClose={() => setBuyDirectOpen(false)}
+        />
+      )}
     </div>
   );
 }

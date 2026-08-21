@@ -10,7 +10,7 @@ import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/desi
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
-import { RatingBadge, type CartItem } from "@/components/dashboard/results-shared";
+import { BuyDirectModal, RatingBadge, type CartItem } from "@/components/dashboard/results-shared";
 import { CartPopup } from "@/components/dashboard/checkout-flow";
 import { loadCart, persistCart } from "@/lib/cart-storage";
 
@@ -346,6 +346,10 @@ function OfferCard({
 }) {
   const [buyHover, setBuyHover] = useState(false);
   const [handleHover, setHandleHover] = useState(false);
+  // See the identical handling in components/dashboard/results-shared.tsx's
+  // OfferRow -- this page keeps its own copy of the offer card, so the
+  // "Buy direct" behavior has to be fixed in both places or the two drift.
+  const [buyDirectOpen, setBuyDirectOpen] = useState(false);
   const ourPrice = withFee(offer.minPrice);
 
   const cmp = (() => {
@@ -523,9 +527,7 @@ function OfferCard({
         <button
           onMouseEnter={() => setBuyHover(true)}
           onMouseLeave={() => setBuyHover(false)}
-          onClick={() =>
-            onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link, orderType: "direct" })
-          }
+          onClick={() => setBuyDirectOpen(true)}
           style={{
             padding: "9px 0",
             background: buyHover ? C.line2 : "#fff",
@@ -543,9 +545,15 @@ function OfferCard({
           }}
         >
           Buy direct <span style={{ fontSize: 11 }}>↗</span>
-
         </button>
       </div>
+      {buyDirectOpen && (
+        <BuyDirectModal
+          domain={domainName}
+          marketplaceName={offer.name}
+          onClose={() => setBuyDirectOpen(false)}
+        />
+      )}
     </div>
   );
 }

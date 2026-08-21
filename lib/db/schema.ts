@@ -759,6 +759,22 @@ export const marketplaceOffers = pgTable("marketplace_offers", {
 		}),
 ]);
 
+// Canonical per-marketplace registry -- see migration
+// 0005_create_marketplaces.sql for why this exists and why the destination
+// URL is split into affiliate (revenue-bearing) vs homepage (fallback).
+export const marketplaces = pgTable("marketplaces", {
+	id: varchar().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	name: text().notNull(),
+	displayName: text("display_name"),
+	homepageUrl: text("homepage_url").notNull(),
+	affiliateUrl: text("affiliate_url"),
+	enabled: boolean().default(true).notNull(),
+	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow(),
+	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow(),
+}, (table) => [
+	unique("marketplaces_name_unique").on(table.name),
+]);
+
 export const syncState = pgTable("sync_state", {
 	id: varchar().default('mysql_sync').primaryKey().notNull(),
 	lastProcessedMysqlId: integer("last_processed_mysql_id").default(0).notNull(),
