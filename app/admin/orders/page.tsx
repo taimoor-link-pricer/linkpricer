@@ -64,6 +64,11 @@ interface AdminOrder {
   targetUrl: string;
   anchorText: string | null;
   additionalLinks: OrderLinkPair[];
+  requirements: string | null;
+  articleUrl: string | null;
+  uploadedFileName: string | null;
+  originalFileName: string | null;
+  contentTone: string | null;
 }
 
 // Raw shape returned by GET /api/admin/orders.
@@ -84,6 +89,10 @@ type ApiRow = {
     targetUrl: string;
     anchorText: string | null;
     additionalLinks: unknown;
+    requirements: string | null;
+    articleUrl: string | null;
+    uploadedFileName: string | null;
+    originalFileName: string | null;
     snapshotOfferMetadata: unknown;
   };
   clientEmail: string | null;
@@ -134,6 +143,11 @@ function mapApiRow(row: ApiRow): AdminOrder {
     targetUrl: row.order.targetUrl,
     anchorText: row.order.anchorText,
     additionalLinks: parseAdditionalLinks(row.order.additionalLinks),
+    requirements: row.order.requirements,
+    articleUrl: row.order.articleUrl,
+    uploadedFileName: row.order.uploadedFileName,
+    originalFileName: row.order.originalFileName,
+    contentTone: ext.contentTone ?? null,
   };
 }
 
@@ -408,6 +422,10 @@ function DetailsModal({ order, onClose }: { order: AdminOrder; onClose: () => vo
       [`Anchor text #${idx + 2}`, pair.anchorText],
     ]),
     ["Content", order.contentOption],
+    ["Content tone", order.contentTone ?? "—"],
+    ["Brief", order.requirements ?? "—"],
+    ...(order.contentOption === "Existing Article" ? [["Article URL", order.articleUrl ?? "—"] as [string, string]] : []),
+    ...(order.contentOption === "Client Upload" ? [["Uploaded file", order.originalFileName ?? order.uploadedFileName ?? "—"] as [string, string]] : []),
     ["Word count", order.wordCount ? String(order.wordCount) : "—"],
     ["Niche", order.niche],
     ["Total", `${order.currency === "EUR" ? "€" : "$"}${order.total.toLocaleString()}`],
@@ -444,6 +462,19 @@ export default function AdminOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  // load() only ever fetched page 1 (the server hardcodes pageSize=20), so
+  // once matching orders exceeded 20 the rest were completely unreachable
+  // from this page and the footer/KPI counts silently understated the real
+  // totals. page/totalPages/totalOrders wire the API's own pagination
+  // through instead.
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalOrders, setTotalOrders] = useState(0);
+  // Real per-status totals across ALL matching orders (not just the current
+  // page) — the status-filter dropdown and "Open orders" KPI used to derive
+  // this by re-filtering the already status/search-filtered, paginated
+  // `orders` array, which made every non-active status show 0.
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
 
   async function load() {
     setLoading(true);
@@ -452,10 +483,14 @@ export default function AdminOrdersPage() {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.set("status", statusFilter);
       if (searchQuery) params.set("search", searchQuery);
+      if (page > 1) params.set("page", String(page));
       const res = await fetch(`/api/admin/orders?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load orders");
       setOrders((data.orders as ApiRow[]).map(mapApiRow));
+      setTotalPages(data.totalPages ?? 1);
+      setTotalOrders(data.total ?? 0);
+      setStatusCounts(data.statusCounts ?? {});
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load orders");
     } finally {
@@ -463,12 +498,19 @@ export default function AdminOrdersPage() {
     }
   }
 
+  // Changing the filter/search invalidates whatever page you were on — jump
+  // back to page 1 rather than requesting e.g. page 3 of a newly-narrowed
+  // result set that might not have one.
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, searchQuery]);
+
   useEffect(() => {
     if (authLoading) return;
     const t = setTimeout(load, 200); // debounce search
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, statusFilter, searchQuery]);
+  }, [authLoading, statusFilter, searchQuery, page]);
 
   if (authLoading) return <LoadingSpinner />;
 
@@ -484,6 +526,15 @@ export default function AdminOrdersPage() {
       const raw = window.prompt("New proposed price (numeric):");
       if (!raw) return;
       pendingPriceAmount = parseFloat(raw);
+      // Non-numeric input becomes NaN here, and JSON.stringify silently
+      // turns NaN into null — the server's z.number().positive() then
+      // rejects it with a generic "Validation failed" that gives no hint
+      // what was actually wrong. Catch it here instead, with a message that
+      // names the actual problem.
+      if (!Number.isFinite(pendingPriceAmount) || pendingPriceAmount <= 0) {
+        alert("Enter a valid positive number for the new price.");
+        return;
+      }
     }
     try {
       const res = await fetch(`/api/admin/orders/${id}/status`, {
@@ -546,11 +597,21 @@ export default function AdminOrdersPage() {
     }
   }
 
-  const counts: Record<string, number> = { all: orders.length };
-  for (const key of ORDER_STATUSES) counts[key] = orders.filter(o => o.status === key).length;
+  // statusCounts (unlike totalOrders) ignores the active status filter — it
+  // covers every status matching the current search, so "all" is its sum
+  // rather than totalOrders, which is itself scoped to whichever status is
+  // currently selected.
+  const counts: Record<string, number> = {
+    all: Object.values(statusCounts).reduce((s, n) => s + n, 0),
+  };
+  for (const key of ORDER_STATUSES) counts[key] = statusCounts[key] ?? 0;
+
+  const openOrdersCount = ORDER_STATUSES
+    .filter(k => !["published", "complete", "cancelled"].includes(k))
+    .reduce((s, k) => s + (statusCounts[k] ?? 0), 0);
 
   const kpis = [
-    { label: "Open orders", value: orders.filter(o => !["published", "complete", "cancelled"].includes(o.status)).length.toString(), detail: `${orders.filter(o => o.status === "waiting_for_publication").length} awaiting publication`, color: "#0052cc" },
+    { label: "Open orders", value: openOrdersCount.toString(), detail: `${statusCounts["waiting_for_publication"] ?? 0} awaiting publication`, color: "#0052cc" },
     { label: "Revenue (loaded page)", value: "$" + orders.reduce((s, o) => s + o.total, 0).toLocaleString(), detail: `${orders.length} orders`, color: "#166534" },
     { label: "Live monitored links", value: orders.filter(o => o.monitor === "active").length.toString(), detail: `${orders.filter(o => o.monitor === "missing").length} missing`, color: "#a35d00" },
     { label: "Open reports", value: orders.reduce((s, o) => s + o.openReportCount, 0).toString(), detail: "Client-submitted issues", color: "#dc2626" },
@@ -678,8 +739,29 @@ export default function AdminOrdersPage() {
           <div style={{
             padding: "12px 16px", borderTop: "1px solid #f0f2f5",
             fontSize: 12, color: "#9ca3af",
+            display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10,
           }}>
-            Showing {orders.length} order{orders.length !== 1 ? "s" : ""}
+            <span>Showing {orders.length} of {totalOrders} order{totalOrders !== 1 ? "s" : ""} · page {page} of {totalPages}</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                style={{
+                  padding: "5px 12px", borderRadius: 7, border: "1px solid #e8eaed",
+                  background: "#fff", color: page <= 1 ? "#c4c9d1" : "#374151",
+                  fontSize: 12, fontWeight: 600, cursor: page <= 1 ? "default" : "pointer",
+                }}
+              >Prev</button>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                style={{
+                  padding: "5px 12px", borderRadius: 7, border: "1px solid #e8eaed",
+                  background: "#fff", color: page >= totalPages ? "#c4c9d1" : "#374151",
+                  fontSize: 12, fontWeight: 600, cursor: page >= totalPages ? "default" : "pointer",
+                }}
+              >Next</button>
+            </div>
           </div>
         </div>
 

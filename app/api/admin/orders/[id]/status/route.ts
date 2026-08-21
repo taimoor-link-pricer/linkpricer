@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { requireAdminSession } from "@/lib/admin-auth";
 import { ORDER_STATUSES } from "@/lib/orders/types";
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
-import { withOrderMetaExt } from "@/lib/orders/metadata";
+import { getOrderMetaExt, withOrderMetaExt } from "@/lib/orders/metadata";
 import { upsertLinkMonitor } from "@/lib/orders/monitor";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +53,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       patch.snapshotOfferMetadata = withOrderMetaExt(order.snapshotOfferMetadata, {
         pendingPriceAmount: data.pendingPriceAmount,
         pendingPriceReason: data.pendingPriceReason ?? null,
+      });
+    } else if (getOrderMetaExt(order.snapshotOfferMetadata).pendingPriceAmount != null) {
+      // Moving to any other status — including an admin picking a status
+      // directly rather than going through the client's own
+      // accept_price_increase action — leaves a stale proposed price
+      // sitting in ext forever otherwise, and dashboard/orders/page.tsx
+      // renders `order.newPrice ?? order.price` unconditionally, so the
+      // customer would keep seeing that stale/rejected amount as their
+      // order total indefinitely even though totalAmount never changed.
+      patch.snapshotOfferMetadata = withOrderMetaExt(order.snapshotOfferMetadata, {
+        pendingPriceAmount: null,
+        pendingPriceReason: null,
       });
     }
 

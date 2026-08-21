@@ -170,6 +170,20 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // computeOrderPricing falls back to the base price whenever
+      // priceByType[priceType] is null (offer.priceByType.base is used as
+      // its own `?? ` fallback) — fine as a pricing-math default, but not
+      // fine here: a customer who explicitly selected a restricted-niche
+      // price type (gambling/adult/cbd/...) that this offer never set would
+      // otherwise be silently charged the ordinary base rate instead of
+      // being told the offer isn't available for that niche.
+      if (item.priceType !== "base" && offer.priceByType[item.priceType] == null) {
+        return NextResponse.json(
+          { error: "Price not available", details: [{ index: i, domain: item.domain, reason: `This offer does not have a price set for the "${item.priceType}" content type.` }] },
+          { status: 400 }
+        );
+      }
+
       const pricing = computeOrderPricing({
         offer,
         priceType: item.priceType,
@@ -252,8 +266,15 @@ export async function POST(req: NextRequest) {
         // is only possible when item.id was actually supplied (the DB default
         // gen_random_uuid() used otherwise won't collide), so item.id is real here.
         const [existing] = item.id ? await db.select().from(orders).where(eq(orders.id, item.id)).limit(1) : [];
-        if (!existing) {
-          return NextResponse.json({ error: "Failed to create order" }, { status: 500 });
+        // item.id is client-supplied, so a conflict only proves *some* order
+        // already has this id — not that it's this requester's own retried
+        // order. Without an ownership check here, any authenticated user
+        // could submit a UUID matching another user's/company's order and
+        // get that order's full row (email, pricing, targetUrl, offer
+        // metadata) handed back to them in the response.
+        const ownsExisting = !!existing && (existing.userId === user.uid || (!!user.companyId && existing.companyId === user.companyId));
+        if (!ownsExisting) {
+          return NextResponse.json({ error: "Failed to create order" }, { status: 409 });
         }
         order = existing;
         createdOrders.push(order);

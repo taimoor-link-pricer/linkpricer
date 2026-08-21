@@ -102,14 +102,31 @@ export async function resolveOffer(params: {
           eq(supplierOffers.status, "active"),
           eq(supplierOffers.isActive, true)
         )
-      );
+      )
+      .orderBy(supplierOffers.id);
 
-    const match = rows.find((r) => {
+    // The client only ever sends a free-text "Vendor: <label>" display
+    // string, not the actual supplierOffers.id, so this label match is the
+    // only way to identify which row the customer picked. If exactly one
+    // active offer on this domain matches the label that's unambiguous, but
+    // if two different vendors happen to share the same effective label
+    // (same vendorName, or same first+last name), picking whichever row
+    // Postgres/`.find()` returns first would silently attribute the order
+    // (and its price) to the wrong vendor with no query ordering guarantee
+    // to fall back on. Failing loudly here is safer than a silent
+    // misattribution — this is a data-hygiene edge case, not a normal path.
+    const matches = rows.filter((r) => {
       const label = r.vendorName || [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email || "Vendor";
       return `Vendor: ${label}` === params.offerName;
     });
 
-    if (!match) throw new OfferResolutionError(`Vendor offer not found for ${domain}`);
+    if (matches.length === 0) throw new OfferResolutionError(`Vendor offer not found for ${domain}`);
+    if (matches.length > 1) {
+      throw new OfferResolutionError(
+        `Multiple active vendor offers for ${domain} share the label "${params.offerName}" — cannot determine which one was selected.`
+      );
+    }
+    const match = matches[0];
 
     let domainRow: { id: string; domain: string } | null = null;
     if (match.offer.domainId) {

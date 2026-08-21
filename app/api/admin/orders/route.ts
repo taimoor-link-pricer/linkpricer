@@ -65,12 +65,41 @@ export async function GET(req: NextRequest) {
       .leftJoin(users, eq(users.id, orders.userId))
       .where(where);
 
+    // Deliberately a SEPARATE condition set from `where` above: the
+    // status-filter dropdown's per-status counts need to ignore the
+    // currently-active status filter (otherwise every non-selected status
+    // trivially shows 0) while still respecting an active search, so counts
+    // stay meaningful together with whatever the admin typed.
+    const countConditions = [];
+    if (search) {
+      countConditions.push(
+        or(
+          ilike(users.email, `%${search}%`),
+          ilike(orders.snapshotDomain, `%${search}%`),
+          ilike(orders.articleTitle, `%${search}%`),
+          eq(orders.id, search)
+        )!
+      );
+    }
+    const countWhere = countConditions.length > 0 ? and(...countConditions) : undefined;
+
+    const statusCountRows = await db
+      .select({ status: orders.status, count: sql<number>`count(*)::int` })
+      .from(orders)
+      .leftJoin(users, eq(users.id, orders.userId))
+      .where(countWhere)
+      .groupBy(orders.status);
+
+    const statusCounts: Record<string, number> = {};
+    for (const row of statusCountRows) statusCounts[row.status] = row.count;
+
     return NextResponse.json({
       orders: rows,
       total,
       page,
       pageSize,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      statusCounts,
     });
   } catch (err) {
     console.error("[/api/admin/orders GET]", err);

@@ -70,6 +70,7 @@ interface ApiOrder {
   additionalLinks: unknown;
   wordCount: number | null;
   contentOption: string;
+  orderType: string;
   requirements: string | null;
   articleTitle: string | null;
   selectedPrice: string;
@@ -167,6 +168,15 @@ function DetailsCard({ order }: { order: ApiOrder }) {
   const contentPrice = parseFloat(order.contentPrice ?? "0");
   const total = parseFloat(order.totalAmount);
   const fee = Math.max(0, total - gpPrice - contentPrice);
+  // accept_price_increase (app/api/orders/[id]/route.ts) intentionally
+  // leaves selectedPrice unchanged and only moves totalAmount, so once a
+  // price increase has been accepted this derived "fee" silently absorbs
+  // the marketplace's price bump too, not just Linkpricer's actual 15%. No
+  // separate fee column exists to disambiguate the two after the fact, so
+  // relabel honestly instead of asserting a specific number that may not be
+  // (just) the management fee.
+  const expectedFee = order.orderType === "managed" ? Math.round((gpPrice + contentPrice) * 0.15 * 100) / 100 : 0;
+  const feeLabel = Math.abs(fee - expectedFee) > 0.01 ? "Fees & adjustments" : "Management fee";
   const currencySign = currencySymbol(order.snapshotCurrency);
 
   return (
@@ -220,7 +230,7 @@ function DetailsCard({ order }: { order: ApiOrder }) {
 
       <KV label="Guest post" value={`${currencySign}${gpPrice.toFixed(2)}`} mono />
       <KV label="Content writing" value={`${currencySign}${contentPrice.toFixed(2)}`} mono />
-      <KV label="Management fee" value={`${currencySign}${fee.toFixed(2)}`} mono />
+      <KV label={feeLabel} value={`${currencySign}${fee.toFixed(2)}`} mono />
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "8px 0", marginTop: 2 }}>
         <span style={{ fontSize: 13, color: "#111827", fontWeight: 800 }}>Total</span>
         <span style={{ fontSize: 14, color: "#111827", fontWeight: 800, fontFamily: "monospace" }}>
@@ -274,6 +284,16 @@ function ActionPanel({ status, onAction, acting }: { status: OrderStatus; onActi
     return (
       <div style={{ marginBottom: 16 }}>
         <button disabled={acting} onClick={() => onAction("cancel")} style={btn("transparent", "#8b0000", "1px solid #fecaca")}>Cancel order</button>
+      </div>
+    );
+  }
+  if (status === "payment_pending") {
+    return (
+      <div style={{ padding: 16, background: "#fce8c6", border: "1px solid #fde68a", borderRadius: 8, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#8b5900", marginBottom: 6 }}>Payment required to proceed</div>
+        <div style={{ fontSize: 12.5, color: "#6b4423", lineHeight: 1.5 }}>
+          We&apos;ll follow up on payment directly — use the conversation panel if you have questions or want to arrange it sooner.
+        </div>
       </div>
     );
   }
@@ -478,7 +498,7 @@ function SystemEvent({ entry }: { entry: Extract<TimelineEntry, { kind: "status"
   );
 }
 
-function Chat({ orderId, domain, title }: { orderId: string; domain: string; title: string }) {
+function Chat({ orderId, domain, title, statusRefreshKey }: { orderId: string; domain: string; title: string; statusRefreshKey: number }) {
   // Was Postgres REST (poll-on-mount, /api/orders/[id]/messages) — completely
   // disconnected from the admin chat dock (components/admin/chat-dock.tsx),
   // which has always lived in Firestore (orders/{id}/messages, addDoc +
@@ -505,8 +525,9 @@ function Chat({ orderId, domain, title }: { orderId: string; domain: string; tit
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
 
-  // Status history is unrelated to the chat bug — still a plain fetch off
-  // the order record, untouched.
+  // Re-runs on statusRefreshKey too, not just orderId — the parent bumps it
+  // after every successful action (accept/approve/decline/cancel) so a newly
+  // recorded status-changed event shows up here without a full page reload.
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/orders/${orderId}`)
@@ -520,7 +541,7 @@ function Chat({ orderId, domain, title }: { orderId: string; domain: string; tit
       })
       .catch((err) => console.error("[Chat] status history load", err));
     return () => { cancelled = true; };
-  }, [orderId]);
+  }, [orderId, statusRefreshKey]);
 
   // Real-time messages: same chat-init + onSnapshot pattern as
   // ConversationThread in chat-dock.tsx. chat-init (already existed, already
@@ -705,6 +726,12 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  // Bumped after every successful action so Chat's status-history effect
+  // (keyed only on orderId, which never changes) re-fetches — PATCH's own
+  // response is just { order }, no statusHistory, so the new status-changed
+  // event wouldn't otherwise show up in the conversation thread until a full
+  // page reload.
+  const [statusRefreshKey, setStatusRefreshKey] = useState(0);
 
   async function load() {
     setLoading(true);
@@ -737,6 +764,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to update order");
       setOrder(data.order as ApiOrder);
+      setStatusRefreshKey((k) => k + 1);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to update order");
     } finally {
@@ -797,7 +825,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <DetailsCard order={order} />
           </div>
 
-          <Chat orderId={order.id} domain={order.snapshotDomain ?? "—"} title={order.articleTitle ?? "Custom Article"} />
+          <Chat orderId={order.id} domain={order.snapshotDomain ?? "—"} title={order.articleTitle ?? "Custom Article"} statusRefreshKey={statusRefreshKey} />
         </div>
 
       </div>

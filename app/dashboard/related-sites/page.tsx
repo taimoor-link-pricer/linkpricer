@@ -1291,6 +1291,7 @@ export default function RelatedSitesPage() {
       {checkoutOpen && (
         <CheckoutModal
           cartItems={cartItems}
+          currency="USD"
           onClose={() => setCheckoutOpen(false)}
           onPlaced={(orders) => {
             setCheckoutOpen(false);
@@ -1302,7 +1303,7 @@ export default function RelatedSitesPage() {
       )}
 
       {orderPlaced && (
-        <OrderPlacedModal orders={placedOrders} onClose={() => setOrderPlaced(false)} />
+        <OrderPlacedModal orders={placedOrders} currency="USD" onClose={() => setOrderPlaced(false)} />
       )}
     </div>
   );

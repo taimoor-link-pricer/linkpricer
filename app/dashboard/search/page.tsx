@@ -1854,6 +1854,7 @@ function SearchPageInner() {
       {checkoutOpen && (
         <CheckoutModal
           cartItems={cartItems}
+          currency={currency}
           onClose={() => setCheckoutOpen(false)}
           onPlaced={(orders) => {
             setCheckoutOpen(false);
@@ -1865,7 +1866,7 @@ function SearchPageInner() {
       )}
 
       {orderPlaced && (
-        <OrderPlacedModal orders={placedOrders} onClose={() => setOrderPlaced(false)} />
+        <OrderPlacedModal orders={placedOrders} currency={currency} onClose={() => setOrderPlaced(false)} />
       )}
 
       <div className="search-root" style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>

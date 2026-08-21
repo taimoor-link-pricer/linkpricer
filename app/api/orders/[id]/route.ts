@@ -76,7 +76,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (!ext.pendingPriceAmount) {
         return NextResponse.json({ error: "No pending price increase on this order" }, { status: 409 });
       }
-      patch.selectedPrice = String(ext.pendingPriceAmount);
+      // pendingPriceAmount is the new grand total (what the client saw and
+      // accepted, dashboard/orders/page.tsx's "Amount" column) — NOT a new
+      // base price, so only totalAmount moves. selectedPrice stays the
+      // original guest-post base price; leaving it alone keeps the
+      // DetailsCard fee breakdown (total - selectedPrice - contentPrice) and
+      // the admin CSV export's selectedPrice column meaningful instead of
+      // both collapsing to the same number.
       patch.totalAmount = String(ext.pendingPriceAmount);
       patch.snapshotOfferMetadata = withOrderMetaExt(order.snapshotOfferMetadata, {
         pendingPriceAmount: null,
@@ -84,8 +90,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       });
     }
     if (parsed.data.action === "cancel" || parsed.data.action === "decline") {
+      // "decline" is also the transition off price_increase_requested when
+      // the client rejects the proposal rather than accepting it — clear the
+      // same pendingPriceAmount/pendingPriceReason accept_price_increase
+      // clears above, so a declined proposal doesn't linger and keep
+      // rendering as the order's displayed "Amount" (dashboard/orders/
+      // page.tsx: order.newPrice ?? order.price) after the order is cancelled.
       patch.snapshotOfferMetadata = withOrderMetaExt(patch.snapshotOfferMetadata ?? order.snapshotOfferMetadata, {
         cancelledReason: `Cancelled by client (${parsed.data.action})`,
+        pendingPriceAmount: null,
+        pendingPriceReason: null,
       });
     }
 

@@ -12,6 +12,7 @@
 // Stripe/company-details gating in front of "Pay Now" (he was explicit that
 // sequencing there is still undecided — "you figure out what's best").
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { collection, addDoc, onSnapshot, orderBy, query, serverTimestamp, Timestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
@@ -418,7 +419,7 @@ function OrderCard({
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Marketplace</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{prettyMarketplaceName(order.marketplace)}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Status</div><div style={{ display: "inline-block", padding: "4px 12px", borderRadius: 6, background: config.bg, color: config.color, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{config.label}</div></div>
         <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Words</div><div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{order.wordCount.toLocaleString()}</div></div>
-        <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Amount</div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtPrice(order.newPrice ?? order.price, order.currency)}</div></div>
+        <div><div style={{ fontSize: 11, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 4 }}>Amount</div><div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtPrice(order.status === "price_increase_requested" ? (order.newPrice ?? order.price) : order.price, order.currency)}</div></div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }} {...tourAttr("tools")}>
           <button onClick={(e) => { e.stopPropagation(); setChatOpen(true); }} title={unread ? "New message" : "Chat"} style={{ position: "relative", width: 36, height: 36, borderRadius: 8, border: `1px solid ${unread ? C.accent : C.line}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: unread ? C.accent : C.ink3 }}>
             <Icon name="chat" size={18} />
@@ -440,6 +441,11 @@ function OrderCard({
           {actionError && (
             <div style={{ marginBottom: 16, padding: 12, background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 8, color: "#8b0000", fontSize: 13, fontWeight: 600 }}>{actionError}</div>
           )}
+          <div style={{ marginBottom: 20, textAlign: "right" as const }}>
+            <Link href={`/dashboard/orders/${order.id}`} onClick={(e) => e.stopPropagation()} style={{ fontSize: 12, fontWeight: 600, color: C.accent, textDecoration: "none" }}>
+              Full order timeline{order.status === "complete" ? " & rate this order" : ""} ↗
+            </Link>
+          </div>
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.mute, textTransform: "uppercase", marginBottom: 8 }}>Target URL</div>
             <div style={{ fontSize: 12, color: C.accent, fontFamily: "monospace", wordBreak: "break-all" as const }}>{order.targetUrl}</div>
@@ -509,8 +515,10 @@ function OrderCard({
 
           {order.status === "payment_pending" && (
             <div style={{ padding: 16, background: "#fce8c6", border: "1px solid #fde68a", borderRadius: 8, marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#8b5900", marginBottom: 12 }}>Payment required to proceed</div>
-              <button style={{ padding: "10px 16px", borderRadius: 8, background: "#006621", color: "#fff", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>💳 Pay Now</button>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#8b5900", marginBottom: 6 }}>Payment required to proceed</div>
+              <div style={{ fontSize: 12.5, color: "#6b4423", lineHeight: 1.5 }}>
+                We&apos;ll follow up on payment directly — use the chat above if you have questions or want to arrange it sooner.
+              </div>
             </div>
           )}
 
@@ -546,6 +554,20 @@ function OrderCard({
                 </div>
                 <button onClick={handleDecline} disabled={acting} style={{ padding: "8px 14px", borderRadius: 8, background: "transparent", color: "#8b0000", border: "1px solid #fecaca", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 12 }}>Cancel order</button>
               </div>
+            </div>
+          )}
+
+          {/* CLIENT_ACTION_TRANSITIONS (lib/orders/types.ts) allows "decline"
+          from waiting_for_publication/approved too, same as
+          confirming_with_marketplace above — this block was missing, so a
+          customer whose order reached either status had no way to cancel it
+          from this page. */}
+          {(order.status === "waiting_for_publication" || order.status === "approved") && (
+            <div style={{ padding: 16, background: C.bg3, border: `1px solid ${C.line}`, borderRadius: 8, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontSize: 13, color: C.ink2 }}>
+                {order.status === "waiting_for_publication" ? "Waiting for the marketplace to publish this placement." : "Approved — moving to publication."}
+              </div>
+              <button onClick={handleDecline} disabled={acting} style={{ padding: "8px 14px", borderRadius: 8, background: "transparent", color: "#8b0000", border: "1px solid #fecaca", cursor: acting ? "default" : "pointer", opacity: acting ? 0.6 : 1, fontWeight: 600, fontSize: 12 }}>Cancel order</button>
             </div>
           )}
         </div>

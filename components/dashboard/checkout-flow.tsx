@@ -16,7 +16,6 @@ import {
   contentPriceCents,
   DEFAULT_CONTENT_WORD_COUNT,
   MAX_ADDITIONAL_LINKS,
-  currencySymbol,
   type OrderLinkPair,
 } from "@/lib/orders/types";
 
@@ -34,10 +33,6 @@ function cartCentsTotals(items: { price: number; contentPrice?: number; orderTyp
     if (i.orderType === "managed") feeCents += Math.round(itemSubtotalCents * 0.15);
   }
   return { subtotalCents, feeCents, totalCents: subtotalCents + feeCents };
-}
-
-function fmtCents(cents: number): string {
-  return (cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ─── CartPopup ────────────────────────────────────────────────────────────────
@@ -240,6 +235,11 @@ function isLikelyUrl(value: string): boolean {
   }
 }
 
+function urlFieldError(label: string, value: string, required: boolean): string | null {
+  if (!value.trim()) return required ? `${label} is required.` : null;
+  return isLikelyUrl(value) ? null : `${label} ${URL_ERROR_MSG}`;
+}
+
 // Single source of truth for "is this placement ready to submit," "why
 // not," and which specific field is at fault — used by the header's
 // readyCount, each card's status badge, the inline per-field errors below,
@@ -250,38 +250,87 @@ function isLikelyUrl(value: string): boolean {
 // so a freshly-switched-to-upload item with no file could show a false
 // "✓ Ready" while a fully-valid "url"-mode item showed "Brief needed"
 // forever).
-function validateBriefItem(item: BriefItem): {
+type BriefItemValidation = {
   ready: boolean;
+  titleError: string | null;
   targetUrlError: string | null;
-  additionalLinkErrors: (string | null)[];
+  anchorTextError: string | null;
+  additionalTargetUrlErrors: (string | null)[];
+  additionalAnchorTextErrors: (string | null)[];
   articleUrlError: string | null;
-} {
-  const targetUrlError = item.targetUrl && !isLikelyUrl(item.targetUrl) ? URL_ERROR_MSG : null;
-  const additionalLinkErrors = item.additionalLinks.map((pair) =>
-    pair.targetUrl && !isLikelyUrl(pair.targetUrl) ? URL_ERROR_MSG : null
-  );
-  const articleUrlError = item.contentMode === "url" && item.articleUrl && !isLikelyUrl(item.articleUrl) ? URL_ERROR_MSG : null;
+  fileError: string | null;
+  // First problem in visual field order — what the summary banner names so it
+  // points at the same field the user is about to be scrolled to.
+  firstError: string | null;
+};
 
-  let ready = !!item.targetUrl && !!item.anchorText && !targetUrlError;
-  // A half-filled extra pair (one field typed, the other blank) blocks
-  // "ready" the same way the primary pair would — a customer who started
-  // typing a second link almost certainly meant to finish it, not have it
-  // silently dropped at submit time (see the submit-time filter below).
-  for (const pair of item.additionalLinks) {
-    const hasAny = !!pair.targetUrl || !!pair.anchorText;
-    const hasBoth = !!pair.targetUrl && !!pair.anchorText;
-    if (hasAny && !hasBoth) ready = false;
-  }
-  if (additionalLinkErrors.some(Boolean)) ready = false;
-  if (item.contentMode === "linkpricer") ready = ready && !!item.title && !!item.brief;
-  else if (item.contentMode === "url") ready = ready && !!item.articleUrl && !articleUrlError;
-  else ready = ready && !!item.selectedFile;
+function validateBriefItem(item: BriefItem): BriefItemValidation {
+  const titleError = item.title.trim() ? null : "Article title is required.";
+  const targetUrlError = urlFieldError("Target URL", item.targetUrl, true);
+  const anchorTextError = item.anchorText.trim() ? null : "Anchor text is required.";
 
-  return { ready, targetUrlError, additionalLinkErrors, articleUrlError };
+  // An extra pair left completely untouched is dropped at submit time rather
+  // than flagged — but once either half is typed the customer meant to finish
+  // it, so both halves become required for that pair.
+  const additionalTargetUrlErrors = item.additionalLinks.map((pair) => {
+    const started = !!pair.targetUrl.trim() || !!pair.anchorText.trim();
+    return started ? urlFieldError("Target URL", pair.targetUrl, true) : null;
+  });
+  const additionalAnchorTextErrors = item.additionalLinks.map((pair) => {
+    const started = !!pair.targetUrl.trim() || !!pair.anchorText.trim();
+    return started && !pair.anchorText.trim() ? "Anchor text is required." : null;
+  });
+
+  // Only the field belonging to the selected content mode is required — the
+  // other two modes' fields aren't rendered at all, so validating them would
+  // block submit on something the customer can't even see.
+  const articleUrlError = item.contentMode === "url"
+    ? urlFieldError("Article URL", item.articleUrl, true)
+    : null;
+  const fileError = item.contentMode === "upload"
+    ? (item.uploadError ?? (item.selectedFile ? null : "An article file is required."))
+    : null;
+
+  const firstError = [
+    titleError,
+    targetUrlError,
+    anchorTextError,
+    ...additionalTargetUrlErrors,
+    ...additionalAnchorTextErrors,
+    articleUrlError,
+    fileError,
+  ].find((e): e is string => !!e) ?? null;
+
+  return {
+    ready: !firstError,
+    titleError,
+    targetUrlError,
+    anchorTextError,
+    additionalTargetUrlErrors,
+    additionalAnchorTextErrors,
+    articleUrlError,
+    fileError,
+    firstError,
+  };
 }
 
 function isBriefItemReady(item: BriefItem): boolean {
   return validateBriefItem(item).ready;
+}
+
+const labelStyle: React.CSSProperties = {
+  display: "block", fontSize: 11, fontWeight: 700, color: C.ink2,
+  letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase",
+};
+
+function FieldLabel({ children, required, hint }: { children: React.ReactNode; required?: boolean; hint?: string }) {
+  return (
+    <label style={labelStyle}>
+      {children}
+      {required && <span style={{ color: "#dc2626", marginLeft: 3 }} aria-hidden="true">*</span>}
+      {hint && <span style={{ marginLeft: 5, color: C.mute, fontWeight: 600, textTransform: "none" }}>{hint}</span>}
+    </label>
+  );
 }
 
 // Defense in depth: if a validation issue somehow still reaches the server
@@ -290,7 +339,10 @@ function isBriefItemReady(item: BriefItem): boolean {
 // failed" banner that used to show regardless of what was actually wrong.
 function describeOrderApiError(data: { error?: string; details?: unknown }, items: BriefItem[]): string {
   if (Array.isArray(data.details) && data.details.length > 0) {
-    const issue = data.details[0] as { path?: (string | number)[]; message?: string };
+    const issue = data.details[0] as {
+      path?: (string | number)[]; message?: string;
+      index?: number; domain?: string; reason?: string;
+    };
     const path = issue.path;
     if (Array.isArray(path) && path[0] === "items" && typeof path[1] === "number") {
       const idx = path[1];
@@ -302,6 +354,16 @@ function describeOrderApiError(data: { error?: string; details?: unknown }, item
         field === "articleUrl" ? "article URL" :
         String(field);
       return `Placement ${idx + 1} (${domain}): ${fieldLabel} — ${issue.message ?? "invalid value"}.`;
+    }
+    // The order API's own manually-thrown validation failures (offer not
+    // found, price not available/invalid, missing wordCount/articleUrl/
+    // uploadedFileName) use a different {index, domain, reason} shape than
+    // zod's {path, message} — without this branch they fell straight
+    // through to the generic top-level error below, silently dropping which
+    // placement failed and why.
+    if (typeof issue.index === "number" && typeof issue.reason === "string") {
+      const domain = issue.domain ?? items[issue.index]?.domain ?? `#${issue.index + 1}`;
+      return `Placement ${issue.index + 1} (${domain}): ${issue.reason}`;
     }
   }
   return data.error ?? "Failed to place order";
@@ -328,8 +390,9 @@ export type PlacedOrder = {
   createdAt: string | null;
 };
 
-export function CheckoutModal({ cartItems, onClose, onPlaced }: {
+export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
   cartItems: CartItem[];
+  currency: Currency;
   onClose: () => void; onPlaced: (orders: PlacedOrder[]) => void;
 }) {
   const { profile } = useAuthContext();
@@ -357,6 +420,9 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
   const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
   const readyCount = items.filter(isBriefItemReady).length;
+  // Server/upload failures only. The "you left a field blank" banner is
+  // derived below instead of stored, so it can't go stale — a stored message
+  // kept naming the first bad field even after that field was fixed.
   const [placeError, setPlaceError] = useState<string | null>(null);
   // Set once the user has actually tried to submit with something missing —
   // gates the not-ready cards' red-flagged styling below so a freshly opened
@@ -364,6 +430,24 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
   // already full of errors.
   const [attemptedSubmit, setAttemptedSubmit] = useState(false);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Recomputed every render from the live field values, so it always names a
+  // field that is actually still wrong — and disappears on its own once the
+  // last one is filled, instead of waiting for another submit attempt.
+  const notReadyIdx = items.map((it, i) => (isBriefItemReady(it) ? -1 : i)).filter(i => i !== -1);
+  const validationBanner = attemptedSubmit && notReadyIdx.length > 0
+    ? (() => {
+        const first = notReadyIdx[0];
+        const reason = validateBriefItem(items[first]).firstError ?? "is missing a required field.";
+        const where = `Placement ${first + 1} (${items[first].domain}): ${reason}`;
+        return notReadyIdx.length === 1
+          ? where
+          : `${notReadyIdx.length} placements need attention, starting with ${where}`;
+      })()
+    : null;
+  // A server/upload failure isn't self-resolving, so it outranks the derived
+  // banner until the next submit clears it.
+  const visiblePlaceError = placeError ?? validationBanner;
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
@@ -414,20 +498,13 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
   async function handlePlace() {
     if (placingRef.current) return;
     setPlaceError(null);
-    const notReadyIdx = items.map((it, i) => (isBriefItemReady(it) ? -1 : i)).filter((i) => i !== -1);
     if (notReadyIdx.length > 0) {
+      // The banner text itself is derived above — this only has to reveal it
+      // and move the user to the first placement that needs work.
       setAttemptedSubmit(true);
       const first = notReadyIdx[0];
       setExpandedIdx(first);
       itemRefs.current[first]?.scrollIntoView({ behavior: "smooth", block: "center" });
-      const domain = items[first].domain;
-      const v = validateBriefItem(items[first]);
-      const reason = v.targetUrlError ?? v.articleUrlError ?? v.additionalLinkErrors.find((e): e is string => !!e) ?? "is missing a required field";
-      setPlaceError(
-        notReadyIdx.length === 1
-          ? `Placement ${first + 1} (${domain}): ${reason}`
-          : `${notReadyIdx.length} placements need attention, starting with #${first + 1} (${domain}): ${reason}`
-      );
       return;
     }
     if (!profile) {
@@ -488,10 +565,13 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
             // pair is completed.
             additionalLinks: i.additionalLinks.filter(p => p.targetUrl.trim() && p.anchorText.trim()),
             contentNiche: i.niche || undefined,
-            contentTone: i.tone || undefined,
+            // Tone is only collected for the mode that actually uses it, so
+            // it's only sent for that mode — otherwise we'd persist a default
+            // the customer never saw or chose.
+            contentTone: i.contentMode === "linkpricer" ? i.tone || undefined : undefined,
             contentOption: i.contentMode === "linkpricer" ? "provided" : i.contentMode === "upload" ? "uploaded" : "url",
             wordCount: i.contentMode === "linkpricer" ? DEFAULT_CONTENT_WORD_COUNT : undefined,
-            requirements: i.contentMode === "linkpricer" ? i.brief : undefined,
+            requirements: i.contentMode === "linkpricer" ? i.brief || undefined : undefined,
             articleUrl: i.contentMode === "url" ? i.articleUrl : undefined,
             uploadedFileName: uploadResults.get(idx)?.uploadedFileName,
             originalFileName: uploadResults.get(idx)?.originalFileName,
@@ -521,6 +601,32 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(15,22,32,0.55)", backdropFilter: "blur(4px)", overflowY: "auto" }}>
       <style>{`
+        /* The brief fields sit three grids deep (page 2-col → brief 2-col →
+           target-url/anchor pair), and the summary rail next to them is a
+           fixed 400px. So how much room a field actually gets depends on the
+           briefs column's width, not the viewport — at ~850px wide the pair
+           fields were collapsing to ~155px and the labels wrapped to four
+           lines. Container queries let each grid respond to the space it
+           really has; the thresholds are set below the desktop width so the
+           full-size layout is unchanged. */
+        /* !important throughout: these grids set gridTemplateColumns inline,
+           and an inline style beats any stylesheet rule without it. */
+        .checkout-briefs { container-type: inline-size; }
+        /* 740px is where the two-column brief still leaves the nested
+           url/anchor pair ~170px each — about what it gets on a full-width
+           desktop. Below that the pair degrades fast (147px at a 1150px
+           viewport, 69px at 850px), so the brief goes single-column and hands
+           the pair the whole width instead. */
+        @container (max-width: 740px) {
+          .checkout-brief-grid { grid-template-columns: 1fr !important; }
+        }
+        @container (max-width: 560px) {
+          .checkout-pair-grid { grid-template-columns: 1fr !important; }
+          /* Extra link rows are url + anchor + remove. Give the url its own
+             full row and let anchor keep the remove button company. */
+          .checkout-pair-grid-extra { grid-template-columns: 1fr auto !important; }
+          .checkout-pair-grid-extra > :first-child { grid-column: 1 / -1; }
+        }
         @media (max-width: 768px) {
           .checkout-root { padding: 14px 12px 40px !important; }
           .checkout-root, .checkout-root * { min-width: 0 !important; max-width: 100%; }
@@ -564,7 +670,7 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
         <div className="checkout-2col" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px", gap: 18, alignItems: "flex-start" }}>
           {/* LEFT — briefs */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="checkout-briefs" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 20px" }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                 <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Article briefs</h2>
@@ -622,8 +728,17 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                     {/* Left column */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       <div>
-                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Article title</label>
-                        <input type="text" value={item.title} onChange={e => change(i, { title: e.target.value })} style={inp} placeholder="e.g. Why fintech founders should rethink onboarding in 2026" />
+                        <FieldLabel required>Article title</FieldLabel>
+                        <input
+                          type="text"
+                          value={item.title}
+                          onChange={e => change(i, { title: e.target.value })}
+                          aria-required="true"
+                          aria-invalid={showFieldErrors && !!v.titleError}
+                          style={showFieldErrors && v.titleError ? inpErr : inp}
+                          placeholder="e.g. Why fintech founders should rethink onboarding in 2026"
+                        />
+                        {showFieldErrors && v.titleError && fieldErr(v.titleError)}
                       </div>
 
                       {/* Target URL / anchor text — repeatable pair. The primary
@@ -632,28 +747,60 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                       link" appends optional extra pairs for a customer who
                       wants more than one link placed in the same article. */}
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div className="checkout-pair-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Target URL (where the link points)</label>
-                            <input type="url" value={item.targetUrl} onChange={e => change(i, { targetUrl: e.target.value })} style={{ ...(showFieldErrors && v.targetUrlError ? inpErr : inp), fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-slug" />
+                            <FieldLabel required>Target URL (where the link points)</FieldLabel>
+                            <input
+                              type="url"
+                              value={item.targetUrl}
+                              onChange={e => change(i, { targetUrl: e.target.value })}
+                              aria-required="true"
+                              aria-invalid={showFieldErrors && !!v.targetUrlError}
+                              style={{ ...(showFieldErrors && v.targetUrlError ? inpErr : inp), fontFamily: C.mono }}
+                              placeholder="https://yourbrand.com/blog/article-slug"
+                            />
                             {showFieldErrors && v.targetUrlError && fieldErr(v.targetUrlError)}
                           </div>
                           <div>
-                            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Anchor text</label>
-                            <input type="text" value={item.anchorText} onChange={e => change(i, { anchorText: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="e.g. fintech onboarding flow" />
+                            <FieldLabel required>Anchor text</FieldLabel>
+                            <input
+                              type="text"
+                              value={item.anchorText}
+                              onChange={e => change(i, { anchorText: e.target.value })}
+                              aria-required="true"
+                              aria-invalid={showFieldErrors && !!v.anchorTextError}
+                              style={{ ...(showFieldErrors && v.anchorTextError ? inpErr : inp), fontFamily: C.mono }}
+                              placeholder="e.g. fintech onboarding flow"
+                            />
+                            {showFieldErrors && v.anchorTextError && fieldErr(v.anchorTextError)}
                           </div>
                         </div>
 
                         {item.additionalLinks.map((pair, pairIdx) => (
-                          <div key={pairIdx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+                          <div key={pairIdx} className="checkout-pair-grid-extra" style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
                             <div>
-                              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Target URL #{pairIdx + 2}</label>
-                              <input type="url" value={pair.targetUrl} onChange={e => updateLinkPair(i, pairIdx, { targetUrl: e.target.value })} style={{ ...(showFieldErrors && v.additionalLinkErrors[pairIdx] ? inpErr : inp), fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/another-slug" />
-                              {showFieldErrors && v.additionalLinkErrors[pairIdx] && fieldErr(v.additionalLinkErrors[pairIdx]!)}
+                              <FieldLabel>Target URL #{pairIdx + 2}</FieldLabel>
+                              <input
+                                type="url"
+                                value={pair.targetUrl}
+                                onChange={e => updateLinkPair(i, pairIdx, { targetUrl: e.target.value })}
+                                aria-invalid={showFieldErrors && !!v.additionalTargetUrlErrors[pairIdx]}
+                                style={{ ...(showFieldErrors && v.additionalTargetUrlErrors[pairIdx] ? inpErr : inp), fontFamily: C.mono }}
+                                placeholder="https://yourbrand.com/blog/another-slug"
+                              />
+                              {showFieldErrors && v.additionalTargetUrlErrors[pairIdx] && fieldErr(v.additionalTargetUrlErrors[pairIdx]!)}
                             </div>
                             <div>
-                              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Anchor text #{pairIdx + 2}</label>
-                              <input type="text" value={pair.anchorText} onChange={e => updateLinkPair(i, pairIdx, { anchorText: e.target.value })} style={{ ...inp, fontFamily: C.mono }} placeholder="e.g. another anchor" />
+                              <FieldLabel>Anchor text #{pairIdx + 2}</FieldLabel>
+                              <input
+                                type="text"
+                                value={pair.anchorText}
+                                onChange={e => updateLinkPair(i, pairIdx, { anchorText: e.target.value })}
+                                aria-invalid={showFieldErrors && !!v.additionalAnchorTextErrors[pairIdx]}
+                                style={{ ...(showFieldErrors && v.additionalAnchorTextErrors[pairIdx] ? inpErr : inp), fontFamily: C.mono }}
+                                placeholder="e.g. another anchor"
+                              />
+                              {showFieldErrors && v.additionalAnchorTextErrors[pairIdx] && fieldErr(v.additionalAnchorTextErrors[pairIdx]!)}
                             </div>
                             <button
                               type="button"
@@ -679,7 +826,7 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
 
                       {/* Niche / Category */}
                       <div>
-                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Niche / Category</label>
+                        <FieldLabel hint="optional">Niche / Category</FieldLabel>
                         <select value={item.niche} onChange={e => change(i, { niche: e.target.value })} style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}>
                           <option value="">Select niche…</option>
                           {["Fintech", "SaaS", "E-commerce", "Health & Wellness", "Travel", "Real Estate", "Education", "Marketing", "Legal", "Crypto / Web3", "Other"].map(n => <option key={n} value={n}>{n}</option>)}
@@ -689,7 +836,7 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                     {/* Right column */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       <div>
-                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Who writes the article?</label>
+                        <FieldLabel required>Who writes the article?</FieldLabel>
                         <div className="checkout-brief-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                           {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${CONTENT_FEE_USD.toFixed(2)} · ${DEFAULT_CONTENT_WORD_COUNT} words`, cp: CONTENT_FEE_USD }, { mode: "upload", title: "I'll upload content", sub: "Free · .docx, .md, .pdf", cp: 0 }].map(opt => (
                             <button key={opt.mode} onClick={() => change(i, { contentMode: opt.mode as BriefItem["contentMode"], contentPrice: opt.cp })} style={{ padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === opt.mode ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === opt.mode ? C.accent : C.line}` }}>
@@ -704,9 +851,12 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                         </button>
                       </div>
                       <div>
-                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>
+                        <FieldLabel
+                          required={item.contentMode !== "linkpricer"}
+                          hint={item.contentMode === "linkpricer" ? "optional" : undefined}
+                        >
                           {item.contentMode === "linkpricer" ? "Brief for the editor" : item.contentMode === "upload" ? "Upload article" : "Article URL"}
-                        </label>
+                        </FieldLabel>
                         {item.contentMode === "linkpricer" ? (
                           <textarea value={item.brief} onChange={e => change(i, { brief: e.target.value })} style={{ ...inp, minHeight: 100, resize: "vertical" as const, lineHeight: 1.5 }} placeholder="Editorial piece — lead with industry insight…" />
                         ) : item.contentMode === "upload" ? (
@@ -721,7 +871,13 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                               <label
                                 onDragOver={(e) => e.preventDefault()}
                                 onDrop={(e) => { e.preventDefault(); handleFileSelect(i, e.dataTransfer.files[0]); }}
-                                style={{ display: "block", border: `1.5px dashed ${C.line}`, borderRadius: 9, padding: 22, textAlign: "center" as const, background: C.bg3, cursor: "pointer" }}
+                                style={{
+                                  display: "block",
+                                  border: `1.5px dashed ${showFieldErrors && v.fileError ? "#fca5a5" : C.line}`,
+                                  borderRadius: 9, padding: 22, textAlign: "center" as const,
+                                  background: showFieldErrors && v.fileError ? "#fff7f7" : C.bg3,
+                                  cursor: "pointer",
+                                }}
                               >
                                 <input
                                   type="file"
@@ -734,23 +890,45 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                                 <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>or click to choose · max 5 MB</div>
                               </label>
                             )}
-                            {item.uploadError && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 6, fontWeight: 600 }}>{item.uploadError}</div>}
+                            {/* A rejected file (wrong type / too big) reports
+                            immediately — the user just acted, so gating that
+                            behind a submit attempt would be silent failure.
+                            The plain "required" message stays gated. */}
+                            {item.uploadError
+                              ? fieldErr(item.uploadError)
+                              : showFieldErrors && v.fileError
+                              ? fieldErr(v.fileError)
+                              : null}
                           </div>
                         ) : (
                           <>
-                            <input type="url" value={item.articleUrl} onChange={e => change(i, { articleUrl: e.target.value })} style={{ ...(showFieldErrors && v.articleUrlError ? inpErr : inp), fontFamily: C.mono }} placeholder="https://yourbrand.com/blog/article-title" />
+                            <input
+                              type="url"
+                              value={item.articleUrl}
+                              onChange={e => change(i, { articleUrl: e.target.value })}
+                              aria-required="true"
+                              aria-invalid={showFieldErrors && !!v.articleUrlError}
+                              style={{ ...(showFieldErrors && v.articleUrlError ? inpErr : inp), fontFamily: C.mono }}
+                              placeholder="https://yourbrand.com/blog/article-title"
+                            />
                             {showFieldErrors && v.articleUrlError && fieldErr(v.articleUrlError)}
                           </>
                         )}
                       </div>
-                      <div>
-                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.ink2, letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase" as const }}>Tone</label>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const }}>
-                          {["Editorial", "Authoritative", "Friendly", "Technical"].map(t => (
-                            <button key={t} onClick={() => change(i, { tone: t })} style={{ padding: "6px 11px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: item.tone === t ? C.ink : "#fff", color: item.tone === t ? "#fff" : C.ink2, border: `1px solid ${item.tone === t ? C.ink : C.line}` }}>{t}</button>
-                          ))}
+                      {/* Tone only steers an article Linkpricer is about to
+                      write. For an uploaded or already-published article the
+                      copy is finished, so asking for a tone would imply an
+                      edit we don't make. */}
+                      {item.contentMode === "linkpricer" && (
+                        <div>
+                          <FieldLabel hint="optional">Tone</FieldLabel>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const }}>
+                            {["Editorial", "Authoritative", "Friendly", "Technical"].map(t => (
+                              <button key={t} onClick={() => change(i, { tone: t })} style={{ padding: "6px 11px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: item.tone === t ? C.ink : "#fff", color: item.tone === t ? "#fff" : C.ink2, border: `1px solid ${item.tone === t ? C.ink : C.line}` }}>{t}</button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -776,28 +954,33 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
                       via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
                     </div>
                   </div>
-                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>${fmtCents(Math.round(item.price * 100) + Math.round(item.contentPrice * 100))}</div>
+                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>{priceFmt((Math.round(item.price * 100) + Math.round(item.contentPrice * 100)) / 100, currency)}</div>
                 </div>
               ))}
               <div style={{ marginTop: 14, fontSize: 13 }}>
-                {[{ l: `${items.length} placements subtotal`, v: `$${fmtCents(subtotalCents)}` }, { l: "Linkpricer fee (15%)", v: `$${fmtCents(feeCents)}` }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
+                {[{ l: `${items.length} placements subtotal`, v: priceFmt(subtotalCents / 100, currency) }, { l: "Linkpricer fee (15%)", v: priceFmt(feeCents / 100, currency) }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
                   <div key={r.l} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", color: r.m ? C.mute : C.ink2 }}>
                     <span>{r.l}</span><span style={{ fontFamily: C.mono, fontWeight: 700 }}>{r.v}</span>
                   </div>
                 ))}
                 <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 6px", marginTop: 6, borderTop: `1px solid ${C.line2}` }}>
                   <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>Estimated total</span>
-                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>${fmtCents(totalCents)}</span>
+                  <span style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 24, color: C.ink, letterSpacing: -0.6 }}>{priceFmt(totalCents / 100, currency)}</span>
                 </div>
+                {currency !== "USD" && (
+                  <div style={{ fontSize: 10.5, color: C.mute, marginTop: -2, marginBottom: 6, textAlign: "right" as const }}>
+                    Shown in {currency} for reference — invoices are issued in USD.
+                  </div>
+                )}
                 <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 9, background: "#e8f6ee", border: "1px solid #bbf0c8", display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <span style={{ color: C.good }}>✓</span>
                   <div style={{ fontSize: 11.5, color: "#0d5e2e", lineHeight: 1.4 }}><strong>$0 charged today.</strong> Each placement is invoiced after the publication URL is delivered and verified live.</div>
                 </div>
               </div>
             </div>
-            {placeError && (
-              <div style={{ padding: "10px 12px", borderRadius: 9, background: "#fee2e2", border: "1px solid #fca5a5", color: C.bad, fontSize: 12.5, fontWeight: 600 }}>
-                {placeError}
+            {visiblePlaceError && (
+              <div role="alert" style={{ padding: "10px 12px", borderRadius: 9, background: "#fee2e2", border: "1px solid #fca5a5", color: C.bad, fontSize: 12.5, fontWeight: 600 }}>
+                {visiblePlaceError}
               </div>
             )}
             <button onClick={handlePlace} disabled={placing} style={{ padding: 16, background: placing ? C.ink2 : C.ink, color: "#fff", border: "none", borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: placing ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -814,36 +997,43 @@ export function CheckoutModal({ cartItems, onClose, onPlaced }: {
 }
 
 // ─── Order Placed Modal ────────────────────────────────────────────────────────
-function buildReceiptText(orders: PlacedOrder[]): string {
+// `currency` is the customer's display preference, purely for showing the same
+// converted numbers here that CartPopup/CheckoutModal already showed a moment
+// earlier — orders.snapshotCurrency (and therefore o.totalAmount) is always USD
+// server-side (lib/orders/pricing.ts resolveOffer), so the actual invoice is
+// always in USD regardless of `currency`; the disclaimer line below says so.
+function buildReceiptText(orders: PlacedOrder[], currency: Currency): string {
   const lines: string[] = [];
   lines.push("LINKPRICER — ORDER RECEIPT");
   lines.push(`Generated ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`);
   lines.push("");
-  let total = 0;
+  let totalUsd = 0;
   for (const o of orders) {
-    const amount = o.totalAmount ? parseFloat(o.totalAmount) : 0;
-    total += amount;
-    const sym = currencySymbol(o.snapshotCurrency);
+    const amountUsd = o.totalAmount ? parseFloat(o.totalAmount) : 0;
+    totalUsd += amountUsd;
     lines.push(`Order #${o.id.slice(0, 8)}`);
     lines.push(`  Domain:       ${o.snapshotDomain ?? "—"}`);
     lines.push(`  Marketplace:  ${o.snapshotMarketplaceName ?? "—"}`);
     lines.push(`  Article:      ${o.articleTitle ?? "—"}`);
     lines.push(`  Placed:       ${o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-US", { dateStyle: "medium" }) : "—"}`);
-    lines.push(`  Amount:       ${sym}${amount.toLocaleString()}`);
+    lines.push(`  Amount:       ${priceFmt(amountUsd, currency)}`);
     lines.push("");
   }
-  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${currencySymbol(orders[0]?.snapshotCurrency)}${total.toLocaleString()}`);
+  lines.push(`Total: ${orders.length} placement${orders.length === 1 ? "" : "s"}, ${priceFmt(totalUsd, currency)}`);
   lines.push("");
+  if (currency !== "USD") {
+    lines.push(`Amounts above are shown in ${currency} for reference — invoices are issued in USD.`);
+  }
   lines.push("$0 charged today. Each placement is invoiced individually once its publication URL is delivered and verified live.");
   return lines.join("\n");
 }
 
-export function OrderPlacedModal({ orders, onClose }: { orders: PlacedOrder[]; onClose: () => void }) {
+export function OrderPlacedModal({ orders, currency, onClose }: { orders: PlacedOrder[]; currency: Currency; onClose: () => void }) {
   const router = useRouter();
   const orderId = orders[0]?.id?.slice(0, 8) ?? "—";
 
   function handleDownloadReceipt() {
-    const blob = new Blob([buildReceiptText(orders)], { type: "text/plain;charset=utf-8;" });
+    const blob = new Blob([buildReceiptText(orders, currency)], { type: "text/plain;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

@@ -277,7 +277,7 @@ export function OfferCard({
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <button
           onMouseEnter={() => setHandleHover(true)} onMouseLeave={() => setHandleHover(false)}
-          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: ourPrice, delivery: offer.delivery, link: offer.link, orderType: "managed" })}
+          onClick={() => onAddToCart({ domain: domainName, dr: domainDr, traffic: domainTraffic, offerName: offer.name, offerType: offer.type, price: offer.minPrice, delivery: offer.delivery, link: offer.link, orderType: "managed" })}
           style={{ padding: "9px 0", background: handleHover ? C.accent700 : C.accent, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "background 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
         >
           <span style={{ fontSize: 11 }}>◎</span> We&apos;ll handle it
