@@ -17,6 +17,7 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { C, ExpandedPanel, countryFlag, fmtNum, gradeStyle, hydrateRates, priceFmt, withFee, type CartItem, type Currency, type Offer } from "@/components/dashboard/results-shared";
 import { CartPopup, CheckoutModal, OrderPlacedModal, type PlacedOrder } from "@/components/dashboard/checkout-flow";
+import type { PriceType } from "@/lib/orders/types";
 
 // ── searchable dropdown (ported from RSDropdown) ────────────────────────────
 interface DropdownOption { id: string; label: string }
@@ -350,6 +351,23 @@ const RS_FILTERS: Record<string, DropdownOption[]> = {
     { id: "any", label: "Any grade" }, { id: "A+", label: "A+ only" }, { id: "A", label: "A & above" }, { id: "B+", label: "B+ & above" }, { id: "B", label: "B & above" },
   ],
 };
+
+// Related Sites' own niche filter (RS_FILTERS.niche above) was never
+// threaded into the order at all -- CartItem.priceType stayed undefined
+// (server default "base") no matter what niche a customer filtered by and
+// added to cart, so a domain added while filtered to "Gambling / iGaming"
+// still priced and invoiced as an ordinary base-rate order. Mirrors
+// app/dashboard/search/page.tsx's nicheToPriceType for the ids this page's
+// filter actually offers; "any"/"general" have no niche-specific price
+// column, same as search's "general".
+function nicheToPriceType(niche: string): PriceType {
+  switch (niche) {
+    case "gambling": return "gambling";
+    case "crypto": return "crypto";
+    case "cbd": return "cbd";
+    default: return "base";
+  }
+}
 
 // Domain extension (TLD) options — a curated set covering the generic TLDs
 // and the ccTLDs actually common across the marketplace catalog (confirmed
@@ -975,7 +993,12 @@ export default function RelatedSitesPage() {
     }
   }
   function addToCart(item: CartItem) {
-    setCartItems((prev) => [...prev, item]);
+    // priceType is derived here, once, from whatever niche filter is active
+    // right now -- same "resolved at add-to-cart time" approach search/
+    // page.tsx already uses, not re-derived later from the row itself
+    // (row.category is a free-text AI-assigned label, not the same id space
+    // as RS_FILTERS.niche, so it isn't a reliable mapping source).
+    setCartItems((prev) => [...prev, { ...item, priceType: nicheToPriceType(filters.niche) }]);
     setCartOpen(true);
   }
   function removeFromCart(idx: number) {

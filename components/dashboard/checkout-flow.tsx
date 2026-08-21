@@ -5,7 +5,7 @@
 // gets the same real path to placing an order instead of each one growing its
 // own copy. See app/dashboard/related-sites/page.tsx for the bug this fixed:
 // its cart pill collected items but had no checkout wired up at all.
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ref as storageRef, uploadBytes } from "firebase/storage";
 import { storage } from "@/lib/firebase/client";
@@ -16,8 +16,26 @@ import {
   contentPriceCents,
   DEFAULT_CONTENT_WORD_COUNT,
   MAX_ADDITIONAL_LINKS,
+  PRICE_TYPES,
   type OrderLinkPair,
+  type PriceType,
 } from "@/lib/orders/types";
+
+// Human labels for the restricted-niche price tiers a marketplace offer can
+// have its own price for (lib/orders/pricing.ts's priceByType) — shown in
+// the checkout pricing-niche picker below, scoped to whichever of these an
+// offer actually has a price set for.
+const PRICE_TYPE_LABELS: Record<PriceType, string> = {
+  base: "General",
+  gambling: "Gambling / iGaming",
+  adult: "Adult",
+  cbd: "CBD / Cannabis",
+  loan: "Loans / Lending",
+  dating: "Dating",
+  crypto: "Crypto / Web3",
+  tradingForex: "Trading / Forex",
+  insertion: "Link insertion",
+};
 
 // Mirrors computeOrderPricing's integer-cent math (lib/orders/pricing.ts) so the
 // quote shown here matches what /api/orders actually charges to the cent — the
@@ -418,6 +436,34 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
   // real duplicate orders on a partial-batch failure + retry.
   const orderIdsRef = useRef<Map<number, string>>(new Map(cartItems.map((_, idx) => [idx, crypto.randomUUID()])));
 
+  // Which pricing niches each item's offer actually has a price for, keyed
+  // by cart index -- fetched once when checkout opens (not per keystroke;
+  // domain/offerName/offerType never change while the modal is open, only
+  // the brief fields do). null while loading or if resolution failed for
+  // that item, in which case the picker below just doesn't render for it —
+  // no dropdown is strictly safer than one offering niches that turn out
+  // not to be available.
+  const [priceTypesByIdx, setPriceTypesByIdx] = useState<(Record<PriceType, string | null> | null)[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/offers/price-types", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: cartItems.map((c) => ({ domain: c.domain, offerName: c.offerName, offerType: c.offerType })),
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const results = Array.isArray(data.results) ? data.results : [];
+        setPriceTypesByIdx(results.map((r: { priceByType?: Record<PriceType, string | null> | null }) => r?.priceByType ?? null));
+      })
+      .catch((err) => console.error("[CheckoutModal] price-types load", err));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const { subtotalCents, feeCents, totalCents } = cartCentsTotals(items);
   const readyCount = items.filter(isBriefItemReady).length;
   // Server/upload failures only. The "you left a field blank" banner is
@@ -451,6 +497,18 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
 
   function change(idx: number, patch: Partial<BriefItem>) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+  }
+
+  // item.price is always the RAW marketplace price for whichever priceType
+  // is currently selected (cartCentsTotals/computeOrderPricing both apply
+  // the managed fee on top of it independently) — so switching niches only
+  // needs to swap in that niche's raw price from the already-fetched
+  // priceByType map; every downstream total recomputes on its own from
+  // there, same as it already does for any other field edit.
+  function changePriceType(idx: number, priceType: PriceType) {
+    const raw = priceTypesByIdx[idx]?.[priceType];
+    const price = raw != null ? parseFloat(raw) : items[idx].price;
+    change(idx, { priceType, price });
   }
 
   // Extra target-url/anchor-text pairs beyond the primary one — one flat
@@ -824,7 +882,10 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                         )}
                       </div>
 
-                      {/* Niche / Category */}
+                      {/* Niche / Category — editorial classification only
+                      (assigns an editor fluent in the topic), has no effect
+                      on price. The pricing-tier picker below is the separate
+                      axis that actually changes what this placement costs. */}
                       <div>
                         <FieldLabel hint="optional">Niche / Category</FieldLabel>
                         <select value={item.niche} onChange={e => change(i, { niche: e.target.value })} style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}>
@@ -832,6 +893,43 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                           {["Fintech", "SaaS", "E-commerce", "Health & Wellness", "Travel", "Real Estate", "Education", "Marketing", "Legal", "Crypto / Web3", "Other"].map(n => <option key={n} value={n}>{n}</option>)}
                         </select>
                       </div>
+
+                      {/* Pricing tier — only rendered when this specific
+                      offer actually has a price for more than one tier
+                      (most offers only have "base", so most placements never
+                      show this at all). Restricted-content marketplaces
+                      often charge a premium for e.g. gambling/CBD/dating —
+                      switching tiers here swaps in that tier's real price via
+                      changePriceType so the estimate matches what the server
+                      will actually charge, instead of only finding out at
+                      submit time. The server independently re-validates and
+                      rejects if the chosen tier turns out to have no price
+                      (app/api/orders/route.ts), so this is a UX improvement
+                      on top of an already-enforced backstop, not a
+                      replacement for it. */}
+                      {(() => {
+                        const available = priceTypesByIdx[i];
+                        if (!available) return null;
+                        const options = PRICE_TYPES.filter((pt) => available[pt] != null);
+                        if (options.length <= 1) return null;
+                        const selected = options.includes((item.priceType ?? "base") as PriceType) ? (item.priceType ?? "base") : "base";
+                        return (
+                          <div>
+                            <FieldLabel hint="changes price">Pricing tier</FieldLabel>
+                            <select
+                              value={selected}
+                              onChange={e => changePriceType(i, e.target.value as PriceType)}
+                              style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}
+                            >
+                              {options.map((pt) => (
+                                <option key={pt} value={pt}>
+                                  {PRICE_TYPE_LABELS[pt]} — {priceFmt(parseFloat(available[pt]!), currency)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })()}
                     </div>
                     {/* Right column */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
