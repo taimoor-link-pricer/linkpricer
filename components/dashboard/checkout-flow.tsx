@@ -1064,7 +1064,37 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
           <div style={{ position: "sticky", top: 20, display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
               <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700 }}>Estimated cost</h3>
-              {items.map(item => (
+              {items.map(item => {
+                // Mirrors cartCentsTotals's per-item math (top of file) for
+                // the real (cent-precise) total. The breakdown text below is
+                // a SEPARATE, display-only rounding: priceFmt rounds every
+                // amount to a whole currency unit (no cents shown anywhere in
+                // this UI), so independently rounding placement/writing/fee
+                // and hoping they add up to the already-rounded total is
+                // exactly the bug commit 79185d2 fixed for the receipt ("$21
+                // + $38 + $9" visibly summing to $68 while the total reads
+                // $67, because $37.50 rounds up but only contributes $37.50
+                // to the real, correctly-rounded $67). Fee is the smallest
+                // and least fixed-elsewhere of the three, so it absorbs the
+                // rounding remainder — placement and writing keep their own
+                // natural rounding since those match numbers the customer
+                // already saw elsewhere (the cart popup; the "+$37.50" on the
+                // content-mode button).
+                const placementCents = Math.round(item.price * 100);
+                const writingCents = Math.round(item.contentPrice * 100);
+                const itemSubtotalCents = placementCents + writingCents;
+                const itemFeeCents = item.orderType === "managed" ? Math.round(itemSubtotalCents * 0.15) : 0;
+                const itemTotalCents = itemSubtotalCents + itemFeeCents;
+                const placementDisplay = Math.round((placementCents / 100) * RATES[currency]);
+                const writingDisplay = writingCents > 0 ? Math.round((writingCents / 100) * RATES[currency]) : 0;
+                const totalDisplay = Math.round((itemTotalCents / 100) * RATES[currency]);
+                const feeDisplay = itemFeeCents > 0 ? totalDisplay - placementDisplay - writingDisplay : 0;
+                const breakdown = [
+                  `${SYMS[currency]}${placementDisplay.toLocaleString()} placement`,
+                  writingDisplay > 0 ? `${SYMS[currency]}${writingDisplay.toLocaleString()} writing` : null,
+                  itemFeeCents > 0 ? `${SYMS[currency]}${feeDisplay.toLocaleString()} platform fee` : null,
+                ].filter(Boolean).join(" + ");
+                return (
                 <div key={item.domain} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.line2}` }}>
                   <div style={{ width: 34, height: 34, borderRadius: 8, background: C.bg3, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: C.mono, fontWeight: 800, fontSize: 13, color: C.ink2, marginTop: 1 }}>{item.domain[0].toUpperCase()}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1076,10 +1106,12 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced }: {
                     <div style={{ fontSize: 10.5, color: C.mute, marginTop: 2 }}>
                       via <strong style={{ color: C.ink2 }}>{item.offerType === "Vendor" ? item.offerName : prettyMarketplaceName(item.offerName)}</strong> · delivery {item.delivery} days{item.traffic > 0 ? ` · ${item.traffic >= 1000000 ? `${(item.traffic / 1000000).toFixed(0)}M` : item.traffic >= 1000 ? `${(item.traffic / 1000).toFixed(0)}K` : item.traffic} traffic` : ""}
                     </div>
+                    <div style={{ fontSize: 10.5, color: C.mute, marginTop: 2 }}>{breakdown}</div>
                   </div>
-                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>{priceFmt((Math.round(item.price * 100) + Math.round(item.contentPrice * 100)) / 100, currency)}</div>
+                  <div style={{ fontFamily: C.mono, fontWeight: 800, fontSize: 13, flexShrink: 0, paddingTop: 2 }}>{priceFmt(itemTotalCents / 100, currency)}</div>
                 </div>
-              ))}
+                );
+              })}
               <div style={{ marginTop: 14, fontSize: 13 }}>
                 {[{ l: `${items.length} placements subtotal`, v: priceFmt(subtotalCents / 100, currency) }, { l: "Linkpricer fee (15%)", v: priceFmt(feeCents / 100, currency) }, { l: "VAT (added per invoice)", v: "—", m: true }].map(r => (
                   <div key={r.l} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", color: r.m ? C.mute : C.ink2 }}>
