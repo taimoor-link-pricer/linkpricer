@@ -1869,45 +1869,7 @@ function SearchPageInner() {
 
       <div className="search-root" style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto", position: "relative" }}>
 
-        <DashboardNav active="analyze" />
-
-        {/* Floating cart button */}
-        {cartItems.length > 0 && (
-          <button
-            onClick={() => setCartOpen(true)}
-            style={{
-              position: "absolute",
-              top: 32,
-              right: 36,
-              background: C.accent,
-              color: "#fff",
-              border: "none",
-              borderRadius: 99,
-              padding: "8px 18px",
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              boxShadow: "0 2px 10px rgba(0,82,204,0.3)",
-            }}
-          >
-            🛒 Cart
-            <span
-              style={{
-                background: "#fff",
-                color: C.accent,
-                borderRadius: 99,
-                padding: "1px 7px",
-                fontSize: 11,
-                fontWeight: 800,
-              }}
-            >
-              {cartItems.length}
-            </span>
-          </button>
-        )}
+        <DashboardNav active="analyze" cartCount={cartItems.length} onCartClick={() => setCartOpen(true)} />
 
         {/* Hero card */}
         <div

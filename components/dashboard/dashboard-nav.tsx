@@ -31,12 +31,24 @@ const NAV_ITEMS: { key: DashboardNavKey; label: string; href: string; breadcrumb
 export function DashboardNav({
   active,
   breadcrumb,
+  cartCount,
+  onCartClick,
 }: {
   // Optional -- pages that aren't one of the four main tabs (Profile,
   // Settings) render the nav with no tab highlighted and pass their own
   // breadcrumb instead.
   active?: DashboardNavKey;
   breadcrumb?: string;
+  // Optional cart pill, rendered inline in this nav row next to ProfileMenu
+  // when passed. Search used to render its own version of this button
+  // absolutely-positioned to the page's top-right corner — the same corner
+  // ProfileMenu already lives in via normal flex flow, so the two landed
+  // directly on top of each other and there was no way to reach Sign
+  // out/Profile while anything was in the cart. Living here instead means
+  // it's a normal sibling of ProfileMenu in the same flex row, so it can
+  // only ever sit beside it, never over it.
+  cartCount?: number;
+  onCartClick?: () => void;
 }) {
   const { totalUnread } = useUnreadOrders();
   const activeItem = NAV_ITEMS.find((item) => item.key === active);
@@ -92,6 +104,38 @@ export function DashboardNav({
               </Link>
             );
           })}
+          {!!cartCount && onCartClick && (
+            <button
+              onClick={onCartClick}
+              style={{
+                background: C.accent,
+                color: "#fff",
+                border: "none",
+                borderRadius: 99,
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              🛒 Cart
+              <span
+                style={{
+                  background: "#fff",
+                  color: C.accent,
+                  borderRadius: 99,
+                  padding: "1px 7px",
+                  fontSize: 11,
+                  fontWeight: 800,
+                }}
+              >
+                {cartCount}
+              </span>
+            </button>
+          )}
           <ProfileMenu />
         </nav>
       </header>
