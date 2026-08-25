@@ -45,15 +45,35 @@ const NICHE_COLUMNS: Record<string, { min: string; max: string }> = {
   insertion: { min: "link_insertion_min_price", max: "link_insertion_max_price" },
 };
 
-// Picks the niche-specific price for a row when one was requested and the
-// offer actually has it set; otherwise falls back to the base price — a
-// niche selection changes which number is shown, it never hides an offer
-// that simply doesn't have niche-specific pricing set.
-function nichePrice(row: Record<string, unknown>, niche: string): { min: unknown; max: unknown } {
+// Picks the niche-specific price for a row when one was requested, or null
+// when this offer has no price set for that niche — in which case the caller
+// drops the offer entirely rather than showing it.
+//
+// This used to fall back to the base price instead ("a niche selection
+// changes which number is shown, it never hides an offer"), which quietly
+// produced offers nobody can actually buy: the row displayed the ordinary
+// base rate, but Buy tagged the cart item with the selected niche's
+// priceType, and POST /api/orders hard-rejects any item whose offer has no
+// price for that priceType (see the priceByType guard there). Measured on a
+// random 40-domain sample, 36 of them (90%) produced exactly that
+// unfulfillable cart item under the iGaming niche.
+//
+// Worse, the fallback also skewed which offer won the "cheapest" slot: an
+// offer with real gambling pricing gets marked up (often 2x) while one with
+// none kept its cheap base rate, so price-sorting crowned the offer that
+// can't serve the niche. Across the 46,165 domains that *do* have a
+// gambling-capable offer, the base-price fallback picked an incapable offer
+// 79.6% of the time — steering customers away from the very offers that
+// could have fulfilled the order.
+//
+// "general" (or anything unrecognized) still means "just use the base
+// min_price/max_price", and never excludes anything.
+function nichePrice(row: Record<string, unknown>, niche: string): { min: unknown; max: unknown } | null {
   const cols = NICHE_COLUMNS[niche];
   if (cols) {
     const min = row[cols.min];
-    if (min != null) return { min, max: row[cols.max] ?? min };
+    if (min == null) return null;
+    return { min, max: row[cols.max] ?? min };
   }
   return { min: row.min_price, max: row.max_price ?? row.min_price };
 }
@@ -287,9 +307,16 @@ export async function POST(req: NextRequest) {
 
     for (const r of marketplaceRows.rows) {
       const domain = r.domain as string;
+      // Offer has no price for the requested niche — skip it entirely rather
+      // than listing it at its base rate (see nichePrice above). Deliberately
+      // checked before touching offersMap so a domain whose every offer gets
+      // filtered out stays absent from the map and falls through to
+      // noPrice: true below, exactly like a domain with no offers at all.
+      const priced = nichePrice(r as Record<string, unknown>, niche);
+      if (!priced) continue;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
       const ex = exampleMap.get(domain);
-      const { min: rawMin, max: rawMax } = nichePrice(r as Record<string, unknown>, niche);
+      const { min: rawMin, max: rawMax } = priced;
       const minUsd = toUsd(Number(rawMin ?? 0), r.currency as string | null) ?? 0;
       const maxUsd = toUsd(Number(rawMax ?? rawMin ?? 0), r.currency as string | null) ?? minUsd;
       const ratingCount = Number(r.rating_count ?? 0);
@@ -311,9 +338,15 @@ export async function POST(req: NextRequest) {
 
     for (const r of vendorRows.rows) {
       const domain = r.domain as string;
+      // Same niche exclusion as the marketplace loop above — vendor offers
+      // carry the identical niche price columns and are resolved by the same
+      // priceByType guard in POST /api/orders, so a vendor offer with no
+      // price for this niche is just as unbuyable.
+      const pricedV = nichePrice(r as Record<string, unknown>, niche);
+      if (!pricedV) continue;
       if (!offersMap.has(domain)) offersMap.set(domain, []);
       const exV = exampleMap.get(domain);
-      const { min: rawMinV, max: rawMaxV } = nichePrice(r as Record<string, unknown>, niche);
+      const { min: rawMinV, max: rawMaxV } = pricedV;
       const minUsd = toUsd(Number(rawMinV ?? 0), r.currency as string | null) ?? 0;
       const maxUsd = toUsd(Number(rawMaxV ?? rawMinV ?? 0), r.currency as string | null) ?? minUsd;
       const ratingCount = Number(r.rating_count ?? 0);

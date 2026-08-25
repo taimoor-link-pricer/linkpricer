@@ -1498,6 +1498,15 @@ function SearchPageInner() {
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [niche, setNiche] = useState("general");
   const [nicheOpen, setNicheOpen] = useState(false);
+  // The niche the currently-displayed `results` were actually fetched under —
+  // NOT the live dropdown value. Changing the dropdown deliberately doesn't
+  // refetch (results only update when Analyze is clicked), so the two diverge
+  // the moment a user picks a different niche while results are on screen.
+  // Every priceType decision has to key off this one, because it's the only
+  // value that describes the prices actually being shown; reading the live
+  // `niche` there instead tagged cart items with a niche the displayed price
+  // never came from.
+  const [resultsNiche, setResultsNiche] = useState("general");
   const [currency, setCurrency] = useState<Currency>("USD");
   const [analyzing, setAnalyzing] = useState(false);
   const [results, setResults] = useState<Domain[] | null>(null);
@@ -1749,6 +1758,11 @@ function SearchPageInner() {
       }));
       setResults(found);
       setNotFound(data.notFound ?? []);
+      // Pin the niche these results were priced under, alongside the results
+      // themselves — `niche` here is the closure value from the click that
+      // started this request, so it stays correct even if the user changes
+      // the dropdown while the request is still in flight.
+      setResultsNiche(niche);
 
       // Only save real paste-box searches — a ?domain= auto-run arriving
       // from the homepage isn't something the user typed/pasted themselves.
@@ -1783,10 +1797,13 @@ function SearchPageInner() {
   }
 
   function handleAddToCart(item: Omit<CartItem, "priceType">) {
-    // priceType is derived here, once, from whatever niche is currently
-    // selected — not passed up from the button click — so every add-to-cart
-    // call site (OfferCard's two buttons) can't independently forget it.
-    setCartItems((prev) => [...prev, { ...item, priceType: nicheToPriceType(niche) }]);
+    // priceType is derived here, once, so every add-to-cart call site
+    // (OfferCard's two buttons, DomainRow's Buy button) can't independently
+    // forget it — and from resultsNiche rather than the live `niche`, so it
+    // always describes the price actually shown on the row being bought.
+    // /api/analyze now only returns offers that genuinely have a price for
+    // that niche, so this tag is guaranteed to match a real price column.
+    setCartItems((prev) => [...prev, { ...item, priceType: nicheToPriceType(resultsNiche) }]);
     setCartOpen(true);
   }
 
