@@ -38,14 +38,17 @@ const PRICE_TYPE_LABELS: Record<PriceType, string> = {
   insertion: "Link insertion",
 };
 
-// Editorial-only niches — no marketplace prices content differently for
-// these, so they're always available at the offer's base price. Kept
-// separate from PREMIUM_PRICE_TYPES below (not folded into PriceType) so
-// adding one doesn't require a new priceByType column server-side.
-const TOPICAL_NICHES = [
-  "Fintech", "SaaS", "E-commerce", "Health & Wellness", "Travel",
-  "Real Estate", "Education", "Marketing", "Legal", "Other",
-];
+// A TOPICAL_NICHES list (Fintech, SaaS, E-commerce, Health & Wellness,
+// Travel, Real Estate, Education, Marketing, Legal, Other) used to be
+// offered here alongside the priced verticals below. It was removed: those
+// entries had no price column, no PriceType and no "— $x" suffix, so the
+// one dropdown silently mixed options that change what you pay with options
+// that are purely an editorial hint — indistinguishable to the customer
+// except by whether a price happened to be printed after the label. No
+// order had ever recorded one (0 rows with a contentNiche set), so nothing
+// historical depends on them. This control is now exclusively a pricing
+// selector: every option either is the base rate or names a real priced
+// vertical.
 
 // The restricted-content verticals a marketplace CAN have its own price for.
 // "insertion" is deliberately excluded — that's a different service (link
@@ -460,11 +463,23 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
   // Which pricing niches each item's offer actually has a price for, keyed
   // by cart index -- fetched once when checkout opens (not per keystroke;
   // domain/offerName/offerType never change while the modal is open, only
-  // the brief fields do). null while loading or if resolution failed for
-  // that item, in which case the picker below just doesn't render for it —
-  // no dropdown is strictly safer than one offering niches that turn out
-  // not to be available.
+  // the brief fields do). An entry is null when resolution failed for that
+  // specific item.
   const [priceTypesByIdx, setPriceTypesByIdx] = useState<(Record<PriceType, string | null> | null)[]>([]);
+  // Tracked separately from the data itself because "haven't loaded yet" and
+  // "loaded, and this offer genuinely has no price for that niche" are very
+  // different things that the array alone cannot tell apart: before the fetch
+  // resolves every priceTypesByIdx[i] is undefined, which the niche <option>
+  // renderer below read as "no price", so every premium niche briefly
+  // rendered "— Not available" and disabled before flipping to its real
+  // price a moment later. Gating on this status keeps that wrong state off
+  // screen entirely rather than showing it and correcting it.
+  //
+  // "error" is its own state for the same reason: the .catch here used to
+  // leave priceTypesByIdx at its initial [], which is indistinguishable from
+  // both "still loading" and "no niche pricing" — so a failed request showed
+  // a confident, permanent "Not available" on every niche.
+  const [priceTypesStatus, setPriceTypesStatus] = useState<"loading" | "ready" | "error">("loading");
   useEffect(() => {
     let cancelled = false;
     fetch("/api/offers/price-types", {
@@ -474,13 +489,27 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
         items: cartItems.map((c) => ({ domain: c.domain, offerName: c.offerName, offerType: c.offerType })),
       }),
     })
-      .then((r) => r.json())
+      // fetch only rejects on a network-level failure, so an HTTP 500 (which
+      // this route returns from its own catch, as {error}, with no `results`)
+      // arrives here as a perfectly resolved promise. Without these two
+      // guards that response fell through as an empty result list and got
+      // marked "ready", which renders every niche as a confident, permanent
+      // "Not available" — the exact wrong-and-final state this status was
+      // added to avoid. Both are throws so they land in the .catch below.
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`price-types responded ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         if (cancelled) return;
-        const results = Array.isArray(data.results) ? data.results : [];
-        setPriceTypesByIdx(results.map((r: { priceByType?: Record<PriceType, string | null> | null }) => r?.priceByType ?? null));
+        if (!Array.isArray(data?.results)) throw new Error("price-types response had no results array");
+        setPriceTypesByIdx(data.results.map((r: { priceByType?: Record<PriceType, string | null> | null }) => r?.priceByType ?? null));
+        setPriceTypesStatus("ready");
       })
-      .catch((err) => console.error("[CheckoutModal] price-types load", err));
+      .catch((err) => {
+        console.error("[CheckoutModal] price-types load", err);
+        if (!cancelled) setPriceTypesStatus("error");
+      });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -980,28 +1009,44 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                         const priceTypeLabel = item.priceType === "insertion" ? null : PRICE_TYPE_LABELS[item.priceType ?? "base"];
                         const selected = item.niche || priceTypeLabel || "";
                         const baseRaw = available?.base;
+                        // Whether a per-niche price is actually known yet.
+                        // Until it is, no option can honestly claim a niche is
+                        // unavailable, so the whole picker renders as a single
+                        // disabled "Loading…" row instead — the alternative is
+                        // showing every premium niche as "Not available" for a
+                        // beat and then silently correcting it, which reads as
+                        // the offer having no niche pricing at all.
+                        const pricesKnown = priceTypesStatus === "ready";
                         return (
                           <div>
                             <FieldLabel hint="optional — some niches change price">Niche / Category</FieldLabel>
                             <select
-                              value={selected}
+                              value={pricesKnown ? selected : ""}
+                              disabled={!pricesKnown}
                               onChange={e => changeNiche(i, e.target.value)}
-                              style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30 }}
+                              style={{ ...inp, appearance: "none" as const, backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30, ...(pricesKnown ? null : { color: C.mute, cursor: "wait" }) }}
                             >
-                              <option value="">Select niche…</option>
-                              <option value="General">
-                                General{baseRaw ? ` — ${priceFmt(parseFloat(baseRaw), currency)}` : ""}
-                              </option>
-                              {TOPICAL_NICHES.map(n => <option key={n} value={n}>{n}</option>)}
-                              {PREMIUM_PRICE_TYPES.map((pt) => {
-                                const raw = available?.[pt];
-                                const label = PRICE_TYPE_LABELS[pt];
-                                return (
-                                  <option key={pt} value={label} disabled={!raw}>
-                                    {label} — {raw ? priceFmt(parseFloat(raw), currency) : "Not available"}
+                              {!pricesKnown ? (
+                                <option value="">
+                                  {priceTypesStatus === "error" ? "Niche prices unavailable — try reopening checkout" : "Loading niche prices…"}
+                                </option>
+                              ) : (
+                                <>
+                                  <option value="">Select niche…</option>
+                                  <option value="General">
+                                    General{baseRaw ? ` — ${priceFmt(parseFloat(baseRaw), currency)}` : ""}
                                   </option>
-                                );
-                              })}
+                                  {PREMIUM_PRICE_TYPES.map((pt) => {
+                                    const raw = available?.[pt];
+                                    const label = PRICE_TYPE_LABELS[pt];
+                                    return (
+                                      <option key={pt} value={label} disabled={!raw}>
+                                        {label} — {raw ? priceFmt(parseFloat(raw), currency) : "Not available"}
+                                      </option>
+                                    );
+                                  })}
+                                </>
+                              )}
                             </select>
                           </div>
                         );
