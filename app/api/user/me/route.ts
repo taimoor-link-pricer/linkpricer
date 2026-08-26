@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { adminAuth } from "@/lib/firebase/admin";
+import { verifySession } from "@/lib/auth/verify-session";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -7,13 +7,24 @@ import { cookies } from "next/headers";
 import { syncAdminClaim } from "@/lib/admin-auth";
 
 export async function GET() {
+  const cookieStore = await cookies();
+  const session = cookieStore.get("session")?.value;
+  if (!session) return NextResponse.json(null, { status: 401 });
+
+  // Auth failure and infrastructure failure must not look alike. This handler
+  // used to sit in a single try/catch that returned 401 for everything, so a
+  // Postgres blip or a slow syncAdminClaim read as "signed out" — and the
+  // client's 401 branch signs the user out for real. Only a genuinely bad
+  // cookie returns 401 now; everything below returns 503, which the client
+  // treats as "transient, keep the session and retry".
+  let decoded;
   try {
-    const cookieStore = await cookies();
-    const session = cookieStore.get("session")?.value;
-    if (!session) return NextResponse.json(null, { status: 401 });
+    decoded = await verifySession(session);
+  } catch {
+    return NextResponse.json(null, { status: 401 });
+  }
 
-    const decoded = await adminAuth.verifySessionCookie(session, true);
-
+  try {
     let result = await db.select().from(users).where(eq(users.id, decoded.uid)).limit(1);
 
     if (!result[0]) {
@@ -82,7 +93,14 @@ export async function GET() {
     // won't carry it, and Firestore rules that read it (e.g. the admin chat
     // dock) 403 until the next natural token refresh.
     if (result[0].isAdmin) {
-      await syncAdminClaim(decoded.uid);
+      // Non-fatal: if this fails the claim simply lands on the next natural
+      // token refresh. It must never turn a valid session into an error
+      // response — which is exactly what the shared catch used to do.
+      try {
+        await syncAdminClaim(decoded.uid);
+      } catch (e) {
+        console.error("[/api/user/me] syncAdminClaim failed", e);
+      }
     }
 
     // view_mode is a UI-only preference (which side of the app an isAdmin
@@ -92,8 +110,9 @@ export async function GET() {
     const viewMode = cookieStore.get("view_mode")?.value === "client" ? "client" : "admin";
 
     return NextResponse.json({ ...result[0], viewMode });
-  } catch {
-    return NextResponse.json(null, { status: 401 });
+  } catch (err) {
+    console.error("[/api/user/me GET]", err);
+    return NextResponse.json(null, { status: 503 });
   }
 }
 
@@ -108,7 +127,7 @@ export async function PATCH(req: Request) {
     const session = cookieStore.get("session")?.value;
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const decoded = await adminAuth.verifySessionCookie(session, true);
+    const decoded = await verifySession(session);
 
     let body: { displayName?: string };
     try {

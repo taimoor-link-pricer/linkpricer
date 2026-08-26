@@ -11,8 +11,18 @@ export function proxy(req: NextRequest) {
   const isAuthOnly = AUTH_ONLY_PATHS.some((p) => pathname.startsWith(p));
 
   if (isProtected && !session) {
+    // A missing cookie here does not mean the user is signed out. The cookie is
+    // a 5-day fuse while the Firebase session behind it effectively never
+    // expires, so this fires routinely for anyone returning after a few days —
+    // and because it happens at the edge, no client code gets a chance to
+    // repair it. Carry the intent through so /login can re-mint the session
+    // from the live Firebase user and forward them on, instead of making
+    // someone who never actually logged out type their password again.
     const url = req.nextUrl.clone();
     url.pathname = "/login";
+    url.search = "";
+    url.searchParams.set("session", "expired");
+    url.searchParams.set("redirect", pathname + req.nextUrl.search);
     return NextResponse.redirect(url);
   }
 

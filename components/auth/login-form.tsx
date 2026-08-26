@@ -1,15 +1,18 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ROUTES, validRedirect } from "@/lib/constants";
+import { getPostAuthRoute } from "@/lib/auth/post-auth-route";
+import { PageLoader } from "@/components/page-loader";
 import {
   signInWithEmail,
   startGoogleSignIn,
-  finishGoogleSignIn,
   getAuthErrorMessage,
   isFirebaseError,
+  refreshSessionCookie,
+  waitForFirebaseUser,
 } from "@/lib/firebase/auth-client";
 
 const inputStyle: React.CSSProperties = {
@@ -36,35 +39,47 @@ const labelStyle: React.CSSProperties = {
 
 export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = validRedirect(searchParams.get("redirect"));
 
-  async function getPostLoginRoute(): Promise<string> {
-    try {
-      const res = await fetch("/api/user/me");
-      if (res.ok) {
-        const data = await res.json();
-        if (data.role === "vendor") return ROUTES.admin;
-        if (!data.hasCompletedOnboarding) {
-          return redirect ? `${ROUTES.onboarding}?redirect=${encodeURIComponent(redirect)}` : ROUTES.onboarding;
-        }
-      }
-    } catch {}
-    return redirect ?? ROUTES.search;
-  }
+  // A Google sign-in that failed after a full-page redirect is completed by
+  // AuthSync, which has no UI of its own — it hands the reason back here.
+  const [error, setError] = useState<string | null>(() => {
+    const code = searchParams.get("authError");
+    return code ? getAuthErrorMessage(code) : null;
+  });
+
+  // proxy.ts bounced a signed-in user off a protected route because the session
+  // cookie had lapsed. Firebase almost certainly still has them, so re-mint and
+  // send them where they were going rather than showing a login form to someone
+  // who never logged out. Only ever runs when the cookie is already gone, and
+  // failure just falls through to the form, so this can't loop.
+  const [recovering, setRecovering] = useState(searchParams.get("session") === "expired");
 
   useEffect(() => {
-    finishGoogleSignIn()
-      .then(async (result) => {
-        if (result) {
-          setIsLoading(true);
-          router.push(await getPostLoginRoute());
-        }
-      })
-      .catch(() => {});
-  }, [router]);
+    if (!recovering) return;
+    let cancelled = false;
+
+    (async () => {
+      const user = await waitForFirebaseUser();
+      if (cancelled) return;
+
+      if (user && (await refreshSessionCookie(user, true))) {
+        if (cancelled) return;
+        router.replace(await getPostAuthRoute(redirect));
+        return;
+      }
+      if (!cancelled) setRecovering(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recovering, router]);
+
+  if (recovering) return <PageLoader />;
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -73,7 +88,7 @@ export function LoginForm() {
     const fd = new FormData(e.currentTarget);
     try {
       await signInWithEmail(fd.get("email") as string, fd.get("password") as string);
-      router.push(await getPostLoginRoute());
+      router.push(await getPostAuthRoute(redirect));
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
       setIsLoading(false);
@@ -85,7 +100,7 @@ export function LoginForm() {
     setIsLoading(true);
     try {
       await startGoogleSignIn();
-      router.push(await getPostLoginRoute());
+      router.push(await getPostAuthRoute(redirect));
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
       setIsLoading(false);

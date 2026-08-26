@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { AuthSync } from "@/components/auth/auth-sync";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -49,6 +50,7 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-full flex flex-col font-body text-on-surface bg-background selection:bg-primary-container selection:text-on-primary-container">
+        <AuthSync />
         {children}
       </body>
     </html>

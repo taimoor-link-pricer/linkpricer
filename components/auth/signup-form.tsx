@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ROUTES, validRedirect } from "@/lib/constants";
+import { getPostAuthRoute } from "@/lib/auth/post-auth-route";
 import {
   signUpWithEmail,
   startGoogleSignIn,
-  finishGoogleSignIn,
   getAuthErrorMessage,
   isFirebaseError,
 } from "@/lib/firebase/auth-client";
@@ -42,31 +42,6 @@ export function SignupForm() {
   const searchParams = useSearchParams();
   const redirect = validRedirect(searchParams.get("redirect"));
 
-  async function getPostLoginRoute(): Promise<string> {
-    try {
-      const res = await fetch("/api/user/me");
-      if (res.ok) {
-        const data = await res.json();
-        if (data.role === "vendor") return ROUTES.admin;
-        if (!data.hasCompletedOnboarding) {
-          return redirect ? `${ROUTES.onboarding}?redirect=${encodeURIComponent(redirect)}` : ROUTES.onboarding;
-        }
-      }
-    } catch {}
-    return redirect ?? ROUTES.search;
-  }
-
-  useEffect(() => {
-    finishGoogleSignIn()
-      .then(async (result) => {
-        if (result) {
-          setIsLoading(true);
-          router.push(await getPostLoginRoute());
-        }
-      })
-      .catch(() => {});
-  }, [router]);
-
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!tosAccepted) { setError("Please accept the Terms of Service and Privacy Policy."); return; }
@@ -79,7 +54,7 @@ export function SignupForm() {
     const lastName = nameParts.slice(1).join(" ") || "";
     try {
       await signUpWithEmail(firstName, lastName, fd.get("email") as string, fd.get("password") as string);
-      router.push(await getPostLoginRoute());
+      router.push(await getPostAuthRoute(redirect));
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
       setIsLoading(false);
@@ -91,7 +66,7 @@ export function SignupForm() {
     setIsLoading(true);
     try {
       await startGoogleSignIn();
-      router.push(await getPostLoginRoute());
+      router.push(await getPostAuthRoute(redirect));
     } catch (err) {
       setError(isFirebaseError(err) ? getAuthErrorMessage(err.code) : "Something went wrong.");
       setIsLoading(false);
