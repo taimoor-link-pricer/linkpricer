@@ -11,6 +11,7 @@ import { ref as storageRef, uploadBytes } from "firebase/storage";
 import { storage } from "@/lib/firebase/client";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import { urlProblem, urlProblemMessage } from "@/lib/validate-url";
 import { C, priceFmt, type Currency, type CartItem } from "@/components/dashboard/results-shared";
 import { RATES, SYMS } from "@/lib/design-v1/format";
 import { persistCart } from "@/lib/cart-storage";
@@ -262,19 +263,15 @@ type BriefItem = CartItem & {
 // inert attribute with no <form onSubmit>/submit button wiring it up, so a
 // value like "test" sailed straight through to the API and came back as a
 // generic "Validation failed" with no indication of which field was wrong.
-const URL_ERROR_MSG = "isn't a valid URL — include https:// (e.g. https://example.com/page)";
-function isLikelyUrl(value: string): boolean {
-  try {
-    const u = new URL(value.trim());
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
+// Validation lives in lib/validate-url so the server enforces the identical
+// rule (see app/api/orders). The previous check here was `new URL()` plus a
+// protocol test, which accepts `https:google` — the WHATWG parser repairs the
+// missing slash and reports hostname "google" — so the single most likely typo
+// in this field passed silently.
 function urlFieldError(label: string, value: string, required: boolean): string | null {
   if (!value.trim()) return required ? `${label} is required.` : null;
-  return isLikelyUrl(value) ? null : `${label} ${URL_ERROR_MSG}`;
+  const problem = urlProblem(value);
+  return problem ? `${label} ${urlProblemMessage(problem)}` : null;
 }
 
 // Single source of truth for "is this placement ready to submit," "why
@@ -300,6 +297,21 @@ type BriefItemValidation = {
   // points at the same field the user is about to be scrolled to.
   firstError: string | null;
 };
+
+// Plain names for whatever is still missing, in the order the fields appear on
+// screen. Used to tell the customer exactly what's blocking "Place order"
+// instead of the old "still needs a brief", which named no field at all.
+function missingFieldsFor(v: BriefItemValidation): string[] {
+  const out: string[] = [];
+  if (v.titleError) out.push("Article title");
+  if (v.targetUrlError) out.push("Target URL");
+  if (v.anchorTextError) out.push("Anchor text");
+  v.additionalTargetUrlErrors.forEach((e, idx) => { if (e) out.push(`Target URL #${idx + 2}`); });
+  v.additionalAnchorTextErrors.forEach((e, idx) => { if (e) out.push(`Anchor text #${idx + 2}`); });
+  if (v.articleUrlError) out.push("Article URL");
+  if (v.fileError) out.push("Article file");
+  return out;
+}
 
 function validateBriefItem(item: BriefItem): BriefItemValidation {
   const titleError = item.title.trim() ? null : "Article title is required.";
@@ -540,6 +552,41 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
     });
   }
 
+  // Which individual fields the customer has actually put a cursor in or typed
+  // into, keyed `${itemIndex}:${field}`.
+  //
+  // Card-level `touchedIdx` alone can't answer "should this field show its
+  // error yet", and neither can the field's own emptiness: gating on "is there
+  // text in it" means typing into Anchor text and then clearing it makes the
+  // error vanish at exactly the moment the field became invalid, leaving
+  // "Place order" greyed out with nothing on screen explaining why. Once
+  // someone has touched a field, its error stays visible whether they leave
+  // content behind or not.
+  // Set by the first "Place order" click that hits an incomplete form. Until
+  // then the button stays live; after it, the button locks until every problem
+  // is fixed.
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
+
+  const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
+  function markDirty(key: string) {
+    setDirtyFields(prev => (prev.has(key) ? prev : new Set(prev).add(key)));
+  }
+
+  // Jump to a placement and reveal everything still missing on it. Marking it
+  // touched is the point: the customer asked what's wrong, so stop waiting for
+  // them to visit and leave before saying so.
+  const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  function revealPlacement(i: number) {
+    setExpandedIdx(i);
+    setTouchedIdx(t => (t.has(i) ? t : new Set(t).add(i)));
+    requestAnimationFrame(() => {
+      cardRefs.current[i]?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "center",
+      });
+    });
+  }
+
   // Dropping a placement means re-indexing every OTHER piece of state keyed
   // by cart position, not just `items` — priceTypesByIdx (fetched once,
   // above) and orderIdsRef (minted once, above; the retry-idempotency ids
@@ -562,6 +609,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
     });
     orderIdsRef.current = nextIds;
     setTouchedIdx(new Set());
+    setDirtyFields(new Set());
     setExpandedIdx(0);
   }
 
@@ -643,9 +691,21 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
   }
 
   async function handlePlace() {
-    // Defense in depth only — the button itself is disabled while any
-    // placement is incomplete, so this shouldn't be reachable in that state.
-    if (placingRef.current || notReadyIdx.length > 0) return;
+    if (placingRef.current) return;
+
+    // "Place order" starts live rather than greyed out. A button that is
+    // already dead when the page opens can't tell you why, so the first click
+    // is what turns the whole form honest: every remaining problem goes red at
+    // once — including fields nobody has visited yet — and the view jumps to
+    // the first one. Only then does the button lock, and it unlocks again the
+    // moment the last problem is fixed.
+    if (notReadyIdx.length > 0) {
+      setAttemptedSubmit(true);
+      setTouchedIdx(new Set(items.map((_, i) => i)));
+      revealPlacement(notReadyIdx[0]);
+      return;
+    }
+
     setPlaceError(null);
     if (!profile) {
       setPlaceError("You must be signed in to place an order.");
@@ -826,13 +886,30 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
               const ready = v.ready;
               const touched = touchedIdx.has(i);
               const flagged = touched && !ready;
-              // Only shown for a card the user has actually visited and moved
-              // on from (see touchedIdx above) — a freshly opened checkout
-              // doesn't look pre-broken before anyone's typed anything.
-              const showFieldErrors = touched;
+              // A field shows its error once the customer has actually been in
+              // it (typed or focused, tracked per field in dirtyFields), or
+              // once they've left this card entirely (touched), which also
+              // surfaces fields they skipped without ever opening.
+              //
+              // Crucially this is NOT gated on the field currently holding
+              // text. Filling Anchor text and then clearing it back out is the
+              // exact moment the field turns invalid, and the customer is
+              // watching that spot — hiding the message there is what leaves
+              // "Place order" greyed out for no visible reason.
+              const errKey = (field: string) => `${i}:${field}`;
+              const liveErr = (field: string, error: string | null) =>
+                (touched || dirtyFields.has(errKey(field))) && !!error;
+              // Attach to every required input: focus alone counts, so tabbing
+              // through without typing still explains what's needed.
+              const dirtyProps = (field: string) => ({
+                onFocus: () => markDirty(errKey(field)),
+                onBlur: () => markDirty(errKey(field)),
+              });
+              const missing = missingFieldsFor(v);
               return (
               <div
                 key={item.domain + i}
+                ref={(el) => { cardRefs.current[i] = el; }}
                 style={{
                   background: "#fff",
                   border: `1px solid ${expandedIdx === i ? C.accent : flagged ? "#f3a5a5" : C.line}`,
@@ -858,8 +935,11 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                     </div>
                     <div style={{ fontSize: 11.5, color: item.title ? C.ink2 : C.mute, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || "No title yet"}</div>
                   </div>
+                  {/* Says how many fields, not just that something is wrong —
+                  a collapsed card that reads "2 still to fill" tells the
+                  customer how much work is left without opening it. */}
                   <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999, background: ready ? "#e8f6ee" : "#fdf2dd", color: ready ? C.good : "#a35d00", flexShrink: 0 }}>
-                    {ready ? "Ready" : "Brief needed"}
+                    {ready ? "Ready" : `${missing.length} still to fill`}
                   </span>
                   <button
                     type="button"
@@ -884,12 +964,13 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                           type="text"
                           value={item.title}
                           onChange={e => change(i, { title: e.target.value })}
+                              {...dirtyProps("title")}
                           aria-required="true"
-                          aria-invalid={showFieldErrors && !!v.titleError}
-                          style={showFieldErrors && v.titleError ? inpErr : inp}
+                          aria-invalid={liveErr("title", v.titleError)}
+                          style={liveErr("title", v.titleError) ? inpErr : inp}
                           placeholder="e.g. Why fintech founders should rethink onboarding in 2026"
                         />
-                        {showFieldErrors && v.titleError && fieldErr(v.titleError)}
+                        {liveErr("title", v.titleError) && fieldErr(v.titleError!)}
                       </div>
 
                       {/* Target URL / anchor text — repeatable pair. The primary
@@ -905,12 +986,13 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                               type="url"
                               value={item.targetUrl}
                               onChange={e => change(i, { targetUrl: e.target.value })}
+                              {...dirtyProps("targetUrl")}
                               aria-required="true"
-                              aria-invalid={showFieldErrors && !!v.targetUrlError}
-                              style={{ ...(showFieldErrors && v.targetUrlError ? inpErr : inp), fontFamily: C.mono }}
+                              aria-invalid={liveErr("targetUrl", v.targetUrlError)}
+                              style={{ ...(liveErr("targetUrl", v.targetUrlError) ? inpErr : inp), fontFamily: C.mono }}
                               placeholder="https://yourbrand.com/blog/article-slug"
                             />
-                            {showFieldErrors && v.targetUrlError && fieldErr(v.targetUrlError)}
+                            {liveErr("targetUrl", v.targetUrlError) && fieldErr(v.targetUrlError!)}
                           </div>
                           <div>
                             <FieldLabel required>Anchor text</FieldLabel>
@@ -918,12 +1000,13 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                               type="text"
                               value={item.anchorText}
                               onChange={e => change(i, { anchorText: e.target.value })}
+                              {...dirtyProps("anchorText")}
                               aria-required="true"
-                              aria-invalid={showFieldErrors && !!v.anchorTextError}
-                              style={{ ...(showFieldErrors && v.anchorTextError ? inpErr : inp), fontFamily: C.mono }}
+                              aria-invalid={liveErr("anchorText", v.anchorTextError)}
+                              style={{ ...(liveErr("anchorText", v.anchorTextError) ? inpErr : inp), fontFamily: C.mono }}
                               placeholder="e.g. fintech onboarding flow"
                             />
-                            {showFieldErrors && v.anchorTextError && fieldErr(v.anchorTextError)}
+                            {liveErr("anchorText", v.anchorTextError) && fieldErr(v.anchorTextError!)}
                           </div>
                         </div>
 
@@ -935,11 +1018,12 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                                 type="url"
                                 value={pair.targetUrl}
                                 onChange={e => updateLinkPair(i, pairIdx, { targetUrl: e.target.value })}
-                                aria-invalid={showFieldErrors && !!v.additionalTargetUrlErrors[pairIdx]}
-                                style={{ ...(showFieldErrors && v.additionalTargetUrlErrors[pairIdx] ? inpErr : inp), fontFamily: C.mono }}
+                              {...dirtyProps(`link${pairIdx}Url`)}
+                                aria-invalid={liveErr(`link${pairIdx}Url`, v.additionalTargetUrlErrors[pairIdx])}
+                                style={{ ...(liveErr(`link${pairIdx}Url`, v.additionalTargetUrlErrors[pairIdx]) ? inpErr : inp), fontFamily: C.mono }}
                                 placeholder="https://yourbrand.com/blog/another-slug"
                               />
-                              {showFieldErrors && v.additionalTargetUrlErrors[pairIdx] && fieldErr(v.additionalTargetUrlErrors[pairIdx]!)}
+                              {liveErr(`link${pairIdx}Url`, v.additionalTargetUrlErrors[pairIdx]) && fieldErr(v.additionalTargetUrlErrors[pairIdx]!)}
                             </div>
                             <div>
                               <FieldLabel>Anchor text #{pairIdx + 2}</FieldLabel>
@@ -947,11 +1031,12 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                                 type="text"
                                 value={pair.anchorText}
                                 onChange={e => updateLinkPair(i, pairIdx, { anchorText: e.target.value })}
-                                aria-invalid={showFieldErrors && !!v.additionalAnchorTextErrors[pairIdx]}
-                                style={{ ...(showFieldErrors && v.additionalAnchorTextErrors[pairIdx] ? inpErr : inp), fontFamily: C.mono }}
+                              {...dirtyProps(`link${pairIdx}Anchor`)}
+                                aria-invalid={liveErr(`link${pairIdx}Anchor`, v.additionalAnchorTextErrors[pairIdx])}
+                                style={{ ...(liveErr(`link${pairIdx}Anchor`, v.additionalAnchorTextErrors[pairIdx]) ? inpErr : inp), fontFamily: C.mono }}
                                 placeholder="e.g. another anchor"
                               />
-                              {showFieldErrors && v.additionalAnchorTextErrors[pairIdx] && fieldErr(v.additionalAnchorTextErrors[pairIdx]!)}
+                              {liveErr(`link${pairIdx}Anchor`, v.additionalAnchorTextErrors[pairIdx]) && fieldErr(v.additionalAnchorTextErrors[pairIdx]!)}
                             </div>
                             <button
                               type="button"
@@ -1092,9 +1177,9 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                                 onDrop={(e) => { e.preventDefault(); handleFileSelect(i, e.dataTransfer.files[0]); }}
                                 style={{
                                   display: "block",
-                                  border: `1.5px dashed ${showFieldErrors && v.fileError ? "#fca5a5" : C.line}`,
+                                  border: `1.5px dashed ${touched && v.fileError ? "#fca5a5" : C.line}`,
                                   borderRadius: 9, padding: 22, textAlign: "center" as const,
-                                  background: showFieldErrors && v.fileError ? "#fff7f7" : C.bg3,
+                                  background: touched && v.fileError ? "#fff7f7" : C.bg3,
                                   cursor: "pointer",
                                 }}
                               >
@@ -1115,7 +1200,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                             The plain "required" message stays gated. */}
                             {item.uploadError
                               ? fieldErr(item.uploadError)
-                              : showFieldErrors && v.fileError
+                              : touched && v.fileError
                               ? fieldErr(v.fileError)
                               : null}
                           </div>
@@ -1125,12 +1210,13 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                               type="url"
                               value={item.articleUrl}
                               onChange={e => change(i, { articleUrl: e.target.value })}
+                              {...dirtyProps("articleUrl")}
                               aria-required="true"
-                              aria-invalid={showFieldErrors && !!v.articleUrlError}
-                              style={{ ...(showFieldErrors && v.articleUrlError ? inpErr : inp), fontFamily: C.mono }}
+                              aria-invalid={liveErr("articleUrl", v.articleUrlError)}
+                              style={{ ...(liveErr("articleUrl", v.articleUrlError) ? inpErr : inp), fontFamily: C.mono }}
                               placeholder="https://yourbrand.com/blog/article-title"
                             />
-                            {showFieldErrors && v.articleUrlError && fieldErr(v.articleUrlError)}
+                            {liveErr("articleUrl", v.articleUrlError) && fieldErr(v.articleUrlError!)}
                           </>
                         )}
                       </div>
@@ -1233,24 +1319,24 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                 {placeError}
               </div>
             )}
-            {/* Nothing left to submit-and-fail on: the button itself stays
-            disabled (and visibly greyed out) until every placement is ready,
-            so there's no click-then-get-told-what's-wrong step anymore — the
-            per-card "Brief needed" pill above and this count are the only
-            signal needed, and neither reads as an error. */}
+            {/* Deliberately clickable on a form that isn't finished yet. A
+            pre-disabled button is a dead end — it can't explain itself, and
+            the customer is left hunting for what's wrong. Clicking it once
+            turns every outstanding problem red and jumps to the first; from
+            then on it greys out until the last one is fixed. */}
             <button
               onClick={handlePlace}
-              disabled={placing || notReadyIdx.length > 0}
+              disabled={placing || (attemptedSubmit && notReadyIdx.length > 0)}
               style={{
                 padding: 16,
-                background: placing || notReadyIdx.length > 0 ? C.ink2 : C.ink,
+                background: placing || (attemptedSubmit && notReadyIdx.length > 0) ? C.ink2 : C.ink,
                 color: "#fff",
                 border: "none",
                 borderRadius: 12,
                 fontWeight: 700,
                 fontSize: 15,
-                cursor: placing || notReadyIdx.length > 0 ? "default" : "pointer",
-                opacity: notReadyIdx.length > 0 && !placing ? 0.55 : 1,
+                cursor: placing || (attemptedSubmit && notReadyIdx.length > 0) ? "default" : "pointer",
+                opacity: (attemptedSubmit && notReadyIdx.length > 0) && !placing ? 0.55 : 1,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -1259,11 +1345,6 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
             >
               {placingStage === "uploading" ? "Uploading article…" : placingStage === "submitting" ? "Placing order…" : "✓ Place order"}
             </button>
-            {notReadyIdx.length > 0 && !placing && (
-              <div style={{ fontSize: 11.5, color: C.mute, textAlign: "center" as const }}>
-                {notReadyIdx.length === 1 ? "1 placement still needs a brief" : `${notReadyIdx.length} placements still need a brief`}
-              </div>
-            )}
             <div style={{ fontSize: 11.5, color: C.mute, textAlign: "center" as const, lineHeight: 1.5 }}>
               By placing this order you agree to the <span style={{ color: C.accent, cursor: "pointer" }}>marketplace terms</span>. We&apos;ll send an invoice for each placement once the publication URL is delivered.
             </div>

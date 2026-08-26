@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { urlProblem, urlProblemMessage } from "@/lib/validate-url";
 import { db } from "@/lib/db";
 import { orders } from "@/lib/db/schema";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
@@ -11,6 +12,18 @@ import { withOrderMetaExt } from "@/lib/orders/metadata";
 import { mirrorOrderToFirestore } from "@/lib/orders/firestore-mirror";
 
 export const dynamic = "force-dynamic";
+
+// zod's .url() accepts `javascript:alert(1)`, `ftp://x.com` and `https:google`,
+// so a target URL that can never resolve — or an unsafe scheme that later gets
+// rendered as an href in the admin UI and in customer emails — validated clean
+// and was written to the database. Same rule the checkout form applies, so the
+// client can't show a green field the server then rejects (or vice versa).
+const linkUrl = z.string().superRefine((value, ctx) => {
+  const problem = urlProblem(value);
+  if (problem) {
+    ctx.addIssue({ code: "custom", message: `This ${urlProblemMessage(problem)}` });
+  }
+});
 
 const itemSchema = z.object({
   // Client-generated only when contentOption is "uploaded": the article file
@@ -24,14 +37,14 @@ const itemSchema = z.object({
   orderType: z.enum(ORDER_TYPES),
   priceType: z.enum(PRICE_TYPES).default("base"),
   articleTitle: z.string().optional(),
-  targetUrl: z.string().url(),
+  targetUrl: linkUrl,
   anchorText: z.string().min(1),
   // Optional extra target-url/anchor-text pairs beyond the primary one above —
   // same {targetUrl, anchorText} shape, just more of them. The primary pair
   // stays required/unchanged for backward compat with everything that already
   // reads orders.targetUrl/anchorText directly (admin search, CSV export).
   additionalLinks: z.array(z.object({
-    targetUrl: z.string().url(),
+    targetUrl: linkUrl,
     anchorText: z.string().min(1),
   })).max(MAX_ADDITIONAL_LINKS).optional(),
   contentNiche: z.string().optional(),
@@ -39,7 +52,7 @@ const itemSchema = z.object({
   contentOption: z.enum(CONTENT_OPTIONS),
   wordCount: z.number().int().min(300).max(5000).optional(),
   requirements: z.string().optional(),
-  articleUrl: z.string().url().optional(),
+  articleUrl: linkUrl.optional(),
   uploadedFileName: z.string().optional(),
   originalFileName: z.string().optional(),
 });
