@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { adminAuth } from "@/lib/firebase/admin";
+import { verifySession } from "@/lib/auth/verify-session";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -18,7 +18,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     const session = cookieStore.get("session")?.value;
     if (!session) return null;
 
-    const decoded = await adminAuth.verifySessionCookie(session, true);
+    const decoded = await verifySession(session);
 
     const result = await db
       .select({ email: users.email, role: users.role, isAdmin: users.isAdmin, companyId: users.companyId })
