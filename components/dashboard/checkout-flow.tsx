@@ -373,6 +373,12 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: 0.2, marginBottom: 6, textTransform: "uppercase",
 };
 
+// Height of one FieldLabel line plus its bottom margin, measured rather than
+// guessed: 11px text renders at a 16.5px line box, + 6px marginBottom. Used to
+// drop a control that has no label of its own onto the same line as the inputs
+// beside it. Keep in step with labelStyle above.
+const LABEL_BLOCK_PX = 22.5;
+
 function FieldLabel({ children, required, hint }: { children: React.ReactNode; required?: boolean; hint?: string }) {
   return (
     <label style={labelStyle}>
@@ -562,15 +568,37 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
   // "Place order" greyed out with nothing on screen explaining why. Once
   // someone has touched a field, its error stays visible whether they leave
   // content behind or not.
-  // Set by the first "Place order" click that hits an incomplete form. Until
-  // then the button stays live; after it, the button locks until every problem
-  // is fixed.
-  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
-
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
   function markDirty(key: string) {
     setDirtyFields(prev => (prev.has(key) ? prev : new Set(prev).add(key)));
   }
+
+  // Whether a given field's error is on screen right now — the single rule the
+  // inline messages, the per-card count and the order button all read, so they
+  // can't disagree about what the customer can see.
+  function errorVisible(i: number, field: string, error: string | null): boolean {
+    return !!error && (touchedIdx.has(i) || dirtyFields.has(`${i}:${field}`));
+  }
+
+  function visibleErrorCount(i: number, item: BriefItem): number {
+    const v = validateBriefItem(item);
+    const shown = (field: string, err: string | null) => (errorVisible(i, field, err) ? 1 : 0);
+    return (
+      shown("title", v.titleError) +
+      shown("targetUrl", v.targetUrlError) +
+      shown("anchorText", v.anchorTextError) +
+      v.additionalTargetUrlErrors.reduce((n, e, pi) => n + shown(`link${pi}Url`, e), 0) +
+      v.additionalAnchorTextErrors.reduce((n, e, pi) => n + shown(`link${pi}Anchor`, e), 0) +
+      shown("articleUrl", v.articleUrlError) +
+      (v.fileError && touchedIdx.has(i) ? 1 : 0)
+    );
+  }
+
+  // "Place order" is live until the customer can actually see something wrong,
+  // then locked until they've fixed it. Anything visible counts, whether it
+  // surfaced from typing into a field or from clicking the button — being shown
+  // an error and still having a live button invites a click that can only fail.
+  const visibleErrors = items.reduce((sum, item, i) => sum + visibleErrorCount(i, item), 0);
 
   // Jump to a placement and reveal everything still missing on it. Marking it
   // touched is the point: the customer asked what's wrong, so stop waiting for
@@ -700,7 +728,6 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
     // the first one. Only then does the button lock, and it unlocks again the
     // moment the last problem is fixed.
     if (notReadyIdx.length > 0) {
-      setAttemptedSubmit(true);
       setTouchedIdx(new Set(items.map((_, i) => i)));
       revealPlacement(notReadyIdx[0]);
       return;
@@ -897,8 +924,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
               // watching that spot — hiding the message there is what leaves
               // "Place order" greyed out for no visible reason.
               const errKey = (field: string) => `${i}:${field}`;
-              const liveErr = (field: string, error: string | null) =>
-                (touched || dirtyFields.has(errKey(field))) && !!error;
+              const liveErr = (field: string, error: string | null) => errorVisible(i, field, error);
               // Attach to every required input: focus alone counts, so tabbing
               // through without typing still explains what's needed.
               const dirtyProps = (field: string) => ({
@@ -1011,7 +1037,15 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                         </div>
 
                         {item.additionalLinks.map((pair, pairIdx) => (
-                          <div key={pairIdx} className="checkout-pair-grid-extra" style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+                          // alignItems is "start", not "end". Bottom-aligning
+                          // looked right only while every cell was the same
+                          // height: the moment one field showed an error, its
+                          // cell grew by the height of that message and the
+                          // anchor-text field next to it was pushed down to
+                          // keep their bottoms level — landing it below the
+                          // URL input instead of beside it. Top-aligning keeps
+                          // the pair on one line however tall either cell gets.
+                          <div key={pairIdx} className="checkout-pair-grid-extra" style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "start" }}>
                             <div>
                               <FieldLabel>Target URL #{pairIdx + 2}</FieldLabel>
                               <input
@@ -1038,11 +1072,16 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                               />
                               {liveErr(`link${pairIdx}Anchor`, v.additionalAnchorTextErrors[pairIdx]) && fieldErr(v.additionalAnchorTextErrors[pairIdx]!)}
                             </div>
+                            {/* Nudged down past the field labels so it sits level
+                            with the two inputs rather than with the labels above
+                            them — the job "end" alignment used to do, before an
+                            error message in either cell could throw the whole
+                            row out. LABEL_BLOCK_PX tracks labelStyle. */}
                             <button
                               type="button"
                               onClick={() => removeLinkPair(i, pairIdx)}
                               title="Remove this link"
-                              style={{ height: 38, width: 38, flexShrink: 0, borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", color: C.mute, fontSize: 15, cursor: "pointer" }}
+                              style={{ marginTop: LABEL_BLOCK_PX, height: 38, width: 38, flexShrink: 0, borderRadius: 9, border: `1px solid ${C.line}`, background: "#fff", color: C.mute, fontSize: 15, cursor: "pointer" }}
                             >
                               ✕
                             </button>
@@ -1321,22 +1360,23 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
             )}
             {/* Deliberately clickable on a form that isn't finished yet. A
             pre-disabled button is a dead end — it can't explain itself, and
-            the customer is left hunting for what's wrong. Clicking it once
-            turns every outstanding problem red and jumps to the first; from
-            then on it greys out until the last one is fixed. */}
+            the customer is left hunting for what's wrong. It locks as soon as
+            there is a visible error to fix, and clicking it while the form is
+            still blank turns every outstanding problem red and jumps to the
+            first. */}
             <button
               onClick={handlePlace}
-              disabled={placing || (attemptedSubmit && notReadyIdx.length > 0)}
+              disabled={placing || visibleErrors > 0}
               style={{
                 padding: 16,
-                background: placing || (attemptedSubmit && notReadyIdx.length > 0) ? C.ink2 : C.ink,
+                background: placing || visibleErrors > 0 ? C.ink2 : C.ink,
                 color: "#fff",
                 border: "none",
                 borderRadius: 12,
                 fontWeight: 700,
                 fontSize: 15,
-                cursor: placing || (attemptedSubmit && notReadyIdx.length > 0) ? "default" : "pointer",
-                opacity: (attemptedSubmit && notReadyIdx.length > 0) && !placing ? 0.55 : 1,
+                cursor: placing || visibleErrors > 0 ? "default" : "pointer",
+                opacity: visibleErrors > 0 && !placing ? 0.55 : 1,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
