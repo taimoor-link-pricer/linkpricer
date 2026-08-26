@@ -1156,7 +1156,16 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                                 </option>
                               ) : (
                                 <>
-                                  <option value="">Select niche…</option>
+                                  {/* Only offered while it's genuinely the
+                                  current value. Picking it can't clear a
+                                  choice — changeNiche maps "" back to the base
+                                  price type, so the field just snaps to
+                                  "General" — which makes it a dead row in the
+                                  list the moment a real niche is showing. It
+                                  does still appear for a link-insertion item,
+                                  whose priceType isn't one of these options
+                                  and so has nothing else to display. */}
+                                  {selected === "" && <option value="">Select niche…</option>}
                                   <option value="General">
                                     General{baseRaw ? ` — ${priceFmt(parseFloat(baseRaw), currency)}` : ""}
                                   </option>
