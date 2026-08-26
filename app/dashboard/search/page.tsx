@@ -492,11 +492,7 @@ function OfferCard({
           </div>
           <span style={{ fontSize: 12, color: C.accent, flexShrink: 0 }}>↗</span>
         </a>
-      ) : (
-        <div style={{ padding: "9px 10px", border: `1px dashed ${C.mute2}`, borderRadius: 8, fontSize: 11.5, color: C.mute, textAlign: "center", background: "#fbfcfe" }}>
-          No published example available
-        </div>
-      )}
+      ) : null}
 
       {/* Buttons */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>

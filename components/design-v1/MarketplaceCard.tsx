@@ -152,11 +152,7 @@ export function MarketplaceCard({
           </div>
           <Icon name="external" size={14} color="var(--lp-accent)" />
         </a>
-      ) : (
-        <div style={{ padding: 10, border: "1px dashed var(--lp-line)", borderRadius: 8, fontSize: 11.5, color: "var(--lp-mute)", textAlign: "center", background: "#fbfcfe" }}>
-          No published example available
-        </div>
-      )}
+      ) : null}
 
       {o.conditions && o.conditions.length > 0 && (
         <div style={{ borderTop: "1px solid var(--lp-line-2)", paddingTop: 12 }}>
