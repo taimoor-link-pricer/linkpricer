@@ -9,6 +9,7 @@ import { getExcludedDomains, normalizeDomain } from "@/lib/integrations/referrin
 import { rerankWithClaude } from "@/lib/ai/claude-rerank";
 import { rerankWithOpenAI } from "@/lib/ai/openai-rerank";
 import { normalizeLanguage, languageDisplayLabel } from "@/lib/search/language-normalize";
+import { countryMatchPrefixes } from "@/lib/search/country-normalize";
 import { getUsdRates, toUsd } from "@/lib/currency";
 import { embedQuery, embeddingForDomain } from "@/lib/search/query-embedding";
 import { vectorCandidates } from "@/lib/search/vector-candidates";
@@ -390,7 +391,6 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // the full story). It's applied in JS against matchedRows below instead,
   // after normalizing both sides to the same ISO 639-1 code.
   const outerFilterClauses = [
-    f.country ? sql`AND LOWER(country) = LOWER(${f.country})` : sql``,
     f.minTraffic != null ? sql`AND COALESCE(traffic, 0) >= ${f.minTraffic}` : sql``,
     f.maxTraffic != null ? sql`AND COALESCE(traffic, 0) <= ${f.maxTraffic}` : sql``,
     f.minDr != null ? sql`AND COALESCE(dr, 0) >= ${f.minDr}` : sql``,
@@ -492,6 +492,23 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // '%.com' can only match a string that actually ENDS in ".com"
   // ("example.company" does not, since it ends in "pany"), same anchoring
   // principle as the word-boundary regex above.
+  // Country is filtered here, inside the candidate CTEs, for the same reason
+  // the TLD filter is (see below): the pool carries a LIMIT with no ORDER BY,
+  // so anything filtered *after* it is filtered against an arbitrary,
+  // plan-dependent slice. Applied as an outer filter, "supplements" + US
+  // returned zero results while the unfiltered search returned thirty —
+  // there were plenty of US domains, just none that happened to survive the
+  // cut. Filtering early builds the pool from that country instead.
+  const countryPrefixes = f.country ? countryMatchPrefixes(f.country) : null;
+  const countryClause = countryPrefixes?.length
+    ? sql`AND (${sql.join(
+        countryPrefixes.map(
+          (p) => sql`btrim(regexp_replace(regexp_replace(lower(d.country_main_traffic), '\(the\)|\ythe\y', ' ', 'g'), '[^a-z ]+', ' ', 'g')) LIKE ${p + "%"}`,
+        ),
+        sql` OR `,
+      )})`
+    : sql``;
+
   const tlds = (f.tlds ?? []).map((t) => t.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
   const tldClauses = tlds.map((t) => sql`d.domain ILIKE ${"%." + t}`);
   const tldClause = tldClauses.length
@@ -520,6 +537,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         WHERE 1 = 1
           ${wordClauses.length ? sql`AND (${sql.join(wordClauses, sql` OR `)})` : sql`AND false`}
           ${tldClause}
+          ${countryClause}
         -- Bound the keyword scan. The word-boundary regex has no index, so a
         -- broad query ("football news") matches tens of thousands of rows and
         -- each one then pays two EXISTS offer-checks — measured between 7s and
@@ -550,6 +568,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
         WHERE ${vectorIdClause ?? sql`false`}
           ${tldClause}
+          ${countryClause}
       ),
       text_matched AS (
         SELECT * FROM keyword_matched
