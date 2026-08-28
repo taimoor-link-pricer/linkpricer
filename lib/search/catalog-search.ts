@@ -454,15 +454,26 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     // already retrieved far better by the vector branch — which is built
     // from exactly that text. The summaries are still SELECTed below and
     // still reach the Claude rerank; they just don't drive the prefilter.
-    // Short label columns only. ai."semanticSummary" is long free text and
-    // was the most expensive term in this regex; the meaning it carried is
-    // now retrieved far better by the vector branch, which is built from
-    // exactly that kind of text. Keeping it here bought little and cost the
-    // scan. (d.semantic_summary was removed earlier for the same reason —
-    // 700-900 chars across 282K rows, measured at 14.8s of SQL.)
-    return sql`(d.category ~* ${pattern} OR d.domain ~* ${pattern}
-      OR d.semantic_category ~* ${pattern}
-      OR ai."semanticCategory" ~* ${pattern})`;
+    // Domain name only, matched by indexed prefix rather than regex.
+    //
+    // The niche/category columns were dropped from this clause: matching a
+    // word *inside* a short label ("health" in "Health - Well-being") cannot
+    // use an index, so every search read all 607K rows — measured at 4-19s,
+    // and the single largest cost in the request. Meaning is now retrieved by
+    // the vector branch, which does that job far better than a one-or-two-
+    // word label ever could; over 42,000 domains are labelled "General" or
+    // "Generalist" and matched nothing useful anyway.
+    //
+    // What this clause still exists for is the case embeddings are weak at:
+    // someone typing a site's name. LIKE 'word%' can use the existing unique
+    // index on domains.domain, so it is a lookup instead of a scan. It only
+    // matches from the start of the domain, which is the shape a name query
+    // takes ("moneycontrol" -> moneycontrol.com).
+    //
+    // Domains without a description are reachable only by name until they
+    // get one; that is the accepted trade for the latency, and it reverses
+    // itself as the backfill runs.
+    return sql`(d.domain LIKE ${w + "%"} OR d.domain LIKE ${"www." + w + "%"})`;
   });
   // The vector branch is OR'd into the same prefilter rather than run as a
   // separate query: a domain qualifies if it matches the query's *words* or
