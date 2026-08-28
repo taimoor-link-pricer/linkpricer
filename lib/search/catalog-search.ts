@@ -7,8 +7,11 @@ import { db } from "@/lib/db";
 import { sql, type SQL } from "drizzle-orm";
 import { getExcludedDomains, normalizeDomain } from "@/lib/integrations/referring-domains-cache";
 import { rerankWithClaude } from "@/lib/ai/claude-rerank";
+import { rerankWithOpenAI } from "@/lib/ai/openai-rerank";
 import { normalizeLanguage, languageDisplayLabel } from "@/lib/search/language-normalize";
 import { getUsdRates, toUsd } from "@/lib/currency";
+import { embedQuery, embeddingForDomain } from "@/lib/search/query-embedding";
+import { vectorCandidates } from "@/lib/search/vector-candidates";
 
 const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
 const DEFAULT_FINAL_RESULT_SIZE = 30;
@@ -313,6 +316,19 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
   return offersMap;
 }
 
+// How many nearest neighbours to pull from the HNSW index. Kept in step with
+// EF_SEARCH in vector-candidates.ts — asking for more than ef_search returns
+// silently fewer rows, not an error. These are then narrowed by the "has a
+// live offer" check and the user's filters, so the surviving count is
+// materially smaller than this.
+const VECTOR_CANDIDATE_LIMIT = 150;
+
+// Prefers a stored vector when the query is a catalog domain (free, and
+// built from that site's real content), otherwise embeds the query text.
+async function resolveQueryVector(query: string): Promise<number[] | null> {
+  return (await embeddingForDomain(query)) ?? (await embedQuery(query));
+}
+
 /**
  * Runs the marketplace catalog semantic search: SQL ILIKE/category prefilter
  * (recall) -> word-overlap shortlist -> Claude rerank (precision) -> real
@@ -338,8 +354,25 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // is computed in that query, and must already be USD-converted there. See
   // usdCaseExpr's comment above for why this can't just be a JS-side toUsd()
   // call the way /api/analyze does it.
-  const rates = await getUsdRates();
+  // Vector retrieval runs concurrently with the FX rates fetch — they are
+  // independent, and the embedding call is the one piece of new latency on
+  // this path (~100-300ms), so it should overlap with work already happening.
+  // Both degrade to the previous behavior on failure: no rates is already
+  // handled below, and no vector simply means keyword-only retrieval.
+  const [rates, queryVector] = await Promise.all([
+    getUsdRates(),
+    sortBy === "match" && process.env.SEARCH_RETRIEVAL_MODE !== "keyword"
+      ? resolveQueryVector(query)
+      : Promise.resolve(null),
+  ]);
   const __tRates = Date.now();
+
+  // Only fetched for sortBy "match" above: a plain-column sort (DR, price,
+  // ...) skips the Claude rerank entirely and orders by a SQL column, so
+  // paying for an embedding there would buy nothing.
+  const vectorHits = queryVector ? await vectorCandidates(queryVector, VECTOR_CANDIDATE_LIMIT) : [];
+  const vectorSimById = new Map(vectorHits.map((v) => [v.id, v.similarity]));
+  const __tVector = Date.now();
 
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
@@ -408,10 +441,33 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const wordBoundaryPattern = (w: string) => `\\y${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\y`;
   const wordClauses = words.map((w) => {
     const pattern = wordBoundaryPattern(w);
-    return sql`(d.category ~* ${pattern} OR d.domain ~* ${pattern} OR ai."semanticCategory" ~* ${pattern} OR ai."semanticSummary" ~* ${pattern})`;
+    // Deliberately NOT matching against d.semantic_summary here. It is a
+    // 700-900 char page description on 282K rows with no text index, so a
+    // regex over it forces a sequential scan and measured 14.8s on a search
+    // that is otherwise ~1s. The short category labels are cheap by
+    // comparison, and the *meaning* carried by those long summaries is
+    // already retrieved far better by the vector branch — which is built
+    // from exactly that text. The summaries are still SELECTed below and
+    // still reach the Claude rerank; they just don't drive the prefilter.
+    return sql`(d.category ~* ${pattern} OR d.domain ~* ${pattern}
+      OR d.semantic_category ~* ${pattern}
+      OR ai."semanticCategory" ~* ${pattern} OR ai."semanticSummary" ~* ${pattern})`;
   });
-  const matchClause = wordClauses.length
-    ? sql`AND (${sql.join(wordClauses, sql` OR `)})`
+  // The vector branch is OR'd into the same prefilter rather than run as a
+  // separate query: a domain qualifies if it matches the query's *words* or
+  // its *meaning*. This is the hybrid part, and both halves are needed —
+  // embeddings are weak on exact tokens (brand names, a specific TLD, a
+  // domain typed in verbatim), which is precisely where the word match is
+  // strong, and vice versa.
+  const vectorIdClause = vectorHits.length
+    ? sql`d.id IN (${sql.join(vectorHits.map((v) => sql`${v.id}`), sql`, `)})`
+    : null;
+  const recallClauses = [
+    ...(wordClauses.length ? [sql`(${sql.join(wordClauses, sql` OR `)})`] : []),
+    ...(vectorIdClause ? [vectorIdClause] : []),
+  ];
+  const matchClause = recallClauses.length
+    ? sql`AND (${sql.join(recallClauses, sql` OR `)})`
     : sql``;
 
   // TLD filter — applied here, inside text_matched (before the `matched`
@@ -439,7 +495,14 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         SELECT d.id, d.domain AS w, d.category, d.country_main_traffic AS country,
                d.language_written_in_website AS language,
                d.domain_rating, d.domain_rating_updated_at, d.org_traffic, d.org_keywords, d.ref_domains,
-               ai."semanticCategory" AS semantic_category, ai."semanticSummary" AS semantic_summary,
+               -- domains.semantic_summary covers ~265K sellable domains with
+               -- full page-content descriptions; lp_domain_ai_metrics covers
+               -- ~51K. Preferring the former (falling back to the latter)
+               -- widens the text the keyword prefilter and the Claude rerank
+               -- can both see by roughly 5x, independently of embeddings.
+               ${vectorIdClause ? sql`(${vectorIdClause})` : sql`false`} AS is_vector,
+               COALESCE(d.semantic_category, ai."semanticCategory") AS semantic_category,
+               COALESCE(d.semantic_summary, ai."semanticSummary") AS semantic_summary,
                ai."valueGrade" AS ai_grade, ai."valueScore" AS ai_score
         FROM domains d
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
@@ -454,10 +517,19 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           UNION ALL
           SELECT 1 FROM supplier_offers so WHERE so.domain_id = t.id AND so.status = 'active' AND so.is_active = true AND so.min_price::float > 0
         )
+        -- Without this ORDER BY the LIMIT takes an arbitrary, plan-dependent
+        -- slice: on a broad query ("supplements" matches thousands by
+        -- keyword) the far smaller set of vector hits was being discarded
+        -- wholesale before aggregation, so the semantic branch silently paid
+        -- for itself and contributed nothing. Vector candidates are the
+        -- scarce, expensive half of retrieval — they must survive the cut.
+        ORDER BY t.is_vector DESC
         LIMIT ${candidatePoolLimit}
       ),
       aggregated AS (
         SELECT
+          d.id AS id,
+          bool_or(d.is_vector) AS is_vector,
           LOWER(d.w) AS domain,
           MAX(d.category) AS raw_category,
           MAX(d.country) AS country,
@@ -528,8 +600,84 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     return words.filter((w) => wordBoundaryRe.get(w)!.test(hay)).length;
   }
 
+  // Shortlist ordering has to see both retrieval branches or the vector half
+  // is wasted: a domain found purely by meaning matches zero query words, so
+  // on word-overlap alone it sorts to the bottom and never reaches the
+  // Claude rerank.
+  //
+  // Reciprocal rank fusion rather than adding the two scores together. The
+  // naive sum (wordCount + cosine) is broken by scale: word count runs 0-N
+  // with N the query length while cosine is bounded at 1.0, so on a 5-word
+  // query any domain matching two words outranked a near-perfect semantic
+  // match. Measured case: "french television listings and streaming guides"
+  // ranked programme-tv.net #3 by pure vector distance, yet keyword matches
+  // pushed it out of the top 40 entirely.
+  //
+  // RRF compares *positions* instead of scores, so the two branches combine
+  // without either's units dominating. K softens the top: with K=60 the gap
+  // between rank 1 and 2 is small relative to the gap between rank 1 and 50,
+  // which keeps a single branch from monopolizing the shortlist.
+  const RRF_K = 60;
+  // Relative pull of each retrieval branch inside the fusion. Vector is
+  // weighted above keyword because meaning-matching is the stronger signal
+  // on the natural-language queries this search actually receives; keyword
+  // is kept in the mix rather than switched off because embeddings are
+  // measurably weak on exact tokens — a brand name, a specific TLD, or a
+  // domain typed in verbatim — where a literal match is the correct answer
+  // and semantic similarity is not.
+  //
+  // Override with SEARCH_RETRIEVAL_MODE for A/B measurement:
+  //   "vector"  vector only    "keyword" keyword only    (default: hybrid)
+  const mode = process.env.SEARCH_RETRIEVAL_MODE ?? "hybrid";
+  const KEYWORD_WEIGHT = mode === "vector" ? 0 : 0.6;
+  const VECTOR_WEIGHT = mode === "keyword" ? 0 : 1;
+  const keywordRank = new Map<string, number>();
+  [...matchedRows]
+    .map((r) => ({ id: String(r.id), rel: relevance(r.domain as string, (r.raw_category as string) ?? "") }))
+    .filter((e) => e.rel > 0)
+    .sort((a, b) => b.rel - a.rel)
+    .forEach((e, i) => keywordRank.set(e.id, i + 1));
+  const vectorRank = new Map(vectorHits.map((v, i) => [v.id, i + 1]));
+
+  // An exact hit on the *domain name* is a different, much stronger signal
+  // than a hit anywhere in the descriptive text, and neither retrieval
+  // branch expresses it: "moneycontrol" is one keyword match among many by
+  // rank, and semantically it is just another finance site, so 150 plausible
+  // finance vectors bury the site the user actually named. Measured, it sat
+  // at #91 on pure RRF and never made the results.
+  //
+  // The bonus is scaled by how much of the query the domain name accounts
+  // for, so a single-word lookup ("moneycontrol") wins outright while an
+  // incidental match inside a longer descriptive query ("television" in
+  // programme-television.org) is only a light nudge. 0.05 sits an order of
+  // magnitude above any achievable RRF score (~0.026 for rank 1 in both
+  // branches), so a full domain-name match reliably takes the top.
+  // Fires only when the domain name accounts for *every* query word — the
+  // "the user named this site" case. Scaling it by a partial fraction was
+  // measurably worse: on "receitas caseiras brasileiras para o jantar" every
+  // domain containing "receitas" collected a bonus larger than any RRF
+  // score, pushing recipe-named domains above the genuinely best semantic
+  // match (tudogostoso.com.br fell from #2 to #18). Partial name overlap is
+  // already represented in the keyword branch and does not need a second,
+  // stronger voice.
+  const DOMAIN_MATCH_BONUS = 0.05;
+  function domainNameBonus(domain: string): number {
+    if (!words.length) return 0;
+    const hit = words.filter((w) => wordBoundaryRe.get(w)!.test(domain)).length;
+    return hit === words.length ? DOMAIN_MATCH_BONUS : 0;
+  }
+
+  function combinedRelevance(row: Record<string, unknown>): number {
+    const id = String(row.id);
+    const kw = keywordRank.get(id);
+    const vec = vectorRank.get(id);
+    return (kw ? KEYWORD_WEIGHT / (RRF_K + kw) : 0)
+      + (vec ? VECTOR_WEIGHT / (RRF_K + vec) : 0)
+      + domainNameBonus(row.domain as string);
+  }
+
   const shortlist = matchedRows
-    .map((r) => ({ row: r, rel: relevance(r.domain as string, (r.raw_category as string) ?? "") }))
+    .map((r) => ({ row: r, rel: combinedRelevance(r) }))
     .sort((a, b) => b.rel - a.rel)
     .slice(0, claudeShortlistSize);
 
@@ -573,7 +721,16 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     // Real semantic ranking over the shortlist. Falls back to the word-overlap
     // ranking above (unchanged behavior) if Claude is unavailable, times out,
     // or returns something unparseable — this call must never fail the search.
-    const claudeScores = await rerankWithClaude(
+    // Provider switch. Defaults to OpenAI: Related Sites already runs on
+    // OpenAI for retrieval (embeddings), so this makes the feature
+    // single-vendor, and the org's data-sharing tier covers ordinary search
+    // volume — whereas the Anthropic key has no credit, which meant every
+    // live search was silently falling back to word-overlap ranking.
+    // Set SEARCH_RERANK_PROVIDER=claude to switch back once it is funded.
+    const rerank = process.env.SEARCH_RERANK_PROVIDER === "claude"
+      ? rerankWithClaude
+      : rerankWithOpenAI;
+    const claudeScores = await rerank(
       query,
       shortlist.map((s) => ({
         domain: s.row.domain as string,
@@ -605,7 +762,8 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   if (__tTotal > 3000) {
     console.log(
       `[searchCatalog] slow search "${query}": total ${__tTotal}ms ` +
-        `(rates ${__tRates - __t0}ms, sql ${__tSql - __tRates}ms/${rows.rows.length} rows, ` +
+        `(rates ${__tRates - __t0}ms, vector ${__tVector - __tRates}ms/${vectorHits.length} hits, ` +
+        `sql ${__tSql - __tVector}ms/${rows.rows.length} rows, ` +
         `rerank ${__tRerank - __tSql}ms, offers ${__tTotal - (__tRerank - __t0)}ms)`
     );
   }
