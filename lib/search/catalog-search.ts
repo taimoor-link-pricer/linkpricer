@@ -492,6 +492,24 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // '%.com' can only match a string that actually ENDS in ".com"
   // ("example.company" does not, since it ends in "pany"), same anchoring
   // principle as the word-boundary regex above.
+  // DR, traffic and category are filtered inside the candidate CTEs for the
+  // same reason as country and TLD: the pool carries a LIMIT with no ORDER
+  // BY, so a filter applied afterwards runs against an arbitrary slice and
+  // silently returns fewer rows than match. Country was the visible case (0
+  // results where 30 existed); these degrade less obviously but identically.
+  //
+  // Price and grade cannot move here — both are computed during aggregation
+  // from the offer joins, so they have no column to test at this stage and
+  // stay as outer filters.
+  const poolFilterClauses = [
+    f.minDr != null ? sql`AND COALESCE(d.domain_rating, 0) >= ${f.minDr}` : sql``,
+    f.maxDr != null ? sql`AND COALESCE(d.domain_rating, 0) <= ${f.maxDr}` : sql``,
+    f.minTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) >= ${f.minTraffic}` : sql``,
+    f.maxTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) <= ${f.maxTraffic}` : sql``,
+    f.category ? sql`AND LOWER(d.category) LIKE LOWER(${"%" + f.category + "%"})` : sql``,
+  ];
+  const poolFilters = sql.join(poolFilterClauses, sql` `);
+
   // Country is filtered here, inside the candidate CTEs, for the same reason
   // the TLD filter is (see below): the pool carries a LIMIT with no ORDER BY,
   // so anything filtered *after* it is filtered against an arbitrary,
@@ -538,6 +556,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           ${wordClauses.length ? sql`AND (${sql.join(wordClauses, sql` OR `)})` : sql`AND false`}
           ${tldClause}
           ${countryClause}
+          ${poolFilters}
         -- Bound the keyword scan. The word-boundary regex has no index, so a
         -- broad query ("football news") matches tens of thousands of rows and
         -- each one then pays two EXISTS offer-checks — measured between 7s and
@@ -569,6 +588,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         WHERE ${vectorIdClause ?? sql`false`}
           ${tldClause}
           ${countryClause}
+          ${poolFilters}
       ),
       text_matched AS (
         SELECT * FROM keyword_matched
