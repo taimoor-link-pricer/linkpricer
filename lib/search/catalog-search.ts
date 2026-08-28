@@ -454,9 +454,15 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     // already retrieved far better by the vector branch — which is built
     // from exactly that text. The summaries are still SELECTed below and
     // still reach the Claude rerank; they just don't drive the prefilter.
+    // Short label columns only. ai."semanticSummary" is long free text and
+    // was the most expensive term in this regex; the meaning it carried is
+    // now retrieved far better by the vector branch, which is built from
+    // exactly that kind of text. Keeping it here bought little and cost the
+    // scan. (d.semantic_summary was removed earlier for the same reason —
+    // 700-900 chars across 282K rows, measured at 14.8s of SQL.)
     return sql`(d.category ~* ${pattern} OR d.domain ~* ${pattern}
       OR d.semantic_category ~* ${pattern}
-      OR ai."semanticCategory" ~* ${pattern} OR ai."semanticSummary" ~* ${pattern})`;
+      OR ai."semanticCategory" ~* ${pattern})`;
   });
   // The vector branch is OR'd into the same prefilter rather than run as a
   // separate query: a domain qualifies if it matches the query's *words* or
@@ -496,7 +502,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // lookup are independent — run them concurrently rather than serially.
   const [rows, exclusionResult] = await Promise.all([
     db.execute(sql`
-      WITH text_matched AS MATERIALIZED (
+      WITH keyword_matched AS MATERIALIZED (
         SELECT d.id, d.domain AS w, d.category, d.country_main_traffic AS country,
                d.language_written_in_website AS language,
                d.domain_rating, d.domain_rating_updated_at, d.org_traffic, d.org_keywords, d.ref_domains,
@@ -505,14 +511,14 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
                -- ~51K. Preferring the former (falling back to the latter)
                -- widens the text the keyword prefilter and the Claude rerank
                -- can both see by roughly 5x, independently of embeddings.
-               ${vectorIdClause ? sql`(${vectorIdClause})` : sql`false`} AS is_vector,
+               false AS is_vector,
                COALESCE(d.semantic_category, ai."semanticCategory") AS semantic_category,
                COALESCE(d.semantic_summary, ai."semanticSummary") AS semantic_summary,
                ai."valueGrade" AS ai_grade, ai."valueScore" AS ai_score
         FROM domains d
         LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
         WHERE 1 = 1
-          ${matchClause}
+          ${wordClauses.length ? sql`AND (${sql.join(wordClauses, sql` OR `)})` : sql`AND false`}
           ${tldClause}
         -- Bound the keyword scan. The word-boundary regex has no index, so a
         -- broad query ("football news") matches tens of thousands of rows and
@@ -523,6 +529,32 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         -- unaffected by this cap; it only stops the keyword arm from
         -- scanning the whole catalogue on generic words.
         LIMIT ${KEYWORD_SCAN_LIMIT}
+      ),
+      -- The vector arm is a separate CTE, deliberately outside the keyword
+      -- LIMIT above. Applying one cap to the combined set silently dropped
+      -- the vector hits: with no ORDER BY, Postgres returns an arbitrary
+      -- 4000 rows, and on a broad query the keyword matches crowd out the
+      -- ~150 semantic ones. Measured, serfel.fr ranked #1 by cosine distance
+      -- and never appeared in the results at all. Vector rows are already
+      -- bounded by VECTOR_CANDIDATE_LIMIT and are selected by primary key,
+      -- so they need no cap of their own.
+      vector_matched AS MATERIALIZED (
+        SELECT d.id, d.domain AS w, d.category, d.country_main_traffic AS country,
+               d.language_written_in_website AS language,
+               d.domain_rating, d.domain_rating_updated_at, d.org_traffic, d.org_keywords, d.ref_domains,
+               true AS is_vector,
+               COALESCE(d.semantic_category, ai."semanticCategory") AS semantic_category,
+               COALESCE(d.semantic_summary, ai."semanticSummary") AS semantic_summary,
+               ai."valueGrade" AS ai_grade, ai."valueScore" AS ai_score
+        FROM domains d
+        LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
+        WHERE ${vectorIdClause ?? sql`false`}
+          ${tldClause}
+      ),
+      text_matched AS (
+        SELECT * FROM keyword_matched
+        UNION
+        SELECT * FROM vector_matched
       ),
       sellable AS (
         SELECT t.* FROM text_matched t
