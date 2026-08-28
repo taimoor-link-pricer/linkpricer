@@ -323,6 +323,11 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
 // materially smaller than this.
 const VECTOR_CANDIDATE_LIMIT = 150;
 
+// Ceiling on rows the keyword branch may feed into the offer-existence
+// check. Generous enough that narrow queries are unaffected, low enough that
+// a generic word cannot turn one search into a full-table scan.
+const KEYWORD_SCAN_LIMIT = 4000;
+
 // Prefers a stored vector when the query is a catalog domain (free, and
 // built from that site's real content), otherwise embeds the query text.
 async function resolveQueryVector(query: string): Promise<number[] | null> {
@@ -509,22 +514,36 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         WHERE 1 = 1
           ${matchClause}
           ${tldClause}
+        -- Bound the keyword scan. The word-boundary regex has no index, so a
+        -- broad query ("football news") matches tens of thousands of rows and
+        -- each one then pays two EXISTS offer-checks — measured between 7s and
+        -- 48s of SQL for the same query, and the slow end blows the
+        -- serverless timeout. Vector hits are already capped at
+        -- VECTOR_CANDIDATE_LIMIT and are OR'd in by primary key, so they are
+        -- unaffected by this cap; it only stops the keyword arm from
+        -- scanning the whole catalogue on generic words.
+        LIMIT ${KEYWORD_SCAN_LIMIT}
       ),
-      matched AS (
+      sellable AS (
         SELECT t.* FROM text_matched t
         WHERE EXISTS (
           SELECT 1 FROM marketplace_offers mo WHERE mo.domain_id = t.id AND mo.available = true AND mo.min_price::float > 0
           UNION ALL
           SELECT 1 FROM supplier_offers so WHERE so.domain_id = t.id AND so.status = 'active' AND so.is_active = true AND so.min_price::float > 0
         )
-        -- Without this ORDER BY the LIMIT takes an arbitrary, plan-dependent
-        -- slice: on a broad query ("supplements" matches thousands by
-        -- keyword) the far smaller set of vector hits was being discarded
-        -- wholesale before aggregation, so the semantic branch silently paid
-        -- for itself and contributed nothing. Vector candidates are the
-        -- scarce, expensive half of retrieval — they must survive the cut.
-        ORDER BY t.is_vector DESC
-        LIMIT ${candidatePoolLimit}
+      ),
+      -- Two independently-bounded arms rather than one ORDER BY + LIMIT.
+      -- Vector hits must survive the candidate cap — on a broad query the
+      -- thousands of keyword rows would otherwise displace them wholesale
+      -- and the semantic branch would contribute nothing. But expressing
+      -- that as ORDER BY is_vector DESC + LIMIT made Postgres materialise
+      -- and sort *every* matching row before taking n: measured 57s of SQL
+      -- on "football news", enough to blow the serverless timeout. Giving
+      -- each arm its own LIMIT keeps the guarantee and lets both stop early.
+      matched AS (
+        (SELECT * FROM sellable WHERE is_vector LIMIT ${VECTOR_CANDIDATE_LIMIT})
+        UNION
+        (SELECT * FROM sellable WHERE NOT is_vector LIMIT ${candidatePoolLimit})
       ),
       aggregated AS (
         SELECT

@@ -20,11 +20,17 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_SUMMARY_CHARS = 200;
 const MAX_OUTPUT_TOKENS = 4000;
 
-// Matches claude-rerank.ts. Splitting a large shortlist into concurrent
-// batches cuts wall-clock latency roughly in proportion to the batch count,
-// since each batch is its own request. Scores are independent per candidate,
-// so batching changes only how fast results arrive, not what they are.
-const BATCH_SIZE = 40;
+// Splitting the shortlist into concurrent batches cuts wall-clock latency
+// roughly in proportion to the batch count, since each is its own request
+// and scores are independent per candidate — batching changes how fast
+// results arrive, not what they are.
+//
+// 20 rather than the 40 the Claude path used: generating 40 JSON entries in
+// one completion took the full REQUEST_TIMEOUT_MS on broad queries, so the
+// rerank timed out and every result fell back to word-overlap scoring
+// (measured: "football news" rerank 20037ms, top result 7%). Output length
+// is what dominates here, so halving the batch roughly halves each call.
+const BATCH_SIZE = 20;
 
 export interface RerankCandidate {
   domain: string;
