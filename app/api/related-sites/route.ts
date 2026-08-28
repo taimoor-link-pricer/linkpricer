@@ -21,7 +21,12 @@ export const maxDuration = 60;
 // chat's /api/homepage-search route. This file only adds auth + quota.
 const WEEKLY_LIMIT = 10;
 const EVENT_TYPE = "related_sites_search";
-const CLAUDE_SHORTLIST_SIZE = 80;
+// 160, not 80. The rerank now replies with positional scores instead of
+// {domain, score} objects, which cut its latency roughly threefold
+// (lib/ai/openai-rerank.ts), and that headroom buys candidates rather than
+// speed alone: at 80 the cut was measurably discarding sites the model then
+// scored 90+ when it could see them.
+const CLAUDE_SHORTLIST_SIZE = 160;
 const FINAL_RESULT_SIZE = 30;
 // Plain-column sorts (DR/traffic/price/keywords/refDomains) skip Claude
 // entirely, so they can afford to return a much larger, unbounded-feeling

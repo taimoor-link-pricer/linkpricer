@@ -777,13 +777,56 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       + domainNameBonus(row.domain as string);
   }
 
-  const shortlist = matchedRows
-    .map((r) => ({ row: r, rel: combinedRelevance(r) }))
-    .sort((a, b) => b.rel - a.rel)
-    .slice(0, claudeShortlistSize);
+  // Seats on the shortlist reserved for the strongest vector hits, taken by
+  // vector rank before the RRF cut runs.
+  //
+  // Without this the two branches compete for every seat, and the keyword
+  // branch wins the middle of the list: a keyword hit at rank 20 scores
+  // 0.6/(60+20) = 0.0075, which beats a vector hit at rank 75 on
+  // 1/(60+75) = 0.0074. Measured consequence — thehackernews.com was
+  // retrieved correctly at vector rank 75 with a description and an
+  // embedding, and was still cut before the rerank ever saw it, on a search
+  // for "enterprise cybersecurity". Widening the shortlist to 160 surfaced
+  // 19 such domains across 8 queries, every one of them scored 90+ by the
+  // model once it could actually see them.
+  //
+  // Membership is guaranteed here; ordering is still RRF below, so the
+  // fallback path (rerank unavailable) keeps its existing behavior.
+  //
+  // A share rather than a fixed count, because callers size the shortlist
+  // very differently — /api/related-sites asks for 160, the homepage chat
+  // for 25 (app/api/homepage-search/route.ts). A fixed 100 would hand the
+  // homepage's entire shortlist to the vector branch and leave the keyword
+  // branch no seats at all, which is precisely the failure this is meant to
+  // fix, only pointed the other way: a site typed in by name that is not
+  // also a close semantic match would stop being findable.
+  const VECTOR_SEAT_SHARE = 0.6;
+  const VECTOR_GUARANTEED_SEATS = Math.round(claudeShortlistSize * VECTOR_SEAT_SHARE);
+
+  const ranked = matchedRows.map((r) => ({ row: r, rel: combinedRelevance(r) }));
+  const seated = new Set<string>();
+  const shortlist: typeof ranked = [];
+
+  if (VECTOR_WEIGHT > 0) {
+    for (const e of ranked
+      .filter((e) => vectorRank.has(String(e.row.id)))
+      .sort((a, b) => vectorRank.get(String(a.row.id))! - vectorRank.get(String(b.row.id))!)
+      .slice(0, Math.min(VECTOR_GUARANTEED_SEATS, claudeShortlistSize))) {
+      shortlist.push(e);
+      seated.add(String(e.row.id));
+    }
+  }
+  for (const e of [...ranked].sort((a, b) => b.rel - a.rel)) {
+    if (shortlist.length >= claudeShortlistSize) break;
+    if (seated.has(String(e.row.id))) continue;
+    shortlist.push(e);
+    seated.add(String(e.row.id));
+  }
+  shortlist.sort((a, b) => b.rel - a.rel);
 
   let scored: { row: Record<string, unknown>; matchPct: number }[];
   let total: number;
+  let offersPromise: Promise<Map<string, CatalogSearchOffer[]>> | null = null;
   // True only when matchPct below actually came from Claude's semantic
   // judgment, not the word-overlap fallback (Claude unavailable/timed
   // out/unparseable, or sortBy skipped it entirely) — see lowRelevance below.
@@ -828,9 +871,28 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     // volume — whereas the Anthropic key has no credit, which meant every
     // live search was silently falling back to word-overlap ranking.
     // Set SEARCH_RERANK_PROVIDER=claude to switch back once it is funded.
+    // SEARCH_RERANK_PROVIDER=none disables the LLM pass entirely and drops
+    // through to the RRF fallback below. That is the A/B control for the
+    // question "does the rerank earn its 5-6s over pure retrieval order?" —
+    // same measurement hook as SEARCH_RETRIEVAL_MODE above.
     const rerank = process.env.SEARCH_RERANK_PROVIDER === "claude"
       ? rerankWithClaude
-      : rerankWithOpenAI;
+      : process.env.SEARCH_RERANK_PROVIDER === "none"
+        ? async (): Promise<Map<string, number> | null> => null
+        : rerankWithOpenAI;
+
+    // Kick the offers lookup off *before* awaiting the rerank. The two are
+    // independent (one is Postgres, one is OpenAI) and were previously
+    // sequential, so the offers round trip — measured 1.2-2.0s — was pure
+    // added latency waiting behind a call that takes seconds anyway.
+    //
+    // It has to cover the whole shortlist rather than the final 30, because
+    // which 30 survive is exactly what the rerank is still deciding. That is
+    // a wider query than before; it stays worth it only while it finishes
+    // inside the rerank's own latency, which is what the timing log below
+    // reports.
+    offersPromise = fetchOffersForDomains(shortlist.map((s) => s.row.domain as string), rates);
+
     const claudeScores = await rerank(
       query,
       shortlist.map((s) => ({
@@ -840,13 +902,18 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       }))
     );
 
-    total = shortlist.length;
     usedClaudeScoring = !!claudeScores;
+    // A partially-failed rerank returns only the domains it actually scored
+    // (see rerankWithOpenAI). Those are filtered out rather than defaulted to
+    // 0: a zero is a claim the model judged the site irrelevant, which it
+    // never did, and it would park unscored rows at the bottom of the list
+    // displaying "0% match".
     scored = claudeScores
       ? shortlist
+          .filter((s) => claudeScores.has(s.row.domain as string))
           .map((s) => ({
             row: s.row,
-            matchPct: Math.round(Math.max(0, Math.min(100, claudeScores.get(s.row.domain as string) ?? 0))),
+            matchPct: Math.round(Math.max(0, Math.min(100, claudeScores.get(s.row.domain as string)!))),
           }))
           .sort((a, b) => b.matchPct - a.matchPct)
           .slice(0, finalResultSize)
@@ -855,10 +922,16 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           const maxRel = Math.max(1, ...top.map((s) => s.rel));
           return top.map((s) => ({ row: s.row, matchPct: Math.round((s.rel / maxRel) * 100) }));
         })();
+    total = claudeScores ? claudeScores.size : shortlist.length;
   }
 
   const __tRerank = Date.now();
-  const offersMap = await fetchOffersForDomains(scored.map((s) => s.row.domain as string), rates);
+  // Already in flight alongside the rerank on the "match" path; only the
+  // plain-column sorts, which skip the rerank entirely and so have no
+  // latency to hide behind, pay for it here.
+  const offersMap = offersPromise
+    ? await offersPromise
+    : await fetchOffersForDomains(scored.map((s) => s.row.domain as string), rates);
   const __tTotal = Date.now() - __t0;
   if (__tTotal > 3000) {
     console.log(
