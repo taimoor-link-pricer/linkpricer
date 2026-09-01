@@ -47,10 +47,13 @@ function AdminSidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
     }
   }
 
-  // Only shown for genuine dual-capability accounts -- role stays "client"
-  // for these, unlike legacy vendor-role admins who have no real client
-  // account/data to switch into.
-  const canSwitchToClient = profile?.isAdmin && profile.role === "client";
+  // Gated on the isAdmin capability alone, not on role. Legacy admins carry
+  // role="vendor" while newer dual-capability accounts keep role="client";
+  // both are real accounts whose client-side data is scoped by uid (company
+  // is optional), so both have a usable client view to switch into. Gating on
+  // role === "client" here is what left vendor-role admins stuck in /admin
+  // with no way over to the client side.
+  const canSwitchToClient = Boolean(profile?.isAdmin);
 
   function isActive(href: string) {
     return href === ROUTES.admin ? pathname === href : pathname.startsWith(href);

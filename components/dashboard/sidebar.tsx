@@ -37,7 +37,11 @@ interface SidebarProps {
 export function DashboardSidebar({ isOpen, onClose }: SidebarProps) {
   const { profile, loading, handleSignOut } = useAuthContext();
   const pathname = usePathname();
-  const isAdmin = profile?.role === "vendor";
+  // The capability column, not the legacy role marker -- this drives the
+  // Admin links that are a client-view admin's only way back to /admin, and
+  // role === "vendor" would hide them from dual-capability (role="client")
+  // admins, stranding them on the client side.
+  const isAdmin = Boolean(profile?.isAdmin);
 
   const firstName = profile?.displayName
     ? profile.displayName.split(" ")[0]

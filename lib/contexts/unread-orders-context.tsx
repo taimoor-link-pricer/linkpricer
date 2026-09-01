@@ -63,13 +63,14 @@ export function UnreadOrdersProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // /dashboard/* redirects admins (role "vendor") to /admin before they'd
-  // ever see this — see auth-context.tsx — but this masks `unreadIds` behind
-  // the same guard regardless, rather than relying on that redirect: orders
-  // belong to clients, and this way there's no state to reset (and no
+  // Gated on having a profile at all, not on role: this provider only mounts
+  // under /dashboard/*, and an admin who has explicitly switched to client
+  // view is a legitimate visitor there with orders of their own (the summary
+  // API scopes to their uid/company either way). Keeping the mask here rather
+  // than relying on a redirect also means there's no state to reset (and no
   // setState-in-effect to avoid) when profile briefly clears on sign-out —
   // consumers just read zero until the tree unmounts.
-  const canFetch = !!profile && profile.role !== "vendor";
+  const canFetch = !!profile;
   const effectiveUnreadIds = canFetch ? unreadIds : EMPTY_SET;
 
   useEffect(() => {
