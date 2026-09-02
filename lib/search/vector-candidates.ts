@@ -18,6 +18,8 @@ import { toVectorLiteral } from "./query-embedding";
 // filter that runs after this.
 const EF_SEARCH = 150;
 
+const QUERY_TIMEOUT_MS = 10_000;
+
 export interface VectorCandidate {
   id: string;
   similarity: number;
@@ -36,8 +38,21 @@ export interface VectorCandidate {
 export async function vectorCandidates(vec: number[], limit: number): Promise<VectorCandidate[]> {
   const rawUrl = process.env.DATABASE_URL;
   if (!rawUrl) return [];
-  const sql = neon(rawUrl.replace(/[&?]channel_binding=require/g, ""));
   const literal = toVectorLiteral(vec);
+
+  // Hard cap on how long the search will wait for this read. Without one the
+  // request simply hangs on whatever the connection is doing — observed live
+  // at 75s and again at 299s (ending in ECONNRESET) — and since the routes
+  // that call this run under `maxDuration = 60`, that is not a slow search,
+  // it is a 504 where a keyword-only answer was available the whole time.
+  // Abort turns the worst case back into the documented degradation below.
+  // Healthy runs measure 0.5-2.7s against the live 282K-vector index, so 10s
+  // is far outside normal and only fires on a genuinely stuck connection.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), QUERY_TIMEOUT_MS);
+  const sql = neon(rawUrl.replace(/[&?]channel_binding=require/g, ""), {
+    fetchOptions: { signal: controller.signal },
+  });
 
   try {
     const [, rows] = await sql.transaction([
@@ -54,8 +69,11 @@ export async function vectorCandidates(vec: number[], limit: number): Promise<Ve
     }));
   } catch (err) {
     // Vector retrieval is additive: on failure the search still runs on the
-    // keyword branch alone, which is the pre-vector behavior.
+    // keyword branch alone, which is the pre-vector behavior. A timeout takes
+    // this same path deliberately — half a search now beats no search in 60s.
     console.error("[vectorCandidates] failed:", err);
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }

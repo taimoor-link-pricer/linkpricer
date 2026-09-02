@@ -380,6 +380,19 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const vectorSimById = new Map(vectorHits.map((v) => [v.id, v.similarity]));
   const __tVector = Date.now();
 
+  // We asked for neighbours and got none. That is not a real answer: the
+  // vector query carries no WHERE beyond "has an embedding" against 282K
+  // vectors, so it returns `limit` rows or it failed (timeout, connection
+  // reset — vectorCandidates swallows both and returns []). The search still
+  // completes on the keyword branch, which is the intended degradation, but
+  // the result is materially worse and must not be written to the cache
+  // below: observed live, one failed vector read pinned "SaaS website about
+  // VPN" to vpn-test.no (DR 6, 1 monthly visit) for the full 3-minute TTL,
+  // served to every visitor who searched it, long after the connection had
+  // recovered. Serving one degraded answer is the cost of a blip; serving it
+  // for three minutes is a bug.
+  const vectorDegraded = queryVector !== null && vectorHits.length === 0;
+
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
   // as plain column aliases to filter on.
@@ -994,11 +1007,13 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
 
   const output: CatalogSearchOutput = { results, lowRelevance, degradedAhrefs, total };
 
-  if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
-    const oldestKey = searchCache.keys().next().value;
-    if (oldestKey !== undefined) searchCache.delete(oldestKey);
+  if (!vectorDegraded) {
+    if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+      const oldestKey = searchCache.keys().next().value;
+      if (oldestKey !== undefined) searchCache.delete(oldestKey);
+    }
+    searchCache.set(cacheKey, { result: output, cachedAt: Date.now() });
   }
-  searchCache.set(cacheKey, { result: output, cachedAt: Date.now() });
 
   return output;
 }
