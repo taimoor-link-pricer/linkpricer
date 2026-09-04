@@ -6,7 +6,7 @@ import { PLANS, type PlanKey } from "@/lib/stripe";
 // Every lookup here reads process.env at call time rather than closing over a
 // value captured at module load. `PLANS[x].priceId` is populated at import
 // time, which in a bundled build means the value is inlined at *build* time —
-// see the same note in /api/developers/checkout. Reading it live keeps a price
+// see the same note in /api/developers/subscribe. Reading it live keeps a price
 // rotation from silently requiring a redeploy.
 
 export function priceIdForPlan(plan: PlanKey): string {

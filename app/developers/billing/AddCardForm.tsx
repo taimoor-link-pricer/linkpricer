@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
 
+// The instance type handed to onDone — distinct from the module's own `Stripe`
+// promise type used by loadStripe above.
+type StripeJs = NonNullable<Awaited<ReturnType<typeof loadStripe>>>;
+
 // loadStripe must be called once, outside render — calling it per render
 // refetches Stripe.js and throws away the mounted iframe on every keystroke.
 // It's lazy so a page that never opens the card form never loads Stripe.js.
@@ -19,9 +23,17 @@ function getStripe() {
 function CardFields({
   onDone,
   onCancel,
+  submitLabel,
 }: {
-  onDone: (paymentMethodId: string | null) => Promise<void> | void;
+  // The live Stripe instance is handed back alongside the payment method
+  // because it is only obtainable inside this Elements provider. A caller that
+  // needs to finish a 3DS challenge on a following payment (subscribing, as
+  // opposed to merely saving a card) has no other way to reach it, and
+  // mounting a second provider just to get one would tear down this iframe.
+  // Returning a string from onDone renders it as the form's error.
+  onDone: (paymentMethodId: string | null, stripe: StripeJs) => Promise<void | string> | void | string;
   onCancel: () => void;
+  submitLabel?: { idle: string; busy: string };
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -75,9 +87,13 @@ function CardFields({
           ? setupIntent.payment_method
           : (setupIntent.payment_method?.id ?? null);
       // Stay in the submitting state — onDone is still working, and dropping
-      // back to an idle "Save card" button invites a second submission of a
-      // SetupIntent that has already succeeded.
-      await onDone(pm);
+      // back to an idle button invites a second submission of a SetupIntent
+      // that has already succeeded.
+      const failure = await onDone(pm, stripe);
+      if (failure) {
+        setError(failure);
+        setSubmitting(false);
+      }
       return;
     }
     if (setupIntent?.status === "processing") {
@@ -112,7 +128,7 @@ function CardFields({
           Cancel
         </button>
         <button type="submit" className="bl-btn bl-btn-primary" disabled={!stripe || !ready || submitting}>
-          {submitting ? "Saving…" : "Save card"}
+          {submitting ? (submitLabel?.busy ?? "Saving…") : (submitLabel?.idle ?? "Save card")}
         </button>
       </div>
     </form>
@@ -123,10 +139,12 @@ export default function AddCardForm({
   clientSecret,
   onDone,
   onCancel,
+  submitLabel,
 }: {
   clientSecret: string;
-  onDone: (paymentMethodId: string | null) => Promise<void> | void;
+  onDone: (paymentMethodId: string | null, stripe: StripeJs) => Promise<void | string> | void | string;
   onCancel: () => void;
+  submitLabel?: { idle: string; busy: string };
 }) {
   return (
     <Elements
@@ -150,7 +168,7 @@ export default function AddCardForm({
         },
       }}
     >
-      <CardFields onDone={onDone} onCancel={onCancel} />
+      <CardFields onDone={onDone} onCancel={onCancel} submitLabel={submitLabel} />
     </Elements>
   );
 }

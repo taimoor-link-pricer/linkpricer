@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, Suspense } from "react";
+import AddCardForm from "../billing/AddCardForm";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -62,6 +63,10 @@ function DashboardContent() {
   const [copied, setCopied] = useState(false);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
+  // Inline subscribe: the plan being bought and the SetupIntent secret that
+  // lets Stripe Elements collect the card on this page. Both null = form closed.
+  const [payPlan, setPayPlan] = useState<PlanKey | null>(null);
+  const [paySecret, setPaySecret] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,21 +254,74 @@ function DashboardContent() {
     }
   }
 
+  /**
+   * Opens the inline card form for a plan.
+   *
+   * Previously this created a Stripe Checkout Session and navigated away to
+   * checkout.stripe.com. Paying now happens on this page: a SetupIntent lets
+   * Elements collect and store the card in Stripe's own iframe -- the number
+   * still never reaches our servers -- and the subscription is created from the
+   * resulting payment method by POST /api/developers/subscribe.
+   */
   async function startCheckout(plan: PlanKey) {
     if (!firebaseUser) return;
     setCheckoutLoading(plan);
     try {
-      const res = await fetch("/api/developers/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
-      });
-      const { url, error } = await res.json();
-      if (url) window.location.href = url;
-      else alert(error ?? "Could not start checkout.");
+      const res = await fetch("/api/developers/billing/setup-intent", { method: "POST" });
+      const j = await res.json();
+      if (!res.ok || !j.clientSecret) {
+        alert(j.message ?? j.error ?? "Could not start the payment form.");
+        return;
+      }
+      setPaySecret(j.clientSecret);
+      setPayPlan(plan);
     } finally {
       setCheckoutLoading(null);
     }
+  }
+
+  /**
+   * Turns the saved card into a live subscription, then shows the key.
+   *
+   * Returning a string surfaces it as the card form's own error, which keeps a
+   * decline next to the field that caused it rather than in an alert().
+   */
+  async function subscribeWithCard(
+    paymentMethodId: string | null,
+    stripe: Parameters<NonNullable<Parameters<typeof AddCardForm>[0]["onDone"]>>[1]
+  ): Promise<void | string> {
+    if (!payPlan) return "Pick a plan first.";
+    const res = await fetch("/api/developers/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: payPlan, paymentMethodId }),
+    });
+    const j = await res.json();
+
+    if (res.ok && j.requiresAction && j.clientSecret) {
+      // The issuer wants a challenge on the first charge. Confirm it with the
+      // same Stripe instance the card was entered into, then tell the server to
+      // finalize -- the key is only issued once the payment has actually cleared.
+      const { error } = await stripe.confirmPayment({
+        clientSecret: j.clientSecret,
+        redirect: "if_required",
+      });
+      if (error) return error.message ?? "That payment could not be completed.";
+      const done = await fetch("/api/developers/subscribe", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriptionId: j.subscriptionId }),
+      });
+      if (!done.ok) return (await done.json()).message ?? "Payment went through but the key could not be issued.";
+    } else if (!res.ok) {
+      return j.message ?? j.error ?? "Could not start your subscription.";
+    }
+
+    setPayPlan(null);
+    setPaySecret(null);
+    ackedKeyRef.current = false; // the new key gets its own one-time reveal
+    await fetchMe();
+    pollForKey();
   }
 
   function copyKey(key: string) {
@@ -301,6 +359,16 @@ function DashboardContent() {
         .db-key-btn.primary:hover { background: #003a99; }
         .db-key-btn.success { background: #dcfce7; color: #166534; border-color: #86efac; }
         .db-key-warn { font-size: 12px; color: #9ca3af; margin-top: 10px; }
+        .db-pay { padding: 4px 2px 2px; }
+        .db-pay-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+        .db-pay-head strong { font-size: 15px; color: #111827; }
+        .db-pay-head span { font-size: 12.5px; color: #6b7280; }
+        .db-pay .bl-error { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 6px; padding: 9px 12px; font-size: 13px; margin-top: 12px; }
+        .db-pay .bl-pe-loading { font-size: 13px; color: #6b7280; padding: 10px 0; }
+        .db-pay .bl-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .db-pay .bl-btn { border: 1px solid #e8eaed; background: #fff; border-radius: 8px; padding: 9px 16px; font-size: 13.5px; font-weight: 600; cursor: pointer; color: #374151; }
+        .db-pay .bl-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .db-pay .bl-btn-primary { background: #0052cc; border-color: #0052cc; color: #fff; }
         .db-no-key { text-align: center; padding: 32px; }
         .db-no-key p { color: #6b7280; font-size: 14px; margin-bottom: 20px; }
 
@@ -455,16 +523,34 @@ function DashboardContent() {
                   </div>
                 </>
               )
+            ) : payPlan && paySecret ? (
+              /* Paying happens here, on our own page. The fields inside are a
+                 Stripe iframe, so the card number never reaches this origin. */
+              <div className="db-pay">
+                <div className="db-pay-head">
+                  <strong>{PLAN_DETAILS[payPlan].label}</strong>
+                  <span>{PLAN_DETAILS[payPlan].price} · {PLAN_DETAILS[payPlan].queries} · cancel anytime</span>
+                </div>
+                <AddCardForm
+                  clientSecret={paySecret}
+                  onDone={subscribeWithCard}
+                  onCancel={() => {
+                    setPayPlan(null);
+                    setPaySecret(null);
+                  }}
+                  submitLabel={{ idle: "Subscribe", busy: "Processing…" }}
+                />
+              </div>
             ) : (
               <div className="db-no-key">
-                <p>You don't have an API key yet. Subscribe to a plan to get one.</p>
+                <p>You don&apos;t have an API key yet. Subscribe to a plan to get one.</p>
                 <button
                   className="db-manage-btn"
                   style={{ maxWidth: 220, margin: "0 auto" }}
                   onClick={() => startCheckout("starter")}
                   disabled={!!checkoutLoading}
                 >
-                  {checkoutLoading ? "Redirecting…" : "Subscribe to Starter — $10/mo"}
+                  {checkoutLoading ? "Opening…" : "Subscribe to Starter — $10/mo"}
                 </button>
               </div>
             )}
@@ -556,7 +642,7 @@ function DashboardContent() {
                         disabled={!!checkoutLoading}
                         onClick={() => startCheckout(plan.planKey)}
                       >
-                        {checkoutLoading === plan.planKey ? "Redirecting…" : "Get started"}
+                        {checkoutLoading === plan.planKey ? "Opening…" : "Get started"}
                       </button>
                     )}
                   </div>

@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe, PLANS, type PlanKey } from "@/lib/stripe";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
-import { generateApiKey } from "@/lib/api-keys";
+import { generateApiKey, issueOrResizeKey } from "@/lib/api-keys";
 import { planFromSubscription, planLimits, isEntitled, pickGoverningSubscription } from "@/lib/billing";
 import { pgErrorCode, PG_UNIQUE_VIOLATION } from "@/lib/db/pg-error";
 import type Stripe from "stripe";
@@ -95,6 +95,48 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   console.log(`[stripe/webhook] API key issued for user ${userId} on plan ${plan}.`);
 }
 
+/**
+ * Issues the key for a subscription started inline on our own page.
+ *
+ * With hosted Checkout gone, checkout.session.completed no longer fires for new
+ * subscribers — this is the durable path that guarantees a paying customer ends
+ * up with a key even if the browser closed the moment after the card cleared.
+ * /api/developers/subscribe does the same work synchronously so the dashboard
+ * can show the key immediately; issueOrResizeKey is idempotent, so whichever of
+ * the two lands first wins and the other resizes limits it has already set.
+ */
+async function handleSubscriptionCreated(sub: Stripe.Subscription) {
+  const userId = sub.metadata?.userId;
+  if (!userId) return;
+
+  // An incomplete subscription is one whose first payment has not cleared --
+  // often a 3DS challenge still on screen. Issuing now would hand out a key for
+  // a subscription that may never be paid; the .updated event that follows a
+  // successful payment picks it up instead.
+  if (!isEntitled(sub)) return;
+
+  const plan = planFromSubscription(sub);
+  if (!plan) {
+    console.error(`[stripe/webhook] Subscription ${sub.id} created on an unrecognised price — no key issued.`);
+    return;
+  }
+
+  const { monthlyLimit, dailyLimit, perMinuteLimit } = planLimits(plan);
+  const { issued } = await issueOrResizeKey({
+    userId,
+    planName: PLANS[plan].name,
+    monthlyLimit,
+    dailyLimit,
+    perMinuteLimit,
+  });
+
+  await db.execute(sql`
+    UPDATE users SET stripe_plan = ${plan}, stripe_subscription_id = ${sub.id} WHERE id = ${userId}
+  `);
+
+  console.log(`[stripe/webhook] ${sub.id} active for ${userId} on ${plan}; key ${issued ? "issued" : "already existed"}.`);
+}
+
 async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
   const userId = sub.metadata?.userId;
   if (!userId) return;
@@ -161,13 +203,27 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
   // a row to find.
   await setKeyActive(userId, isEntitled(governing));
 
-  await db.execute(sql`
-    UPDATE api_keys
-    SET monthly_limit    = ${monthlyLimit},
-        daily_limit      = ${dailyLimit},
-        per_minute_limit = ${perMinuteLimit}
-    WHERE user_id = ${userId} AND is_active = true
-  `);
+  // issueOrResizeKey rather than a bare UPDATE: a subscription that was
+  // incomplete at creation (a 3DS challenge) becomes entitling only here, and
+  // that customer has no key yet. Resizing nothing would leave them paying with
+  // no API access at all.
+  if (isEntitled(governing)) {
+    await issueOrResizeKey({
+      userId,
+      planName: PLANS[plan].name,
+      monthlyLimit,
+      dailyLimit,
+      perMinuteLimit,
+    });
+  } else {
+    await db.execute(sql`
+      UPDATE api_keys
+      SET monthly_limit    = ${monthlyLimit},
+          daily_limit      = ${dailyLimit},
+          per_minute_limit = ${perMinuteLimit}
+      WHERE user_id = ${userId} AND is_active = true
+    `);
+  }
 
   // stripe_subscription_id is written here too, not just at checkout. It used
   // to be set once and never refreshed, so it went stale the moment a customer
@@ -267,6 +323,9 @@ export async function POST(req: NextRequest) {
     switch (event.type) {
       case "checkout.session.completed":
         await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+        break;
+      case "customer.subscription.created":
+        await handleSubscriptionCreated(event.data.object as Stripe.Subscription);
         break;
       case "customer.subscription.updated":
         await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
