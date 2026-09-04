@@ -24,6 +24,9 @@ export const apiRequestLogs = pgTable("api_request_logs", {
 	index("api_request_logs_api_key_id_idx").using("btree", table.apiKeyId.asc().nullsLast().op("text_ops")),
 	index("api_request_logs_created_at_idx").using("btree", table.createdAt.asc().nullsLast().op("timestamp_ops")),
 	index("api_request_logs_user_id_idx").using("btree", table.userId.asc().nullsLast().op("text_ops")),
+	// Added in migration 0006 — the index GET /api/developers/me's monthly
+	// usage count actually uses. Declared so db:push cannot drop it.
+	index("api_request_logs_key_created_idx").using("btree", table.apiKeyId.asc().nullsLast().op("text_ops"), table.createdAt.desc().nullsLast().op("timestamp_ops")),
 	foreignKey({
 			columns: [table.apiKeyId],
 			foreignColumns: [apiKeys.id],
@@ -444,9 +447,23 @@ export const apiKeys = pgTable("api_keys", {
 	lastUsedAt: timestamp("last_used_at", { mode: 'string' }),
 	isActive: boolean("is_active").default(true).notNull(),
 	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow(),
+	// One-time plaintext reveal, cleared by POST /api/developers/ack-key-reveal
+	// once the client has actually shown it. Never populated again afterwards.
+	plainKeyTemp: text("plain_key_temp"),
+	// Atomic rate-limit counters. These are not bookkeeping — the public API's
+	// limits ARE these columns (conditional UPDATE ... WHERE count < limit), so
+	// dropping them disables rate limiting outright rather than degrading it.
+	minuteWindow: bigint("minute_window", { mode: 'number' }),
+	minuteCount: integer("minute_count").default(0).notNull(),
+	monthlyLimit: integer("monthly_limit"),
+	monthCount: integer("month_count").default(0).notNull(),
+	monthWindow: varchar("month_window"),
 }, (table) => [
 	index("api_keys_key_hash_idx").using("btree", table.keyHash.asc().nullsLast().op("text_ops")),
 	index("api_keys_user_id_idx").using("btree", table.userId.asc().nullsLast().op("text_ops")),
+	// Partial unique index — the invariant the checkout webhook and
+	// regenerate-key both rely on to guarantee exactly one live key per user.
+	uniqueIndex("api_keys_one_active_per_user").using("btree", table.userId.asc().nullsLast().op("text_ops")).where(sql`${table.isActive} = true`),
 	foreignKey({
 			columns: [table.userId],
 			foreignColumns: [users.id],
@@ -769,9 +786,18 @@ export const marketplaces = pgTable("marketplaces", {
 	homepageUrl: text("homepage_url").notNull(),
 	affiliateUrl: text("affiliate_url"),
 	enabled: boolean().default(true).notNull(),
+	// Admin-set trust flag. The public API's recommended_price is the cheapest
+	// offer among trusted marketplaces only — see migration 0006.
+	trusted: boolean().default(false).notNull(),
 	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow(),
 }, (table) => [
+	// Both of these exist in the database (migrations 0005 and 0006). They were
+	// never declared here, so `npm run db:push` would have silently dropped
+	// them — the same class of drift that once threatened the rate-limiter
+	// columns on api_keys.
+	index("marketplaces_enabled_idx").using("btree", table.enabled.asc().nullsLast()),
+	index("marketplaces_trusted_idx").using("btree", table.trusted.asc().nullsLast()).where(sql`${table.trusted}`),
 	unique("marketplaces_name_unique").on(table.name),
 ]);
 

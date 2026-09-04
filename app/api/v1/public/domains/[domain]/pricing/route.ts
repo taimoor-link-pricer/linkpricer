@@ -1,8 +1,20 @@
-import { NextRequest, NextResponse } from "next/server";
+// Reads the x-api-key header and the niche query param on every call, so this
+// is request-time work by construction — declared explicitly rather than left
+// to inference, matching the other authenticated routes under /api/developers.
+export const dynamic = "force-dynamic";
+
+import { NextRequest, NextResponse, after } from "next/server";
 import { createHash } from "crypto";
+import { domainToASCII, domainToUnicode } from "url";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
-import { getUsdRates, toUsd as toUsdWithRates } from "@/lib/currency";
+import { getUsdRates } from "@/lib/currency";
+import {
+  ACCEPTED_NICHE_VALUES,
+  aggregatePricing,
+  resolveNiche,
+  type RawOffer,
+} from "@/lib/public-api/pricing";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -15,33 +27,133 @@ function normalizeDomain(raw: string): string {
     .replace(/\/$/, "");
 }
 
+/**
+ * Every spelling of one host that the catalogue might have stored it under.
+ *
+ * An internationalized domain has two equally valid wire forms — the unicode
+ * one a person types ("lübeck.nu") and the punycode one most HTTP clients
+ * silently convert it to ("xn--lbeck-kva.nu") — and `domains` contains BOTH as
+ * separate rows, with separate offers. 1,042 sites are stored twice this way,
+ * 987 of them with live offers, and on a 200-site sample 167 (83%) carried a
+ * DIFFERENT cheapest price under the two spellings.
+ *
+ * So the price a customer got depended on which form their HTTP library
+ * happened to send — the same defect as the case-variant duplicates this route
+ * already pools over, in a second dimension. Matching every form and pooling
+ * the offers makes the answer the same either way.
+ *
+ * Returns a de-duplicated list; for a plain ASCII domain that is just the one
+ * value, so the common path is unchanged.
+ */
+function domainForms(domain: string): string[] {
+  const forms = new Set<string>([domain]);
+  try {
+    const ascii = domainToASCII(domain);
+    if (ascii) forms.add(ascii.toLowerCase());
+  } catch { /* not a convertible host — the literal is all we have */ }
+  try {
+    const unicode = domainToUnicode(domain);
+    if (unicode) forms.add(unicode.toLowerCase());
+  } catch { /* as above */ }
+  return [...forms];
+}
+
+/** A country name, or null — never the scraper's "-"/""/"n/a" placeholders. */
+function normalizeCountry(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const v = raw.trim();
+  if (!v || v === "-" || v === "--" || v.toLowerCase() === "n/a" || v.toLowerCase() === "unknown") return null;
+  return v;
+}
+
 function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
-function toPrice(val: unknown): number | null {
-  const n = Number(val);
-  return val == null || val === "" || isNaN(n) || n === 0 ? null : Math.round(n * 100) / 100;
+// Per-key, per-plan responses: never storable by a shared cache, and never
+// reusable across callers. Applied to success and error alike so a 429 can't
+// be replayed from a proxy after the limit has reset either.
+const NO_STORE = { "Cache-Control": "private, no-store" } as const;
+
+// Standard rate-limit headers. Without them a client has no way to pace itself
+// except by walking into a 429 — it cannot see how much of its monthly quota
+// is left until the moment the quota is gone. The counters are already read by
+// the auth statement, so surfacing them costs nothing.
+function rateLimitHeaders(
+  monthLimit: number,
+  monthUsed: number | null,
+  minuteLimit: number,
+  minuteUsed: number | null,
+  resetEpoch: number
+): Record<string, string> {
+  const h: Record<string, string> = {
+    "X-RateLimit-Limit": String(monthLimit),
+    "X-RateLimit-Reset": String(resetEpoch),
+    "X-RateLimit-Limit-Minute": String(minuteLimit),
+  };
+  if (monthUsed != null) h["X-RateLimit-Remaining"] = String(Math.max(0, monthLimit - monthUsed));
+  if (minuteUsed != null) h["X-RateLimit-Remaining-Minute"] = String(Math.max(0, minuteLimit - minuteUsed));
+  return h;
 }
 
-function ourPrice(marketplacePrice: number): number {
-  return Math.max(Math.round(marketplacePrice * 1.15), Math.floor(marketplacePrice) + 1);
+function jsonOk(body: unknown, extra?: Record<string, string>) {
+  return NextResponse.json(body, { headers: { ...NO_STORE, ...extra } });
 }
 
 function jsonError(code: string, message: string, status: number, extra?: Record<string, string>) {
   return NextResponse.json(
     { error: code, message, status },
-    { status, headers: extra }
+    { status, headers: { ...NO_STORE, ...extra } }
   );
 }
 
-// The daily limit resets at midnight UTC, not exactly 24h from whenever this
-// request happened to land — a key that trips the limit at 23:59 UTC should
-// get Retry-After: 60, not a flat 86400 implying a near-full day left.
-function secondsUntilMidnightUtc(): number {
-  const now = new Date();
-  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0);
+// The monthly quota resets on the 1st at 00:00 UTC, which is what
+// /developers/docs promises — so Retry-After has to be the time to *that*
+// instant, not a flat guess.
+function secondsUntilNextMonthUtc(now = new Date()): number {
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0);
   return Math.max(1, Math.round((next - now.getTime()) / 1000));
+}
+
+function monthWindow(now = new Date()): string {
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// Every price column either offer table can carry, read into RawOffer.prices.
+// Kept as one list so the SELECT, the row mapper and lib/public-api/pricing's
+// NICHES map cannot drift apart.
+const PRICE_COLUMNS = [
+  "min_price",
+  "max_price",
+  "gambling_min_price",
+  "gambling_max_price",
+  "adult_min_price",
+  "adult_max_price",
+  "cbd_min_price",
+  "cbd_max_price",
+  "loan_min_price",
+  "loan_max_price",
+  "dating_min_price",
+  "dating_max_price",
+  "crypto_min_price",
+  "crypto_max_price",
+  "trading_forex_min_price",
+  "trading_forex_max_price",
+  "link_insertion_min_price",
+  "link_insertion_max_price",
+] as const;
+
+function toOffer(row: Record<string, unknown>): RawOffer {
+  const prices: Record<string, number | null> = {};
+  for (const col of PRICE_COLUMNS) {
+    const v = row[col];
+    prices[col] = v == null ? null : Number(v);
+  }
+  return {
+    currency: (row.currency as string) ?? "USD",
+    prices,
+    trusted: row.trusted === true,
+  };
 }
 
 // ─── route ─────────────────────────────────────────────────────────────────
@@ -59,268 +171,389 @@ export async function GET(
   }
 
   const keyHash = hashKey(rawKey);
+  const now = new Date();
+  const minuteBucket = Math.floor(now.getTime() / 60000);
+  const month = monthWindow(now);
+  // Unix seconds at the next monthly reset — the value X-RateLimit-Reset carries.
+  const monthResetEpoch = Math.floor(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0) / 1000
+  );
 
-  // 2. Validate key
-  const keyRows = await db.execute(sql`
-    SELECT id, user_id, daily_limit, per_minute_limit, request_count, usage_date, is_active
-    FROM api_keys
-    WHERE key_hash = ${keyHash}
-    LIMIT 1
+  // 2. Authenticate the key and claim quota in a single statement.
+  //
+  // This used to be four sequential round trips (SELECT the key, UPDATE the
+  // minute counter, UPDATE the daily counter, INSERT a placeholder log row)
+  // before any pricing work started. Against Neon that is four full network
+  // latencies a paying customer waits through on every call, for work that
+  // touches exactly one row.
+  //
+  // The `k` CTE snapshots the key as it was *before* the update, which is
+  // what makes the collapse possible: `bumped` returns no row both when the
+  // key is invalid and when a limit is hit, and the snapshot is what tells
+  // those apart — and tells apart *which* limit was hit, so the right
+  // Retry-After goes back. The conditional UPDATE itself is unchanged in
+  // spirit: Postgres's row lock serializes concurrent requests for the same
+  // key, so there is no read-then-write race on the counters.
+  const auth = await db.execute(sql`
+    WITH k AS (
+      SELECT id, user_id, is_active, per_minute_limit,
+             COALESCE(monthly_limit, daily_limit * 30) AS month_limit,
+             minute_window, minute_count, month_window, month_count
+      FROM api_keys
+      WHERE key_hash = ${keyHash}
+      LIMIT 1
+    ),
+    bumped AS (
+      UPDATE api_keys a
+      SET minute_count  = CASE WHEN a.minute_window = ${minuteBucket} THEN a.minute_count + 1 ELSE 1 END,
+          minute_window = ${minuteBucket},
+          month_count   = CASE WHEN a.month_window = ${month} THEN a.month_count + 1 ELSE 1 END,
+          month_window  = ${month},
+          last_used_at  = NOW()
+      FROM k
+      WHERE a.id = k.id
+        AND k.is_active
+        AND (a.minute_window IS DISTINCT FROM ${minuteBucket} OR a.minute_count < a.per_minute_limit)
+        AND (a.month_window  IS DISTINCT FROM ${month}        OR a.month_count  < COALESCE(a.monthly_limit, a.daily_limit * 30))
+      RETURNING a.id, a.month_count, a.minute_count
+    )
+    SELECT
+      k.id,
+      k.user_id,
+      k.is_active,
+      k.month_limit,
+      k.per_minute_limit,
+      (SELECT month_count FROM bumped)                                         AS month_used,
+      (SELECT minute_count FROM bumped)                                        AS minute_used,
+      (SELECT COUNT(*) FROM bumped) > 0                                        AS allowed,
+      (k.minute_window = ${minuteBucket} AND k.minute_count >= k.per_minute_limit) AS minute_blocked,
+      (k.month_window  = ${month}        AND k.month_count  >= k.month_limit)      AS month_blocked
+    FROM k
   `);
 
-  if (!keyRows.rows.length || !keyRows.rows[0].is_active) {
+  const k = auth.rows[0] as
+    | {
+        id: string;
+        user_id: string;
+        is_active: boolean;
+        month_limit: number;
+        per_minute_limit: number;
+        month_used: number | null;
+        minute_used: number | null;
+        allowed: boolean;
+        minute_blocked: boolean;
+        month_blocked: boolean;
+      }
+    | undefined;
+
+  if (!k || !k.is_active) {
     return jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
   }
 
-  const k = keyRows.rows[0] as {
-    id: string;
-    user_id: string;
-    daily_limit: number;
-    per_minute_limit: number;
-    request_count: number;
-    usage_date: string | null;
-    is_active: boolean;
-  };
-
-  const today = new Date().toISOString().slice(0, 10);
-  const minuteBucket = Math.floor(Date.now() / 60000);
+  if (!k.allowed) {
+    if (k.minute_blocked) {
+      return jsonError(
+        "rate_limit_exceeded",
+        "Per-minute rate limit exceeded. See Retry-After header.",
+        429,
+        { "Retry-After": "60", ...rateLimitHeaders(k.month_limit, k.month_used, k.per_minute_limit, k.minute_used, monthResetEpoch) }
+      );
+    }
+    if (k.month_blocked) {
+      return jsonError(
+        "quota_exceeded",
+        `Monthly quota of ${k.month_limit} requests reached. Resets on the 1st at 00:00 UTC.`,
+        429,
+        { "Retry-After": String(secondsUntilNextMonthUtc(now)), ...rateLimitHeaders(k.month_limit, k.month_used, k.per_minute_limit, k.minute_used, monthResetEpoch) }
+      );
+    }
+    // Neither snapshot flag is set, so the key was deactivated between the
+    // snapshot and the update rather than being over quota.
+    return jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
+  }
 
   // 3. Normalize domain
+  //
+  // decodeURIComponent throws URIError on a malformed percent-escape (e.g.
+  // "%E0%A4%A"). Next's router rejects most of those before this handler is
+  // reached, but not all encodings on every platform, and an uncaught throw
+  // here happens AFTER quota has been claimed — the customer pays for a crash.
+  // An undecodable path is just a malformed domain, so treat it as one.
   const { domain: rawDomain } = await params;
-  const domain = normalizeDomain(decodeURIComponent(rawDomain));
-
-  if (!domain || domain.length < 3 || !domain.includes(".")) {
-    return jsonError("invalid_domain", "Domain parameter is missing or malformed.", 422);
+  let domain: string;
+  try {
+    domain = normalizeDomain(decodeURIComponent(rawDomain));
+  } catch {
+    domain = "";
   }
-
-  // 4. Optional niche filter
-  const VALID_NICHES = ["standard", "gambling", "adult", "cbd", "loan", "dating", "crypto", "trading_forex"] as const;
-  type Niche = typeof VALID_NICHES[number];
-  const nicheParam = req.nextUrl.searchParams.get("niche");
-  if (nicheParam && !VALID_NICHES.includes(nicheParam as Niche)) {
-    return jsonError(
-      "invalid_niche",
-      `Invalid niche. Valid values are: ${VALID_NICHES.join(", ")}`,
-      422
-    );
-  }
-  const nicheFilter = nicheParam as Niche | null;
-
-  // 5. Per-minute limit — atomic check-and-increment on a counter column, same
-  // mechanism as the daily limit below (this used to be a plain SELECT COUNT
-  // over api_request_logs with no locking — a genuine TOCTOU race under
-  // concurrent requests: many requests could all read the same pre-burst
-  // count before any of them logged). Checked BEFORE the daily limit so a
-  // request this rejects never first burns a day's worth of quota with
-  // nothing to show for it, which the old daily-then-minute order did.
-  const minuteUpdate = await db.execute(sql`
-    UPDATE api_keys
-    SET minute_count  = CASE WHEN minute_window = ${minuteBucket} THEN minute_count + 1 ELSE 1 END,
-        minute_window = ${minuteBucket}
-    WHERE id = ${k.id}
-      AND (minute_window IS DISTINCT FROM ${minuteBucket} OR minute_count < per_minute_limit)
-    RETURNING minute_count
-  `);
-  if (!minuteUpdate.rows.length) {
-    return jsonError(
-      "rate_limit_exceeded",
-      "Per-minute rate limit exceeded. See Retry-After header.",
-      429,
-      { "Retry-After": "60" }
-    );
-  }
-
-  // 6. Daily limit — atomic check-and-increment, serialized by Postgres's row
-  // lock on this specific key (same pattern as the per-minute check above).
-  const dailyUpdate = await db.execute(sql`
-    UPDATE api_keys
-    SET request_count = CASE WHEN usage_date = ${today} THEN request_count + 1 ELSE 1 END,
-        usage_date    = ${today}
-    WHERE id = ${k.id}
-      AND (usage_date IS DISTINCT FROM ${today} OR request_count < daily_limit)
-    RETURNING request_count
-  `);
-  if (!dailyUpdate.rows.length) {
-    return jsonError(
-      "rate_limit_exceeded",
-      "Daily request limit reached. Resets at midnight UTC.",
-      429,
-      { "Retry-After": String(secondsUntilMidnightUtc()) }
-    );
-  }
-
-  // Reserve this request's log row now, before the downstream pricing work,
-  // so concurrent requests see it in their own per-minute count immediately —
-  // previously the log row was only written in `finally`, after all downstream
-  // work, leaving a wide window where concurrent requests undercounted.
-  const logInsert = await db.execute(sql`
-    INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
-    VALUES (${k.id}, ${k.user_id}, ${domain}, 0, 0)
-    RETURNING id
-  `);
-  const logId = logInsert.rows[0]?.id as string | undefined;
 
   let httpStatus = 200;
 
-  try {
-    const rates = await getUsdRates();
-    const toUsd = (amount: number, currency: string | null | undefined): number =>
-      toUsdWithRates(amount, currency, rates) as number;
+  // Quota has to be claimed before the request is understood — the claim is
+  // what makes the limit un-raceable, and it happens in the same statement
+  // that authenticates the key. That is right for a lookup that returns 404
+  // (we searched, we just found nothing) but wrong for a request we rejected
+  // without looking anything up: a customer whose client has a bug emitting
+  // malformed domains would silently burn a paid month's quota on requests
+  // that never touched the catalog. Those get the claim handed back.
+  //
+  // Only ever called on the 422 paths, so the extra round trip is off the
+  // success path entirely. Guarded against underflow because month_count is
+  // reset to 1 by any request that rolls the window over.
+  const refundQuota = async () => {
+    await db
+      .execute(sql`
+        UPDATE api_keys
+        SET month_count  = GREATEST(month_count - 1, 0),
+            minute_count = GREATEST(minute_count - 1, 0)
+        WHERE id = ${k.id}
+          AND month_window = ${month}
+          AND minute_window = ${minuteBucket}
+      `)
+      .catch((err) => console.error("[/api/v1/public/domains/pricing] quota refund failed", err));
+  };
 
-    // Query domains + marketplace_offers directly — no cache layer. This used
-    // to check `marketplace_price_cache` first (a 24h-TTL table fed by this
-    // same endpoint), but nothing else in the codebase ever reads or writes
-    // it, Analyze queries the same source tables live with no cache at all,
-    // and the cache was the reason a currency bug (see below) could persist
-    // for up to a day after being fixed at the source — dropping the layer
-    // removes that whole failure mode rather than just patching it once.
-    // One row per (domain_id, marketplace_name) — that pair is unique — so
-    // no GROUP BY is needed; each marketplace's own currency is read
-    // alongside its prices so every niche column can be converted to USD
-    // before any cross-marketplace comparison happens (previously this
-    // wasn't done at all — a raw EUR/GBP/etc. number was returned labeled
-    // "USD" outright).
-    const sourceRows = await db.execute(sql`
-      SELECT
-        o.currency,
-        o.min_price::float              AS min_price,
-        o.gambling_min_price::float     AS gambling_min,
-        o.adult_min_price::float        AS adult_min,
-        o.cbd_min_price::float          AS cbd_min,
-        o.loan_min_price::float         AS loan_min,
-        o.dating_min_price::float       AS dating_min,
-        o.crypto_min_price::float       AS crypto_min,
-        o.trading_forex_min_price::float AS trading_forex_min
-      FROM domains d
-      JOIN marketplace_offers o ON o.domain_id = d.id
-      WHERE d.domain = ${domain}
-        AND o.available = true
-    `);
-
-    let pr: Record<string, unknown> | null = null;
-
-    if (sourceRows.rows.length > 0) {
-      const agg: Record<string, number | null> = {
-        standard_lowest: null,
-        gambling_lowest: null,
-        adult_lowest: null,
-        cbd_lowest: null,
-        loan_lowest: null,
-        dating_lowest: null,
-        crypto_lowest: null,
-        forex_lowest: null,
-      };
-      const pick = (cur: number | null, next: number | null) =>
-        next == null ? cur : cur == null || next < cur ? next : cur;
-
-      for (const row of sourceRows.rows as any[]) {
-        const currency = row.currency as string | null;
-        const usd = (raw: unknown) => {
-          const n = toPrice(raw);
-          return n == null ? null : toUsd(n, currency);
-        };
-        // Base price for this offer — every niche falls back to this when
-        // the offer has no price set for that specific niche, exactly like
-        // Analyze's nichePrice(): a niche filter changes which number shows,
-        // it never hides an offer just because it lacks niche-specific
-        // pricing. Previously a niche column with no value was excluded
-        // from that niche's comparison entirely instead of falling back,
-        // which understated (or hid) how cheap a domain actually was for
-        // that niche.
-        const base = usd(row.min_price);
-        agg.standard_lowest = pick(agg.standard_lowest, base);
-        agg.gambling_lowest = pick(agg.gambling_lowest, usd(row.gambling_min) ?? base);
-        agg.adult_lowest    = pick(agg.adult_lowest,    usd(row.adult_min) ?? base);
-        agg.cbd_lowest       = pick(agg.cbd_lowest,      usd(row.cbd_min) ?? base);
-        agg.loan_lowest      = pick(agg.loan_lowest,     usd(row.loan_min) ?? base);
-        agg.dating_lowest    = pick(agg.dating_lowest,   usd(row.dating_min) ?? base);
-        agg.crypto_lowest    = pick(agg.crypto_lowest,   usd(row.crypto_min) ?? base);
-        agg.forex_lowest     = pick(agg.forex_lowest,    usd(row.trading_forex_min) ?? base);
+  const finish = (res: NextResponse) => {
+    // The usage log is history, not enforcement — quota was already claimed
+    // atomically in step 2, before any pricing work — so the customer should
+    // not wait a database round trip for it. `after` runs the write once the
+    // response is on the wire while keeping the serverless execution context
+    // alive, which a bare fire-and-forget promise does not: that context can
+    // be frozen the instant the response is returned, silently dropping the
+    // write. (The row also used to be *reserved* before the pricing work and
+    // updated afterwards, so a COUNT-based per-minute limiter could see it.
+    // That limiter is gone — the counters on api_keys are the limit now — so
+    // the reservation bought nothing and cost a second round trip.)
+    const latencyMs = Date.now() - startMs;
+    after(async () => {
+      try {
+        await db.execute(sql`
+          INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
+          VALUES (${k.id}, ${k.user_id}, ${domain}, ${httpStatus}, ${latencyMs})
+        `);
+      } catch (err) {
+        console.error("[/api/v1/public/domains/pricing] log write failed", err);
       }
-
-      pr = agg;
-    }
-
-    const lastUpdated = pr != null ? new Date().toISOString() : null;
-
-    // 8. Domain metrics from new domains table
-    const metricRows = await db.execute(sql`
-      SELECT
-        domain_rating,
-        org_traffic,
-        ref_domains,
-        country_main_traffic AS country
-      FROM domains
-      WHERE domain = ${domain}
-      LIMIT 1
-    `);
-
-    const mr = metricRows.rows[0] ?? null;
-
-    if (!pr && !mr) {
-      httpStatus = 404;
-      return jsonError("domain_not_found", "No data found for this domain.", 404);
-    }
-
-    const allPricing: Record<string, { price: number | null }> = {
-      standard:      { price: toPrice(pr?.standard_lowest) },
-      gambling:      { price: toPrice(pr?.gambling_lowest) },
-      adult:         { price: toPrice(pr?.adult_lowest) },
-      cbd:           { price: toPrice(pr?.cbd_lowest) },
-      loan:          { price: toPrice(pr?.loan_lowest) },
-      dating:        { price: toPrice(pr?.dating_lowest) },
-      crypto:        { price: toPrice(pr?.crypto_lowest) },
-      trading_forex: { price: toPrice(pr?.forex_lowest) },
-    };
-
-    const pricing = Object.fromEntries(
-      Object.entries(allPricing)
-        .filter(([k, { price }]) => price !== null && (!nicheFilter || k === nicheFilter))
-        .map(([k, { price }]) => [k, {
-          lowest_price: price,
-          our_price: ourPrice(price as number),
-          currency: "USD",
-        }])
-    );
-
-    return NextResponse.json({
-      domain,
-      found: pr != null,
-      pricing,
-      metrics: {
-        domain_rating:   mr?.domain_rating != null ? Number(mr.domain_rating) : null,
-        organic_traffic: mr?.org_traffic != null ? Number(mr.org_traffic) : null,
-        ref_domains:     mr?.ref_domains != null ? Number(mr.ref_domains) : null,
-        country:         (mr?.country as string) ?? null,
-      },
-      last_updated: lastUpdated
-        ? new Date(lastUpdated).toISOString().slice(0, 10)
-        : null,
     });
+    return res;
+  };
 
+  // A hostname is a narrow character set. Anything outside it cannot match a
+  // catalog row, so rejecting it here costs nothing — and one class of input
+  // is actively dangerous: a NUL byte is not representable in Postgres text
+  // and made the driver throw, which surfaced as a 500 that had ALREADY
+  // consumed the caller's quota. A client bug emitting control characters
+  // could burn a paid month on errors that were our fault, not theirs.
+  // Letters (including non-ASCII, for internationalized domains), digits,
+  // dot and hyphen are the whole legal alphabet here.
+  const HOSTNAME_SAFE = /^[\p{L}\p{N}.-]+$/u;
+
+  if (!domain || domain.length < 3 || domain.length > 253 || !domain.includes(".") || !HOSTNAME_SAFE.test(domain)) {
+    httpStatus = 422;
+    await refundQuota();
+    return finish(jsonError("invalid_domain", "Domain parameter is missing or malformed.", 422));
+  }
+
+  // 4. Optional niche filter — accepts both the API's canonical ids and the
+  //    dashboard's spellings for the same niches (see lib/public-api/pricing).
+  const nicheParam = req.nextUrl.searchParams.get("niche");
+  const nicheFilter = resolveNiche(nicheParam);
+  if (nicheParam && !nicheFilter) {
+    httpStatus = 422;
+    await refundQuota();
+    return finish(
+      jsonError(
+        "invalid_niche",
+        `Invalid niche. Valid values are: ${ACCEPTED_NICHE_VALUES.join(", ")}`,
+        422
+      )
+    );
+  }
+
+  try {
+    // 5. Offers, metrics and price freshness in one round trip, running
+    //    alongside the currency rates rather than after them.
+    //
+    //    Three changes of substance from the previous version:
+    //
+    //    a) `lower(d.domain) = domain`, not `d.domain = domain`. The input is
+    //       lowercased on the way in, but 7,049 rows in `domains` are stored
+    //       with capitals ("Huliq.com", "GFXMaker.com"). Every one of them
+    //       404'd here while resolving fine on the Analyze page, which matches
+    //       case-insensitively. There is an index on lower(domain) for this.
+    //
+    //    b) supplier_offers is included. Analyze prices marketplace *and*
+    //       vendor offers; this endpoint only ever read marketplace ones, so a
+    //       vendor undercutting every marketplace was invisible and the API
+    //       quoted a higher "best price" than the dashboard for the same
+    //       domain. (No vendor offer is active today — this is the gap closing
+    //       before it opens, not a live discrepancy.)
+    //
+    //    c) The trusted flag comes along per offer, so recommended_price can
+    //       be computed without a second lookup.
+    // A bound JS array is NOT a Postgres array in a Drizzle sql template —
+    // `= ANY(${array})` fails at runtime with "op ANY/ALL (array) requires
+    // array on right side". An explicit IN list of individually-bound values
+    // is the form that works and stays parameterised.
+    const forms = domainForms(domain);
+    const domainList = sql.join(forms.map((f) => sql`${f}`), sql`, `);
+
+    const [rates, result] = await Promise.all([
+      getUsdRates(),
+      db.execute(sql`
+        WITH d AS (
+          -- Every domains row for this host, not one of them.
+          --
+          -- domains_domain_unique is case-SENSITIVE, so the catalog carries
+          -- 6,951 groups of rows that are the same site spelled differently
+          -- ("huliq.com" and "Huliq.com" are two rows, with two separate sets
+          -- of offers and two different DR values). A LIMIT 1 here returned
+          -- whichever row Postgres happened to hand back first — for
+          -- huliq.com that is either 22 offers at DR 58 or 3 offers at DR 0,
+          -- with nothing in the query to decide which, so the same request
+          -- could legitimately return either. Pricing has to be deterministic,
+          -- so offers are pooled across every matching row below.
+          SELECT id, domain, domain_rating, org_traffic, ref_domains, country_main_traffic
+          FROM domains
+          WHERE lower(domain) IN (${domainList})
+        ),
+        best_domain AS (
+          -- The row the metrics are read from. Duplicates are rarely equally
+          -- populated (the canonical row has the real DR/traffic and the
+          -- stray one is usually zeroed), so prefer the row that actually
+          -- knows something, and order fully so the choice never depends on
+          -- storage order.
+          SELECT * FROM d
+          ORDER BY
+            (domain_rating IS NOT NULL AND domain_rating > 0) DESC,
+            COALESCE(org_traffic, 0) DESC,
+            COALESCE(ref_domains, 0) DESC,
+            domain ASC
+          LIMIT 1
+        ),
+        offers AS (
+          SELECT * FROM (
+          -- DISTINCT ON collapses a marketplace back to ONE offer.
+          --
+          -- Pooling across every matching domains row is what makes a duplicated host
+          -- complete, but marketplace_offers is unique on (domain_id,
+          -- marketplace_name) — per row, not per host — so when the SAME
+          -- marketplace has scraped two spellings of one site it contributes
+          -- two rows. Those were both counted, which inflated offer_count and
+          -- dragged average_price toward a single source's second quote.
+          -- 1,463 hosts are affected and their two quotes genuinely differ
+          -- (abbynews.com: one marketplace at both $780 and $889).
+          --
+          -- The docs sell offer_count as "how many independent sources back
+          -- these figures", so counting one source twice makes that claim
+          -- false. Cheapest quote per source wins, which keeps this consistent
+          -- with how best_price is chosen.
+          SELECT DISTINCT ON (lower(o.marketplace_name))
+            o.currency,
+            o.min_price, o.max_price,
+            o.gambling_min_price, o.gambling_max_price,
+            o.adult_min_price, o.adult_max_price,
+            o.cbd_min_price, o.cbd_max_price,
+            o.loan_min_price, o.loan_max_price,
+            o.dating_min_price, o.dating_max_price,
+            o.crypto_min_price, o.crypto_max_price,
+            o.trading_forex_min_price, o.trading_forex_max_price,
+            o.link_insertion_min_price, o.link_insertion_max_price,
+            COALESCE(m.trusted, false) AS trusted,
+            GREATEST(o.updated_at::timestamp, o.last_fetched_at) AS freshness
+          FROM marketplace_offers o
+          JOIN d ON d.id = o.domain_id
+          LEFT JOIN marketplaces m ON lower(m.name) = lower(o.marketplace_name)
+          WHERE o.available = true
+          ORDER BY lower(o.marketplace_name), o.min_price::float ASC NULLS LAST
+          ) mo
+
+          UNION ALL
+
+          SELECT
+            s.currency,
+            s.min_price, s.max_price,
+            s.gambling_min_price, s.gambling_max_price,
+            s.adult_min_price, s.adult_max_price,
+            s.cbd_min_price, s.cbd_max_price,
+            s.loan_min_price, s.loan_max_price,
+            s.dating_min_price, s.dating_max_price,
+            s.crypto_min_price, s.crypto_max_price,
+            s.trading_forex_min_price, s.trading_forex_max_price,
+            s.link_insertion_min_price, s.link_insertion_max_price,
+            -- A vendor is not a marketplace, so there is no marketplaces row
+            -- to carry a trust decision. Vendor offers are therefore never
+            -- "recommended" until trust is modelled for them explicitly.
+            false AS trusted,
+            s.updated_at AS freshness
+          FROM supplier_offers s
+          -- Matched on the normalized host directly rather than joined to the
+          -- domain CTE: it can hold several rows for the same host (see its
+          -- comment above), and
+          -- joining would multiply every vendor offer by that row count,
+          -- double-counting it in the average and the offer count.
+          WHERE lower(s.domain) IN (${domainList})
+            AND s.status = 'active' AND s.is_active = true
+        )
+        SELECT
+          (SELECT row_to_json(best_domain) FROM best_domain)          AS domain_row,
+          (SELECT json_agg(offers) FROM offers)                       AS offers,
+          (SELECT MAX(freshness) FROM offers)                         AS last_updated
+      `),
+    ]);
+
+    const row = result.rows[0] as
+      | {
+          domain_row: Record<string, unknown> | null;
+          offers: Record<string, unknown>[] | null;
+          last_updated: string | null;
+        }
+      | undefined;
+
+    const domainRow = row?.domain_row ?? null;
+    const offers = (row?.offers ?? []).map(toOffer);
+
+    if (!domainRow) {
+      httpStatus = 404;
+      return finish(jsonError("domain_not_found", "No data found for this domain.", 404));
+    }
+
+    const pricing = aggregatePricing(offers, rates, nicheFilter);
+    const found = Object.keys(pricing).length > 0;
+
+    return finish(
+      jsonOk({
+        domain,
+        found,
+        pricing,
+        metrics: {
+          domain_rating:
+            domainRow.domain_rating != null ? Number(domainRow.domain_rating) : null,
+          organic_traffic: domainRow.org_traffic != null ? Number(domainRow.org_traffic) : null,
+          ref_domains: domainRow.ref_domains != null ? Number(domainRow.ref_domains) : null,
+          // "-" is a scraper placeholder for "unknown", stored on 23,263
+          // domains. Returned verbatim it breaks the documented contract: the
+          // docs promise a country name or null, and a client rendering
+          // country ?? "Unknown" prints a bare dash instead.
+          country: normalizeCountry(domainRow.country_main_traffic as string | null),
+        },
+        // The real age of the underlying prices. This was `new Date()` — it
+        // reported today's date on every call regardless of when the offer was
+        // last scraped, which made the field actively misleading: a price two
+        // years stale looked as fresh as one pulled this morning.
+        // Null whenever `pricing` is empty, including when a niche filter
+        // emptied it — the field describes the prices in this response, and a
+        // date sitting next to `pricing: {}` reads as "these prices are from
+        // yesterday" when there are no prices at all.
+        last_updated:
+          found && row?.last_updated
+            ? new Date(row.last_updated).toISOString().slice(0, 10)
+            : null,
+      }, rateLimitHeaders(k.month_limit, k.month_used, k.per_minute_limit, k.minute_used, monthResetEpoch))
+    );
   } catch (err) {
     console.error("[/api/v1/public/domains/pricing]", err);
     httpStatus = 500;
-    return jsonError("internal_error", "An internal error occurred. Please retry.", 500);
-  } finally {
-    const latencyMs = Date.now() - startMs;
-    // Must be awaited — in a serverless function the execution context can be
-    // frozen right after the response is returned, silently dropping any
-    // fire-and-forget writes. request_count/usage_date are already updated
-    // atomically above (step 5); this just fills in the reserved log row's
-    // final status/latency and bumps last_used_at.
-    const writes = [
-      db.execute(sql`
-        UPDATE api_keys SET last_used_at = NOW() WHERE id = ${k.id}
-      `).catch(() => {}),
-    ];
-    if (logId) {
-      writes.push(
-        db.execute(sql`
-          UPDATE api_request_logs SET http_status = ${httpStatus}, latency_ms = ${latencyMs} WHERE id = ${logId}
-        `).catch(() => {})
-      );
-    }
-    await Promise.all(writes);
+    return finish(jsonError("internal_error", "An internal error occurred. Please retry.", 500));
   }
 }

@@ -33,7 +33,17 @@ export async function getUsdRates(): Promise<Record<string, number>> {
 
   const rates: Record<string, number> = { USD: 1, ...DEFAULT_RATES };
   try {
-    await ensureCurrencyRatesTable();
+    // Deliberately NOT calling ensureCurrencyRatesTable() here. This is a hot
+    // read path — every Analyze call and every public-API call goes through
+    // it — and the ensure did a CREATE TABLE IF NOT EXISTS plus an ALTER TABLE
+    // ADD COLUMN IF NOT EXISTS before the actual SELECT: three sequential
+    // round trips instead of one, measured at ~790ms against Neon, paid again
+    // on every cold serverless instance and every 5-minute cache expiry.
+    //
+    // DDL belongs with the writers. /api/admin/currency-rates still ensures
+    // the table on read and write, so an environment that has never had an
+    // admin visit that page simply falls back to DEFAULT_RATES here (the
+    // catch below) instead of paying for schema management on every request.
     const rows = await db.execute(sql`SELECT currency, usd_rate FROM currency_rates`);
     for (const r of rows.rows) {
       rates[(r.currency as string).toUpperCase()] = Number(r.usd_rate);
