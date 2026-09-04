@@ -28,7 +28,7 @@ interface MeData {
     id: string;
     name: string;
     plainKeyTemp: string | null;
-    dailyLimit: number;
+    monthlyLimit: number | null;
     perMinuteLimit: number;
     lastUsedAt: string | null;
   } | null;
@@ -41,21 +41,7 @@ const PLAN_DETAILS = {
   scale:   { label: "Scale",   price: "$50/mo", queries: "10,000 queries", rate: "60 req/min",  planKey: "scale" as PlanKey },
 };
 
-type PlanDetails = (typeof PLAN_DETAILS)[PlanKey];
 
-function switchPlanMessage(data: MeData | null, target: PlanDetails): { subject: string; body: string } {
-  const currentLabel = data?.user.planName ?? "unknown";
-  const email = data?.user.email ?? "";
-  const subject = `Switch my Linkpricer API plan: ${currentLabel} → ${target.label}`;
-  const body = [
-    `Account email: ${email}`,
-    `Current plan: ${currentLabel}`,
-    `Requested plan: ${target.label} (${target.price}, ${target.queries}/mo, ${target.rate})`,
-    "",
-    "Please switch my subscription to the plan above.",
-  ].join("\n");
-  return { subject, body };
-}
 
 export default function DeveloperDashboardPage() {
   return (
@@ -75,14 +61,9 @@ function DashboardContent() {
   const [dataLoading, setDataLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
-  const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
-  const [switchPlanTarget, setSwitchPlanTarget] = useState<PlanDetails | null>(null);
-  const [switchSending, setSwitchSending] = useState(false);
-  const [switchSendError, setSwitchSendError] = useState("");
-  const [switchSent, setSwitchSent] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // fetchMe (initial load), pollForKey (post-checkout polling), and
@@ -96,7 +77,29 @@ function DashboardContent() {
   const requestSeq = useRef(0);
   const ackedKeyRef = useRef(false);
 
+  // The plaintext key, held for the life of the page once it has been seen.
+  //
+  // The server reveal is deliberately one-shot: the dashboard acks it and the
+  // server nulls plain_key_temp, so every /me read after that returns null.
+  // Reading the key straight off `data` therefore made it disappear the
+  // instant anything refetched — and something always does. onAuthStateChanged
+  // fires again on a token refresh, which changes `firebaseUser` and re-runs
+  // the effect below (fetchMe + pollForKey all over again); React StrictMode
+  // double-invokes the same effect in development. Either one lands a
+  // post-ack response and repaints the card as "issued before we started
+  // keeping it visible here" — a customer who has just paid, watching their
+  // only copy of the key vanish, with Regenerate as the sole recovery.
+  //
+  // requestSeq cannot fix this: those later reads are genuinely newer and
+  // genuinely correct about the server's state. The key just has to outlive
+  // them on the client.
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+
   const applyIfLatest = useCallback((seq: number, d: MeData) => {
+    // Capture the reveal before the staleness check — a response that loses
+    // the ordering race still carries a key worth keeping, and dropping it
+    // here is what the whole revealedKey mechanism exists to prevent.
+    if (d.apiKey?.plainKeyTemp) setRevealedKey(d.apiKey.plainKeyTemp);
     if (seq !== requestSeq.current) return; // a newer request has since started — drop this stale response
     setData(d);
   }, []);
@@ -211,22 +214,27 @@ function DashboardContent() {
   // been shown so it can clear the one-time reveal — deliberately, exactly
   // once, instead of as a side effect of every background /me read.
   useEffect(() => {
-    if (data?.apiKey?.plainKeyTemp && !ackedKeyRef.current) {
+    if (revealedKey && !ackedKeyRef.current) {
       ackedKeyRef.current = true;
       fetch("/api/developers/ack-key-reveal", { method: "POST" }).catch(() => {
         ackedKeyRef.current = false; // allow retry on the next render if the ack failed
       });
     }
-  }, [data?.apiKey?.plainKeyTemp]);
+  }, [revealedKey]);
 
   async function handleSignOut() {
     await signOut();
     setFirebaseUser(null);
     setData(null);
+    setRevealedKey(null); // never leave a plaintext key sitting in the heap of a signed-out page
   }
 
   async function regenerateKey() {
     ackedKeyRef.current = false; // the new key will need its own reveal acked once shown
+    // Drop the old plaintext before the rotation lands. Without this the Copy
+    // button would keep handing out the key that was just revoked — which
+    // looks like it worked right up until the first 401 in production.
+    setRevealedKey(null);
     setRegenerating(true);
     try {
       const res = await fetch("/api/developers/regenerate-key", { method: "POST" });
@@ -238,19 +246,6 @@ function DashboardContent() {
       }
     } finally {
       setRegenerating(false);
-    }
-  }
-
-  async function openBillingPortal() {
-    if (!firebaseUser) return;
-    setBillingLoading(true);
-    try {
-      const res = await fetch("/api/developers/billing-portal", { method: "POST" });
-      const { url, error } = await res.json();
-      if (url) window.location.href = url;
-      else alert(error ?? "Could not open billing portal.");
-    } finally {
-      setBillingLoading(false);
     }
   }
 
@@ -371,61 +366,6 @@ function DashboardContent() {
         .db-modal-msg { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; color: #111827; margin-bottom: 18px; max-height: 240px; overflow-y: auto; }
       `}</style>
 
-      {switchPlanTarget && (
-        <div className="db-modal-overlay" onClick={() => setSwitchPlanTarget(null)}>
-          <div className="db-modal db-modal-wide" onClick={(e) => e.stopPropagation()}>
-            {switchSent ? (
-              <>
-                <h3>Request sent</h3>
-                <p>We&apos;ve got your request to switch to {switchPlanTarget.label} — our team will follow up by email shortly.</p>
-                <div className="db-modal-actions">
-                  <button className="db-modal-btn primary" onClick={() => setSwitchPlanTarget(null)}>Done</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h3>Switch to {switchPlanTarget.label}</h3>
-                <p>Plan changes go through our team right now, not self-service. Send the request below and we&apos;ll follow up by email.</p>
-                <div className="db-modal-msg">
-                  {`Subject: ${switchPlanMessage(data, switchPlanTarget).subject}\n\n${switchPlanMessage(data, switchPlanTarget).body}`}
-                </div>
-                {switchSendError && <div className="signup-error" style={{ marginBottom: 16 }}>{switchSendError}</div>}
-                <div className="db-modal-actions">
-                  <button className="db-modal-btn" onClick={() => setSwitchPlanTarget(null)}>Cancel</button>
-                  <button
-                    className="db-modal-btn primary"
-                    disabled={switchSending}
-                    onClick={async () => {
-                      const { subject, body } = switchPlanMessage(data, switchPlanTarget);
-                      setSwitchSending(true);
-                      setSwitchSendError("");
-                      try {
-                        const res = await fetch("/api/developers/support-request", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ topic: "plan_change", subject, message: body }),
-                        });
-                        if (res.ok) {
-                          setSwitchSent(true);
-                        } else {
-                          const { error } = await res.json().catch(() => ({ error: null }));
-                          setSwitchSendError(error ?? "Could not send request. Please try again.");
-                        }
-                      } catch {
-                        setSwitchSendError("Could not send request. Please try again.");
-                      } finally {
-                        setSwitchSending(false);
-                      }
-                    }}
-                  >
-                    {switchSending ? "Sending…" : "Send request"}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
 
       {confirmRegen && (
         <div className="db-modal-overlay" onClick={() => setConfirmRegen(false)}>
@@ -478,7 +418,7 @@ function DashboardContent() {
           <div className="db-card db-card-full">
             <div className="db-card-label">Your API Key</div>
             {data?.apiKey ? (
-              data.apiKey.plainKeyTemp ? (
+              revealedKey ?? data.apiKey.plainKeyTemp ? (
                 <>
                   <div className="db-key-row">
                     {/* The real value only ever leaves the client via the Copy
@@ -488,7 +428,7 @@ function DashboardContent() {
                     <span className="db-key-text">{maskedKey}</span>
                     <button
                       className={`db-key-btn${copied ? " success" : ""}`}
-                      onClick={() => copyKey(data.apiKey!.plainKeyTemp!)}
+                      onClick={() => copyKey((revealedKey ?? data.apiKey!.plainKeyTemp)!)}
                     >
                       {copied ? "Copied!" : "Copy"}
                     </button>
@@ -572,18 +512,18 @@ function DashboardContent() {
               <span className="db-billing-value">{data?.user.planName ?? "—"}</span>
             </div>
             {currentPlanKey && (
-              <button
-                className="db-manage-btn"
-                onClick={openBillingPortal}
-                disabled={billingLoading}
-                style={{ border: "none" }}
-              >
+              // Was the Stripe hosted portal. That was a second, uncontrolled
+              // route into the same subscription: it could cancel immediately
+              // rather than at period end, and switch plans without ever
+              // showing the proration quote. /developers/billing does all of
+              // it under our own rules, so it is now the only way in.
+              <Link className="db-manage-btn" href="/developers/billing">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M21 4H3a2 2 0 00-2 2v13a2 2 0 002 2h18a2 2 0 002-2V6a2 2 0 00-2-2z"/>
                   <path d="M1 10h22"/>
                 </svg>
-                {billingLoading ? "Opening…" : "Manage billing & invoices"}
-              </button>
+                Manage billing &amp; invoices
+              </Link>
             )}
           </div>
 
@@ -603,24 +543,13 @@ function DashboardContent() {
                     {isCurrent ? (
                       <button className="db-plan-btn db-plan-btn-disabled" disabled>Current</button>
                     ) : currentPlanKey ? (
-                      // Plan changes aren't self-service yet — switching would
-                      // start a second Stripe subscription alongside the
-                      // existing one instead of replacing it. Route to support
-                      // until in-place, prorated plan changes are built.
-                      // Pre-fill the account's email/current plan/target plan
-                      // so support has everything needed to act. A bare
-                      // mailto: link silently does nothing when the browser
-                      // has no registered mail handler (common — e.g. Gmail
-                      // used via the web, not as the OS default) — so this
-                      // opens an in-app modal with the same content plus a
-                      // Copy button, and mailto is offered only as a bonus
-                      // shortcut for people who do have one configured.
-                      <button
-                        className="db-plan-btn db-plan-btn-outline"
-                        onClick={() => { setSwitchSent(false); setSwitchSendError(""); setSwitchPlanTarget(plan); }}
-                      >
-                        Contact us to switch
-                      </button>
+                      // Plan changes are self-service now — /developers/billing
+                      // switches the existing subscription in place and shows
+                      // the prorated amount before charging, rather than
+                      // starting a second subscription alongside the first.
+                      <Link href="/developers/billing" className="db-plan-btn db-plan-btn-outline">
+                        Switch plan
+                      </Link>
                     ) : (
                       <button
                         className="db-plan-btn db-plan-btn-outline"
@@ -726,7 +655,7 @@ function SignUpView({ onAuth }: { onAuth: (user: User) => void }) {
 
       <div className="signup-steps">
         {[
-          { num: "1", title: "Create your account", body: "Sign up with email or Google. Free to start." },
+          { num: "1", title: "Create your account", body: "Sign up with email or Google, then choose a plan." },
           { num: "2", title: "Choose a plan", body: "Pick the tier that fits your usage. Upgrade anytime." },
           { num: "3", title: "Get your API key", body: "Copy your key and start querying immediately." },
         ].map((s) => (

@@ -14,11 +14,14 @@ const SECTIONS = [
 ];
 
 const ERROR_CODES = [
-  { code: "401", name: "Unauthorized", desc: "Missing or invalid API key in the x-api-key header." },
-  { code: "404", name: "Not Found", desc: "No pricing data found for this domain in our database." },
-  { code: "422", name: "Unprocessable", desc: "The domain parameter is malformed or missing." },
-  { code: "429", name: "Rate Limited", desc: "You have exceeded your plan's request limit. Check Retry-After header." },
-  { code: "500", name: "Server Error", desc: "Internal error on our side. Retry with exponential backoff." },
+  { code: "401", name: "missing_api_key", desc: "No x-api-key header was sent." },
+  { code: "401", name: "invalid_api_key", desc: "The key is unknown, or its subscription is no longer active." },
+  { code: "404", name: "domain_not_found", desc: "The domain is not in our catalog at all." },
+  { code: "422", name: "invalid_domain", desc: "The domain parameter is missing or malformed. Does not consume quota." },
+  { code: "422", name: "invalid_niche", desc: "The niche value is not one we price. Does not consume quota." },
+  { code: "429", name: "rate_limit_exceeded", desc: "Per-minute burst limit hit. Retry-After is about 60 seconds." },
+  { code: "429", name: "quota_exceeded", desc: "Monthly quota spent. Retry-After counts down to the 1st, 00:00 UTC." },
+  { code: "500", name: "internal_error", desc: "Error on our side. Retry with exponential backoff." },
 ];
 
 const RATE_TIERS = [
@@ -31,9 +34,24 @@ const RESPONSE_EXAMPLE = `{
   "domain": "techblog.com",
   "found": true,
   "pricing": {
-    "standard": { "lowest_price": 150.00, "our_price": 173.00, "currency": "USD" },
-    "gambling": { "lowest_price": 350.00, "our_price": 403.00, "currency": "USD" },
-    "crypto":   { "lowest_price": 480.00, "our_price": 552.00, "currency": "USD" }
+    "standard": {
+      "best_price":        150.00,
+      "average_price":     264.50,
+      "highest_price":     420.00,
+      "our_price":         173,
+      "recommended_price": 219,
+      "offer_count":       6,
+      "currency":          "USD"
+    },
+    "gambling": {
+      "best_price":        350.00,
+      "average_price":     512.40,
+      "highest_price":     890.00,
+      "our_price":         402,
+      "recommended_price": null,
+      "offer_count":       3,
+      "currency":          "USD"
+    }
   },
   "metrics": {
     "domain_rating":   45,
@@ -51,24 +69,24 @@ const ERROR_EXAMPLE = `{
 }`;
 
 const CURL_EXAMPLE = `curl -X GET \\
-  "https://linkpricer.ai/api/v1/public/domains/techblog.com/pricing" \\
+  "https://www.linkpricer.ai/api/v1/public/domains/techblog.com/pricing" \\
   -H "x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"`;
 
 const JS_EXAMPLE = `const res = await fetch(
-  "https://linkpricer.ai/api/v1/public/domains/techblog.com/pricing",
+  "https://www.linkpricer.ai/api/v1/public/domains/techblog.com/pricing",
   { headers: { "x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx" } }
 );
 const data = await res.json();
-console.log(data.pricing.standard.lowest_price); // 150`;
+console.log(data.pricing.standard.best_price); // 150`;
 
 const PYTHON_EXAMPLE = `import requests
 
 response = requests.get(
-    "https://linkpricer.ai/api/v1/public/domains/techblog.com/pricing",
+    "https://www.linkpricer.ai/api/v1/public/domains/techblog.com/pricing",
     headers={"x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"}
 )
 data = response.json()
-print(data["pricing"]["standard"]["lowest_price"])  # 150`;
+print(data["pricing"]["standard"]["best_price"])  # 150`;
 
 type Lang = "curl" | "javascript" | "python";
 
@@ -158,13 +176,13 @@ export default function DocsPage() {
           <section className="docs-section" id="overview">
             <h2 className="docs-h2">Overview</h2>
             <p className="docs-p">
-              The Linkpricer API gives developers programmatic access to domain pricing data aggregated from 20+ link-building marketplaces. For every domain query, you get the lowest available price across all sources — without any marketplace names ever being exposed.
+              The Linkpricer API gives developers programmatic access to domain pricing data aggregated from 50+ link-building marketplaces. For every domain and every niche you get the full spread — best, average and highest price on the market — plus what Linkpricer charges to place it for you, without any marketplace names ever being exposed.
             </p>
             <p className="docs-p">
               The API is a simple REST interface. All responses are JSON. Authentication uses an API key passed in a request header.
             </p>
             <div className="docs-callout">
-              <strong>Base URL:</strong> <code className="docs-inline-code">https://linkpricer.ai/api/v1/public</code>
+              <strong>Base URL:</strong> <code className="docs-inline-code">https://www.linkpricer.ai/api/v1/public</code>
             </div>
           </section>
 
@@ -245,7 +263,30 @@ export default function DocsPage() {
                     <code className="docs-inline-code">loan</code>,{" "}
                     <code className="docs-inline-code">dating</code>,{" "}
                     <code className="docs-inline-code">crypto</code>,{" "}
-                    <code className="docs-inline-code">trading_forex</code>. Omit it to get every niche in one call.
+                    <code className="docs-inline-code">trading_forex</code>,{" "}
+                    <code className="docs-inline-code">link_insertion</code>. Omit it to get every niche in one call.
+                    <br />
+                    <br />
+                    These are the same nine niches the Linkpricer dashboard prices, and the
+                    dashboard&apos;s own labels are accepted as synonyms so you can pass whichever you
+                    have to hand: <code className="docs-inline-code">general</code> and{" "}
+                    <code className="docs-inline-code">base</code> →{" "}
+                    <code className="docs-inline-code">standard</code>,{" "}
+                    <code className="docs-inline-code">igaming</code> →{" "}
+                    <code className="docs-inline-code">gambling</code>,{" "}
+                    <code className="docs-inline-code">loans</code> →{" "}
+                    <code className="docs-inline-code">loan</code>,{" "}
+                    <code className="docs-inline-code">forex</code> →{" "}
+                    <code className="docs-inline-code">trading_forex</code>,{" "}
+                    <code className="docs-inline-code">insertion</code> →{" "}
+                    <code className="docs-inline-code">link_insertion</code>.
+                    <br />
+                    <br />
+                    A niche only appears in the response when at least one source actually prices
+                    that niche for that domain. An offer with no price set for a niche is left out
+                    of it entirely rather than falling back to its base rate — so a{" "}
+                    <code className="docs-inline-code">gambling</code> figure is always a real
+                    gambling price, never a standard one relabelled.
                   </td>
                 </tr>
               </tbody>
@@ -290,22 +331,21 @@ export default function DocsPage() {
               </thead>
               <tbody>
                 {[
-                  ["domain", "string", "The domain you queried."],
-                  ["found", "boolean", "false if the domain exists in our DB but has no current pricing."],
-                  ["pricing.standard.lowest_price", "number | null", "Lowest standard guest post / link insert price in USD, anonymized across marketplaces. null = no offer found."],
-                  ["pricing.standard.our_price", "number | null", "LinkPricer's own price to fulfill this placement directly (includes our margin over lowest_price). Present on every niche object."],
-                  ["pricing.gambling.lowest_price", "number | null", "Lowest price for gambling-niche content."],
-                  ["pricing.adult.lowest_price", "number | null", "Lowest price for adult-niche content."],
-                  ["pricing.cbd.lowest_price", "number | null", "Lowest price for CBD-niche content."],
-                  ["pricing.loan.lowest_price", "number | null", "Lowest price for loan/finance-niche content."],
-                  ["pricing.dating.lowest_price", "number | null", "Lowest price for dating-niche content."],
-                  ["pricing.crypto.lowest_price", "number | null", "Lowest price for crypto-niche content."],
-                  ["pricing.trading_forex.lowest_price", "number | null", "Lowest price for trading/forex-niche content."],
+                  ["domain", "string", "The normalized domain you queried."],
+                  ["found", "boolean", "false when nothing in this response is priced — either no source prices the domain at all, or the niche you filtered to has no offers. pricing is then {} and last_updated is null."],
+                  ["pricing", "object", "One entry per niche that at least one source prices for this domain. A niche nobody prices is absent — never present with nulls."],
+                  ["pricing.<niche>.best_price", "number", "Lowest price any source charges for this niche, in USD. This is the market low, anonymized — we never say which source it came from."],
+                  ["pricing.<niche>.average_price", "number", "Mean price across every source that prices this niche, in USD."],
+                  ["pricing.<niche>.highest_price", "number", "Highest price any source charges for this niche, in USD."],
+                  ["pricing.<niche>.our_price", "number", "What Linkpricer charges to place this for you at the best price. Identical to the price shown on the dashboard's Buy button."],
+                  ["pricing.<niche>.recommended_price", "number | null", "What Linkpricer charges via the cheapest source our team has vetted. null when no vetted source prices this niche for this domain — the placement is still available at our_price."],
+                  ["pricing.<niche>.offer_count", "number", "How many independent sources back these figures."],
+                  ["pricing.<niche>.currency", "string", "Always \"USD\". Source prices in other currencies are converted before any comparison."],
                   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],
                   ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic."],
                   ["metrics.ref_domains", "number | null", "Number of referring domains."],
                   ["metrics.country", "string | null", "Primary traffic country, full name (e.g. \"United States\") — not an ISO code."],
-                  ["last_updated", "string | null", "ISO date of the most recent price update. null when found is false (no pricing to date)."],
+                  ["last_updated", "string | null", "Date the underlying prices were last refreshed. null when nothing is priced."],
                 ].map(([field, type, desc]) => (
                   <tr key={field}>
                     <td><code className="docs-inline-code">{field}</code></td>
@@ -348,7 +388,7 @@ export default function DocsPage() {
           <section className="docs-section" id="rate-limits">
             <h2 className="docs-h2">Rate Limits</h2>
             <p className="docs-p">
-              Each plan includes a monthly quota and a per-minute burst limit. When you exceed your per-minute limit, the API returns <code className="docs-inline-code">429</code> with a <code className="docs-inline-code">Retry-After</code> header (seconds until your rate limit resets).
+              Each plan includes a monthly quota and a per-minute burst limit. Those are the only two limits — there is no daily cap, so you are free to spend a whole month&apos;s quota in one batch run. Both limits return <code className="docs-inline-code">429</code> with a <code className="docs-inline-code">Retry-After</code> header giving the seconds until that specific limit clears: about a minute for a burst (<code className="docs-inline-code">rate_limit_exceeded</code>), or the time remaining until the 1st for a spent quota (<code className="docs-inline-code">quota_exceeded</code>). The <code className="docs-inline-code">error</code> field tells the two apart, so a client can back off for a minute without mistaking it for a month.
             </p>
             <table className="docs-table">
               <thead>

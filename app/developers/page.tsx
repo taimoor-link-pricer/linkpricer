@@ -31,9 +31,9 @@ const TIERS = [
 ];
 
 const FEATURES = [
-  { icon: "🔍", title: "Lowest price, anonymized", body: "Query any domain and get the lowest available price across all marketplaces — no marketplace names ever exposed." },
+  { icon: "🔍", title: "Full price spread, anonymized", body: "Query any domain and get the best, average and highest price across every marketplace we track — no marketplace names ever exposed." },
   { icon: "📊", title: "Rich domain metrics", body: "Domain rating, organic traffic, referring domains, country, and niche data bundled in every response." },
-  { icon: "⚡", title: "Fast & reliable", body: "Sub-200ms responses. Data refreshed daily from 20+ marketplaces and growing." },
+  { icon: "⚡", title: "Fast & reliable", body: "Prices are read live from source on every call — no stale cache layer in front of them. Data refreshed daily from 50+ marketplaces and growing." },
   { icon: "🔒", title: "Secure by default", body: "API key auth on every request. Server-to-server only — no browser CORS. Keys scoped per account." },
   { icon: "📈", title: "Rate limiting built in", body: "Every plan includes per-minute and per-month request limits. Overages return a clean 429 with retry headers." },
   { icon: "🧩", title: "Simple REST API", body: "One endpoint, predictable JSON response, full error codes. Integrates in minutes with any language." },
@@ -43,15 +43,30 @@ const EXAMPLE_RESPONSE = `{
   "domain": "techblog.com",
   "found": true,
   "pricing": {
-    "standard": { "lowest_price": 150.00, "currency": "USD" },
-    "gambling": { "lowest_price": 350.00, "currency": "USD" },
-    "crypto":   { "lowest_price": 480.00, "currency": "USD" }
+    "standard": {
+      "best_price":        150.00,
+      "average_price":     264.50,
+      "highest_price":     420.00,
+      "our_price":         173,
+      "recommended_price": 219,
+      "offer_count":       6,
+      "currency":          "USD"
+    },
+    "gambling": {
+      "best_price":        350.00,
+      "average_price":     512.40,
+      "highest_price":     890.00,
+      "our_price":         402,
+      "recommended_price": null,
+      "offer_count":       3,
+      "currency":          "USD"
+    }
   },
   "metrics": {
     "domain_rating":   45,
     "organic_traffic": 12000,
     "ref_domains":     1200,
-    "country":         "US"
+    "country":         "United States"
   },
   "last_updated": "2026-06-20"
 }`;
@@ -135,8 +150,8 @@ export default function DevelopersPage() {
             <span>built for developers</span>
           </h1>
           <p className="dev-sub">
-            Query any domain and get the lowest available price from across 20+ marketplaces.
-            One endpoint, clean JSON, ready in minutes.
+            Query any domain and get the full price spread from across 50+ marketplaces,
+            for every niche. One endpoint, clean JSON, ready in minutes.
           </p>
           <div className="dev-hero-cta">
             <Link href="/developers/dashboard" className="dev-btn-primary">Get your API key</Link>
@@ -173,7 +188,7 @@ export default function DevelopersPage() {
       {/* Pricing */}
       <div className="dev-section">
         <h2 className="dev-section-h2">Simple, usage-based pricing</h2>
-        <p className="dev-section-sub">Monthly subscription + metered usage. Cancel anytime.</p>
+        <p className="dev-section-sub">Flat monthly subscription. Cancel anytime.</p>
         <div className="dev-pricing-grid">
           {TIERS.map((tier) => (
             <div key={tier.name} className={`dev-tier${tier.highlight ? " highlighted" : ""}`}>
@@ -208,7 +223,7 @@ export default function DevelopersPage() {
         <h2>Ready to build?</h2>
         <p>Sign up, get your API key, and make your first request in under 5 minutes.</p>
         <Link href="/developers/dashboard" className="dev-btn-primary" style={{ display: "inline-block", background: "#fff", color: "#0052cc" }}>
-          Get API key — free to start
+          Get your API key
         </Link>
       </div>
     </>

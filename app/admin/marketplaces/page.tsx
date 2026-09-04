@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import Link from "next/link";
 
 type DomainSummary = {
   domain: string;
@@ -182,6 +183,13 @@ export default function MarketplacesPage() {
     <>
       <style>{`
         .mp-page { padding: 32px; max-width: 1400px; }
+        .mp-tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+        .mp-tab {
+          padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+          text-decoration: none; color: #6b7280; border: 1px solid transparent;
+        }
+        .mp-tab:hover { background: #f3f4f6; color: #374151; }
+        .mp-tab.active { background: #111827; color: #fff; }
         .mp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
         .mp-title { font-size: 22px; font-weight: 700; color: #111827; margin: 0; }
         .mp-export-btn {
@@ -281,6 +289,14 @@ export default function MarketplacesPage() {
       `}</style>
 
       <div className="mp-page">
+        {/* The marketplace *registry* (and its trust flags) lives on its own
+            page — this one is a per-domain lookup. Linked as a tab so the two
+            marketplace views are reachable from each other rather than only
+            from the sidebar. */}
+        <div className="mp-tabs">
+          <Link href="/admin/marketplaces" className="mp-tab active">Domains</Link>
+          <Link href="/admin/marketplaces/trust" className="mp-tab">Trust</Link>
+        </div>
         <div className="mp-header">
           <h1 className="mp-title">Domain Marketplace Lookup</h1>
           <button
