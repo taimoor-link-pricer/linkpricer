@@ -6,6 +6,7 @@ import { ROUTES } from "@/lib/constants";
 import { btn } from "@/components/design-v1/primitives";
 import { SectionHead } from "./section-head";
 import { SignupModal, type SignupReason } from "./signup-modal";
+import { DemoRedirect } from "./demo-redirect";
 import { DemoAnalyze } from "./demo/DemoAnalyze";
 
 const FREE_SEARCHES = 2;
@@ -24,6 +25,7 @@ export function ComparePageBody() {
 
   return (
     <div className="lp-reset" id="top" style={{ background: "var(--lp-bg)", minHeight: "100vh", fontFamily: "var(--lp-sans)", color: "var(--lp-ink)" }}>
+      <DemoRedirect to={ROUTES.search} />
       <style>{`
         @media (max-width: 760px) {
           .lp-demo-grid { grid-template-columns: 1fr !important; }

@@ -15,15 +15,20 @@ import { C } from "@/components/dashboard/results-shared";
 import { useUnreadOrders } from "@/lib/contexts/unread-orders-context";
 import { ProfileMenu } from "./profile-menu";
 
-export type DashboardNavKey = "analyze" | "relatedSites" | "favorites" | "orders";
+export type DashboardNavKey = "aiSearch" | "analyze" | "relatedSites" | "favorites" | "orders";
 
 const NAV_ITEMS: { key: DashboardNavKey; label: string; href: string; breadcrumb: string }[] = [
+  // The AI chat lives on the marketing URL rather than under /dashboard, but
+  // for a signed-in user it is a real app surface — it searches the live
+  // catalog and its Buy button routes into Analyze. Leaving it out of this nav
+  // meant it was reachable from the marketing header and then vanished the
+  // moment you were inside the app, which is the same disappearing-feature
+  // confusion the demo/app split was meant to fix.
+  { key: "aiSearch", label: "AI Search", href: ROUTES.home, breadcrumb: "/ app / ai search" },
   { key: "analyze", label: "Analyze", href: ROUTES.search, breadcrumb: "/ app / analyze" },
   // Not ROUTES.relatedSites ("/related-sites") — that's the logged-out public
-  // demo page. The in-app tool these four pages actually link between each
-  // other lives at /dashboard/related-sites, which ROUTES has no separate
-  // entry for.
-  { key: "relatedSites", label: "Related Sites", href: "/dashboard/related-sites", breadcrumb: "/ app / related sites" },
+  // demo page. The in-app tool is ROUTES.appRelatedSites.
+  { key: "relatedSites", label: "Related Sites", href: ROUTES.appRelatedSites, breadcrumb: "/ app / related sites" },
   { key: "favorites", label: "Favorites", href: ROUTES.favorites, breadcrumb: "/ app / favorites" },
   { key: "orders", label: "Orders", href: ROUTES.orders, breadcrumb: "/ app / orders" },
 ];

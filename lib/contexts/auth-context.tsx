@@ -248,7 +248,14 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
           // the signup/login flow attached, before the wizard ever gets a
           // chance to read it.
           if (!requireAdmin && resolved.role !== "vendor" && !resolved.hasCompletedOnboarding && pathname !== ROUTES.onboarding) {
-            router.replace(ROUTES.onboarding);
+            // Carry where they were actually going through the wizard, which
+            // already reads ?redirect= on completion (onboarding-wizard.tsx).
+            // Without this, a signed-in user who hasn't onboarded yet and
+            // clicks "Buy now" on the homepage AI chat — which routes to
+            // /dashboard/search?domain=… — arrives after onboarding on an
+            // empty search page, the domain they picked silently dropped.
+            const intended = pathname + window.location.search;
+            router.replace(`${ROUTES.onboarding}?redirect=${encodeURIComponent(intended)}`);
             return;
           }
         } else if (res.status === 401) {

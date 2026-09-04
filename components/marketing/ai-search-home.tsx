@@ -8,12 +8,15 @@
 // best match since this UI shows one domain at a time.
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Icon, RatingBadge } from "@/lib/design-v1/icons";
 import { fmt } from "@/lib/design-v1/format";
 import { Pill, btn, chip, priceLbl, priceVal } from "@/components/design-v1/primitives";
 import type { CatalogSearchResult, CatalogSearchOffer } from "@/lib/search/catalog-search";
 import { SignupModal, type SignupReason } from "./signup-modal";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import { ROUTES } from "@/lib/constants";
+import { useMarketingAuth } from "@/lib/hooks/use-marketing-auth";
 
 const CHIPS = ["Finance guest post", "iGaming niche edit", "Tech blog under $200", "SaaS website about VPN"];
 
@@ -138,7 +141,7 @@ function OfferRow({ o, locked, onUnlock }: { o: CatalogSearchOffer; locked?: boo
   );
 }
 
-function MatchResult({ d, onBuy, onViewMore }: { d: CatalogSearchResult; onBuy: () => void; onViewMore: () => void }) {
+function MatchResult({ d, onBuy, onViewMore, signedIn }: { d: CatalogSearchResult; onBuy: () => void; onViewMore: () => void; signedIn: boolean }) {
   const offers = (d.offers || []).slice().sort((a, b) => a.minPrice - b.minPrice);
   const [best, second, third] = offers;
   const remaining = offers.length - 3;
@@ -153,7 +156,10 @@ function MatchResult({ d, onBuy, onViewMore }: { d: CatalogSearchResult; onBuy: 
 
       {best && <OfferCard o={best} onBuy={onBuy} />}
       {second && <OfferRow o={second} />}
-      {third && <OfferRow o={third} locked onUnlock={onViewMore} />}
+      {/* The blur is a sign-up gate, not a data limitation — the offer is
+          already on screen either way. Nothing to hide from someone who has
+          an account. */}
+      {third && <OfferRow o={third} locked={!signedIn} onUnlock={onViewMore} />}
 
       {remaining > 0 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
@@ -253,6 +259,8 @@ export function AiSearchHome() {
   const [value, setValue] = useState("");
   const [thinking, setThinking] = useState(false);
   const [signup, setSignup] = useState<SignupReason | null>(null);
+  const { signedIn } = useMarketingAuth();
+  const router = useRouter();
 
   // A Google sign-in that falls back to a full-page redirect is picked up by
   // AuthSync in the root layout — this page used to do it itself, but the same
@@ -278,6 +286,20 @@ export function AiSearchHome() {
     setSignupDomain(domain);
   };
 
+  // Signed in, this chat is the real product rather than a teaser, so Buy and
+  // "See all suppliers" have to go somewhere real. Both land on the same
+  // per-domain compare view that the signup flow already redirects to once a
+  // signed-out user finishes creating an account (see signup-modal.tsx's
+  // `target`) — that page owns the full supplier list, the cart and checkout,
+  // none of which exist out here on the marketing side.
+  const openInApp = (domain: string) => {
+    router.push(`${ROUTES.search}?domain=${encodeURIComponent(domain)}`);
+  };
+  const onDomainAction = (reason: SignupReason, domain: string) => {
+    if (signedIn) openInApp(domain);
+    else requireSignup(reason, domain);
+  };
+
   async function respond(text: string) {
     try {
       const res = await fetch("/api/homepage-search", {
@@ -288,7 +310,15 @@ export function AiSearchHome() {
 
       if (res.status === 429) {
         setThinking(false);
-        requireSignup("search");
+        // The per-IP free-search cap only applies to signed-out visitors, so
+        // the API shouldn't 429 an account at all — but if it ever does,
+        // showing a signed-in user a "create an account" modal is the exact
+        // nonsense this change exists to remove. Say what actually happened.
+        if (signedIn) {
+          setThread((t) => [...t, { role: "assistant", text: "You're searching faster than we can keep up — give it a moment and try again." }]);
+        } else {
+          requireSignup("search");
+        }
         return;
       }
 
@@ -373,7 +403,7 @@ export function AiSearchHome() {
             <div style={{ maxWidth: 760, margin: "0 auto", padding: "0 20px" }}>
               {thread.map((m, i) => {
                 if (m.role === "user") return <UserBubble key={i} text={m.text} />;
-                if ("domain" in m) return <MatchResult key={i} d={m.domain} onBuy={() => requireSignup("buy", m.domain.domain)} onViewMore={() => requireSignup("search", m.domain.domain)} />;
+                if ("domain" in m) return <MatchResult key={i} d={m.domain} signedIn={signedIn} onBuy={() => onDomainAction("buy", m.domain.domain)} onViewMore={() => onDomainAction("search", m.domain.domain)} />;
                 return <AssistantText key={i} text={m.text} suggestions={m.suggestions} onSuggestionClick={(s) => send(s)} />;
               })}
               {thinking && <TypingRow />}

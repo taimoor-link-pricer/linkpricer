@@ -1,4 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+// Proxy can be deployed to the CDN separately from the render code, and the
+// docs warn against relying on shared modules here. lib/constants.ts is safe
+// to import in spite of that: it has no imports of its own and holds nothing
+// but frozen literals, so it inlines into the edge bundle and carries no
+// runtime state that could differ between the two environments. Duplicating
+// these paths instead would be the bigger risk — the nav in site-header.tsx
+// has to agree with this file exactly.
+import { DEMO_TO_APP, ROUTES } from "@/lib/constants";
 
 const PROTECTED_PATHS = ["/dashboard", "/onboarding"];
 const AUTH_ONLY_PATHS = ["/login", "/signup"];
@@ -28,7 +36,26 @@ export function proxy(req: NextRequest) {
 
   if (isAuthOnly && session) {
     const url = req.nextUrl.clone();
-    url.pathname = "/dashboard";
+    // ROUTES.search, not ROUTES.dashboard — /dashboard renders nothing, so
+    // this used to drop everyone who hit /login while already signed in onto
+    // a blank page.
+    url.pathname = ROUTES.search;
+    return NextResponse.redirect(url);
+  }
+
+  // Signed-in users never see a demo page. /compare and /related-sites run on
+  // hardcoded fixtures (lib/design-v1/sample-data.ts, related-data.ts), so
+  // there is nothing to "upgrade" them to in place — the real tool is a
+  // different route. Redirecting at the edge means no flash of demo content.
+  //
+  // The inverse of the PROTECTED_PATHS caveat above applies: a *missing*
+  // cookie doesn't prove the user is signed out, so this can't be the only
+  // check. The two demo page bodies repeat it once Firebase resolves.
+  const appEquivalent = DEMO_TO_APP[pathname];
+  if (appEquivalent && session) {
+    const url = req.nextUrl.clone();
+    url.pathname = appEquivalent;
+    url.search = "";
     return NextResponse.redirect(url);
   }
 
