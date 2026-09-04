@@ -13,8 +13,19 @@ import { searchCatalog, type CatalogSearchFilters, type CatalogSortBy, type Cata
 export const maxDuration = 60;
 
 // ── Weekly search quota ──────────────────────────────────────────────────────
-// Reuses the existing generic `user_activity_events` log (eventType +
-// userId + timestamp, already indexed) rather than a new table/migration.
+// The quota exists to cap *Ahrefs spend*, not search volume. Ahrefs is only
+// ever called for the "hide sites that already link to me" exclusion
+// (lib/integrations/referring-domains-cache.ts -> lib/integrations/ahrefs.ts),
+// which fires only when the user supplies their own site AND turns the toggle
+// on. Every other search — plain, filtered, re-sorted — is DB + Claude only
+// and costs us nothing per-Ahrefs, so it is unmetered and must never be
+// blocked by an exhausted quota. See isBillableSearch() below.
+//
+// The counter of record is users.related_sites_week_count / related_sites_
+// week_start (a date-only 'YYYY-MM-DD' Monday marker). It is the same row the
+// atomic reservation UPDATE touches, so the number we display and the number
+// we enforce can never disagree. `user_activity_events` is still written for
+// every search, but purely as an analytics/dedup log — never as a counter.
 //
 // The actual search logic (SQL prefilter + Claude rerank + pricing joins)
 // lives in lib/search/catalog-search.ts, shared with the public homepage
@@ -41,6 +52,13 @@ function startOfWeekUTC(d = new Date()): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diffFromMonday, 0, 0, 0, 0));
 }
 
+// users.related_sites_week_start is a varchar holding the Monday as
+// 'YYYY-MM-DD'. Derived in one place so the reserve, release and read paths
+// can never key off subtly different strings.
+function weekStartKey(d: Date = startOfWeekUTC()): string {
+  return d.toISOString().slice(0, 10);
+}
+
 async function getUserId(): Promise<string | null> {
   try {
     const cookieStore = await cookies();
@@ -53,21 +71,27 @@ async function getUserId(): Promise<string | null> {
   }
 }
 
+// Reads `used` off the exact same users row (and the exact same week marker)
+// that reserveQuotaSlot's UPDATE writes and gates on. This deliberately does
+// NOT count user_activity_events rows: that log is written for every search
+// including the unmetered ones, and even when it was filtered to metered
+// searches it was a second, independently-drifting counter — live prod data
+// already showed accounts whose event count and week_count disagreed, so the
+// figure on screen was not the figure being enforced.
 async function getQuota(userId: string) {
   const weekStart = startOfWeekUTC();
   const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const [usedRows, overrideRows] = await Promise.all([
-    db.execute(sql`
-      SELECT COUNT(*)::int AS n FROM user_activity_events
-      WHERE user_id = ${userId} AND event_type = ${EVENT_TYPE}
-        AND timestamp >= ${weekStart.toISOString()} AND timestamp < ${weekEnd.toISOString()}
-    `),
-    db.execute(sql`
-      SELECT related_sites_quota_override AS n FROM users WHERE id = ${userId}
-    `),
-  ]);
-  const used = Number(usedRows.rows[0]?.n ?? 0);
-  const overrideRaw = overrideRows.rows[0]?.n;
+  const weekStartIso = weekStartKey(weekStart);
+  const rows = await db.execute(sql`
+    SELECT
+      related_sites_quota_override AS override,
+      CASE WHEN related_sites_week_start = ${weekStartIso}
+           THEN COALESCE(related_sites_week_count, 0) ELSE 0 END AS used
+    FROM users WHERE id = ${userId}
+  `);
+  const row = rows.rows[0];
+  const used = Number(row?.used ?? 0);
+  const overrideRaw = row?.override;
   const limit = overrideRaw != null ? Number(overrideRaw) : WEEKLY_LIMIT;
   return { used, remaining: Math.max(0, limit - used), limit, resetsAt: weekEnd.toISOString() };
 }
@@ -98,6 +122,23 @@ function stableStringify(value: unknown): string {
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+}
+
+// True only for searches that actually reach Ahrefs' paid refdomains endpoint:
+// the exclusion is applied in catalog-search.ts under exactly this condition
+// (`opts.hideLinked && opts.ownSite?.trim()`), and nothing else in the
+// pipeline spends Ahrefs units. Kept in lockstep with that call site — if the
+// exclusion ever gains another trigger, it has to be mirrored here or we stop
+// metering spend we are actually incurring.
+//
+// Note this bills on *use of the feature*, not on a cache miss.
+// referring-domains-cache.ts serves the same target domain from Postgres for
+// 30 days, so a repeat exclusion search for the same site costs nothing — but
+// metering on cache-miss would make the counter move unpredictably from the
+// user's point of view (identical actions, different price), so the feature
+// flag is the billing unit.
+function isBillableSearch(body: { ownSite?: string; hideLinked?: boolean }): boolean {
+  return !!body.hideLinked && !!body.ownSite?.trim();
 }
 
 // Identifies "the search" independent of sort — two requests that only differ
@@ -151,11 +192,6 @@ export async function POST(req: NextRequest) {
   const userId = await getUserId();
   if (!userId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const quota = await getQuota(userId);
-  if (quota.remaining <= 0) {
-    return NextResponse.json({ error: "Weekly search limit reached", ...quota }, { status: 429 });
-  }
-
   let body: SearchBody;
   try {
     body = await req.json();
@@ -166,24 +202,46 @@ export async function POST(req: NextRequest) {
   const query = (body.query ?? "").trim();
   if (!query) return NextResponse.json({ error: "query is required" }, { status: 400 });
 
+  // Parsed before the quota gate, unlike before: whether the quota applies at
+  // all depends on the body, so an exhausted quota must not 429 a plain search
+  // that never touches Ahrefs.
+  const billable = isBillableSearch(body);
+
+  const quota = await getQuota(userId);
+  if (billable && quota.remaining <= 0) {
+    return NextResponse.json({ error: "Weekly search limit reached", ...quota }, { status: 429 });
+  }
+
   const sortBy = body.sortBy ?? "match";
   const isPlainSort = sortBy !== "match";
 
   // Whether this counts against the weekly quota is derived server-side, not
-  // taken from the client. It's a genuine re-sort (free) only if it matches
-  // the signature of this user's own most recently logged search; anything
-  // else — including a client simply claiming countAsSearch:false — counts.
+  // taken from the client. Two conditions, both required:
+  //   1. it spends Ahrefs units at all (`billable`), and
+  //   2. it isn't this user's own most recently metered search being re-run
+  //      or re-sorted.
+  // A client claiming countAsSearch:false is still ignored — that field is
+  // read from the body nowhere in this file.
   const signature = searchSignature({ query, filters: body.filters, ownSite: body.ownSite, hideLinked: body.hideLinked });
-  const lastSearchRows = await db.execute(sql`
-    SELECT metadata FROM user_activity_events
-    WHERE user_id = ${userId} AND event_type = ${EVENT_TYPE}
-    ORDER BY timestamp DESC
-    LIMIT 1
-  `);
-  const lastMetadata = (lastSearchRows.rows ?? lastSearchRows)[0]?.metadata as { signature?: string } | undefined;
-  const countAsSearch = lastMetadata?.signature !== signature;
+  // Matched against the last *metered* event, not the last event of any kind.
+  // Unmetered searches are still logged (below) for analytics, and comparing
+  // against those would make an A -> B -> A sequence charge for the second A
+  // even though its Ahrefs lookup is already cached.
+  const lastSearchRows = billable
+    ? await db.execute(sql`
+        SELECT metadata FROM user_activity_events
+        WHERE user_id = ${userId} AND event_type = ${EVENT_TYPE}
+          AND metadata->>'billable' = 'true'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      `)
+    : null;
+  const lastMetadata = lastSearchRows
+    ? ((lastSearchRows.rows ?? lastSearchRows)[0]?.metadata as { signature?: string } | undefined)
+    : undefined;
+  const countAsSearch = billable && lastMetadata?.signature !== signature;
 
-  const weekStartIso = startOfWeekUTC().toISOString().slice(0, 10);
+  const weekStartIso = weekStartKey();
   let reservedCount: number | null = null;
   if (countAsSearch) {
     reservedCount = await reserveQuotaSlot(userId, weekStartIso);
@@ -212,16 +270,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ results: [], lowRelevance: false, degradedAhrefs, total: 0, ...quota });
     }
 
-    // Log usage against the weekly quota only on a successful, executed
-    // search that should actually count (not a sort-only re-fetch). The slot
-    // itself is already reserved atomically above; this just records what it
-    // was for.
-    if (countAsSearch) {
-      await db.execute(sql`
-        INSERT INTO user_activity_events (user_id, event_type, metadata)
-        VALUES (${userId}, ${EVENT_TYPE}, ${JSON.stringify({ query, signature })})
-      `);
-    }
+    // Every successful search is logged for analytics, metered or not — the
+    // log is no longer a counter, so writing unmetered rows to it can't
+    // inflate anyone's usage. `billable` is what the dedup query above reads
+    // back; `metered` records whether this specific request actually consumed
+    // a slot (a repeat of the same billable search is billable but free).
+    // Best-effort: a logging failure must not fail a search the user has
+    // already paid a quota slot for.
+    await db.execute(sql`
+      INSERT INTO user_activity_events (user_id, event_type, metadata)
+      VALUES (${userId}, ${EVENT_TYPE}, ${JSON.stringify({ query, signature, billable, metered: countAsSearch })})
+    `).catch((err) => console.error("[/api/related-sites] Failed to log search event", err));
 
     // reservedCount is exactly what a fresh getQuota() would read right now —
     // reserveQuotaSlot's UPDATE...RETURNING already gave us the post-reservation

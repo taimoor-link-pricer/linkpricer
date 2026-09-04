@@ -789,6 +789,13 @@ export default function RelatedSitesPage() {
   }, [tableWrapEl]);
 
   const hasSite = !!ownSite.trim();
+  // Mirrors isBillableSearch() in app/api/related-sites/route.ts: the weekly
+  // quota only meters searches that use the "hide sites that already link to
+  // me" exclusion, because that is the only path that spends Ahrefs units.
+  // Everything else is unlimited, so the quota must not disable the button or
+  // show a blocking message when the toggle is off.
+  const usesExclusion = hasSite && hideLinked;
+  const quotaBlocked = usesExclusion && (quota?.remaining ?? 1) <= 0;
   const activeFilterCount =
     Object.entries(filters).filter(([, v]) => v !== "any").length +
     (trafficFilterActive ? 1 : 0) +
@@ -1099,7 +1106,7 @@ export default function RelatedSitesPage() {
             <button onClick={() => { setTourStep(0); setTourActive(true); }} style={{ padding: "7px 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ How to use this page</button>
             {quota && (
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, fontSize: 12, color: C.ink3, whiteSpace: "nowrap" }}>
-                ⏱ <span><strong style={{ color: C.ink, fontWeight: 700 }}>{quota.remaining}</strong> of {quota.limit} weekly searches left</span>
+                ⏱ <span><strong style={{ color: C.ink, fontWeight: 700 }}>{quota.remaining}</strong> of {quota.limit} weekly link-gap checks left</span>
                 <span style={{ color: C.line }}>·</span>
                 <span style={{ color: C.mute }}>resets {resetsLabel}</span>
               </div>
@@ -1112,13 +1119,13 @@ export default function RelatedSitesPage() {
             <span style={{ position: "absolute", left: 16, color: C.mute, pointerEvents: "none" }}>🔍</span>
             <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearchClick()} placeholder="Describe the sites you want, e.g. football news" style={{ width: "100%", height: 52, padding: "0 16px 0 46px", fontSize: 16, fontWeight: 500, border: `1px solid ${C.line}`, borderRadius: 10, outline: "none", color: C.ink }} />
           </div>
-          <button onClick={handleSearchClick} disabled={searching || (quota?.remaining ?? 1) <= 0} style={{ height: 52, padding: "0 26px", fontSize: 15.5, background: searching || (quota?.remaining ?? 1) <= 0 ? C.mute2 : C.accent, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, cursor: searching ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
+          <button onClick={handleSearchClick} disabled={searching || quotaBlocked} style={{ height: 52, padding: "0 26px", fontSize: 15.5, background: searching || quotaBlocked ? C.mute2 : C.accent, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, cursor: searching ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
             {searching ? "Searching…" : "🔍 Search"}
           </button>
         </div>
 
         {error && <div style={{ marginTop: 10, fontSize: 12.5, color: C.bad }}>{error}</div>}
-        {quota && quota.remaining <= 0 && <div style={{ marginTop: 10, fontSize: 12.5, color: C.warn }}>Weekly limit reached — contact support if you need to increase it.</div>}
+        {quotaBlocked && <div style={{ marginTop: 10, fontSize: 12.5, color: C.warn }}>Weekly link-gap limit reached — turn off &ldquo;Hide sites that already link to me&rdquo; to keep searching, or contact support to increase it.</div>}
 
         <div data-tour="mysite" style={{ display: "flex", alignItems: "center", gap: 18, marginTop: 14, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 300px", minWidth: 240, position: "relative", display: "flex", alignItems: "center" }}>
@@ -1129,6 +1136,11 @@ export default function RelatedSitesPage() {
             <RSToggle checked={hideLinked && hasSite} disabled={!hasSite} onChange={(v) => setHideLinked(v)} />
             Hide sites that already link to me
             {!hasSite && <span style={{ fontWeight: 500, color: C.mute2, fontSize: 12.5 }}>— add your site to enable</span>}
+            {/* This toggle is the only metered control on the page (it is what
+            triggers the paid Ahrefs backlink lookup), so it says so inline —
+            otherwise the quota chip in the header reads as a cap on searching,
+            which it no longer is. */}
+            {hasSite && <span style={{ fontWeight: 500, color: C.mute2, fontSize: 12.5 }}>— uses 1 of your {quota?.limit ?? 10} weekly checks</span>}
           </label>
         </div>
 
