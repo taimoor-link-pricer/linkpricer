@@ -20,9 +20,14 @@ export async function POST(req: NextRequest) {
     const decoded = await adminAuth.verifySessionCookie(session, true);
     const userId = decoded.uid;
 
+    // Every key this user owns, not just the active one.
+    //
+    // The `is_active = true` filter meant a key rotated or revoked before its
+    // reveal was acked kept its plaintext in the database forever — nothing
+    // else ever clears the column. Two such rows existed when this was found.
     await db.execute(sql`
       UPDATE api_keys SET plain_key_temp = NULL
-      WHERE user_id = ${userId} AND is_active = true
+      WHERE user_id = ${userId} AND plain_key_temp IS NOT NULL
     `);
 
     return NextResponse.json({ ok: true });

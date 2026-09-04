@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { pgErrorCode, PG_UNIQUE_VIOLATION } from "@/lib/db/pg-error";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { orders, orderRatings } from "@/lib/db/schema";
@@ -73,13 +74,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         .returning();
       return NextResponse.json({ rating: inserted });
     } catch (err: unknown) {
-      // Drizzle's query builder (unlike a raw db.execute(sql\`...\`) call) wraps
-      // the driver error — the actual Postgres error (with .code) lands on
-      // err.cause, not err itself. Checking only err.code (the pattern used by
-      // raw-SQL routes like regenerate-key/route.ts) silently misses this and
-      // falls through to a raw 500 instead of the intended 409.
-      const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
-      if (code === "23505") {
+      // Drizzle wraps the driver error — the actual Postgres error (with
+      // .code) lands on err.cause, not err itself — so the SQLSTATE is read
+      // through pgErrorCode. This applies to raw db.execute(sql`...`) calls
+      // too, contrary to what this comment used to claim: the checkout
+      // webhook's raw-SQL recovery was silently dead for exactly this reason.
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         return NextResponse.json({ error: "This order has already been rated" }, { status: 409 });
       }
       throw err;

@@ -7,6 +7,7 @@ const NAV = [
   { label: "Overview", href: "/developers" },
   { label: "Documentation", href: "/developers/docs" },
   { label: "Dashboard", href: "/developers/dashboard" },
+  { label: "Billing", href: "/developers/billing" },
 ];
 
 export default function DevelopersLayout({ children }: { children: React.ReactNode }) {

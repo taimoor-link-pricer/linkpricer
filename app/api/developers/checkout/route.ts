@@ -23,19 +23,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing email or plan." }, { status: 400 });
     }
 
-    // Plan switching isn't supported yet — this endpoint only starts a fresh
-    // subscription, and doing that for someone who already has one creates a
-    // second active Stripe subscription (double billing, no proration)
-    // instead of changing the existing one. Block it here — not just in the
-    // UI — so a direct call can't create a duplicate either.
+    // This endpoint only starts a *fresh* subscription. Running it for someone
+    // who already has one creates a second active Stripe subscription (double
+    // billing, no proration) instead of changing the existing one, so it is
+    // blocked here and not just in the UI — a direct call can't create a
+    // duplicate either. Switching plans is /api/developers/billing/change-plan,
+    // which moves the existing subscription and prorates it.
     const existing = await db.execute(sql`
-      SELECT stripe_plan FROM users WHERE id = ${userId} LIMIT 1
+      SELECT stripe_plan, stripe_customer_id FROM users WHERE id = ${userId} LIMIT 1
     `);
     if (existing.rows[0]?.stripe_plan) {
       return NextResponse.json(
-        { error: "You already have an active plan. Contact hello@linkpricer.com to switch plans." },
+        {
+          error: "You already have an active plan.",
+          message: "You already have an active plan. Change it from your billing page.",
+        },
         { status: 409 }
       );
+    }
+
+    // Ask Stripe, not just our own column.
+    //
+    // The stripe_plan check above is a non-locking read of a value only the
+    // webhook writes, so it is blind in exactly the window that matters: a
+    // customer who has paid but whose webhook has not landed yet still reads as
+    // having no plan. Combined with a Checkout Session that expires after 24h
+    // (taking its idempotency key with it), that let the same user open a
+    // second checkout and end up with two live subscriptions billing in
+    // parallel. This is not hypothetical — the live account has one customer on
+    // three concurrent Starter subscriptions ($30/mo for a $10 plan) and
+    // another on two, created 49 minutes apart.
+    //
+    // Stripe is the only authority on whether this customer is already paying,
+    // so consult it before creating another session.
+    const existingCustomerId = (existing.rows[0]?.stripe_customer_id as string) ?? null;
+    if (existingCustomerId) {
+      const live = await stripe.subscriptions.list({
+        customer: existingCustomerId,
+        status: "all",
+        limit: 100,
+      });
+      const entitling = live.data.filter(
+        (s) => s.status === "active" || s.status === "trialing" || s.status === "past_due"
+      );
+      if (entitling.length > 0) {
+        return NextResponse.json(
+          {
+            error: "You already have an active plan.",
+            message: "You already have an active plan. Change it from your billing page.",
+          },
+          { status: 409 }
+        );
+      }
     }
 
     const planConfig = PLANS[plan];
@@ -46,12 +85,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Plan price not configured." }, { status: 500 });
     }
 
-    // Look up or create Stripe customer for this user
-    const rows = await db.execute(sql`
-      SELECT stripe_customer_id FROM users WHERE id = ${userId} LIMIT 1
-    `);
-
-    let customerId: string | null = (rows.rows[0]?.stripe_customer_id as string) ?? null;
+    // Reuses the row already read above rather than querying users a second time.
+    let customerId: string | null = existingCustomerId;
 
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -83,6 +118,14 @@ export async function POST(req: NextRequest) {
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: priceId, quantity: 1 }],
+        // An invoice with no address on it isn't usable as a business expense
+        // record, and Stripe prints the *customer's* address, not the card's —
+        // so it has to be collected here and written back. customer_update is
+        // what does the writing back: without it Checkout collects the address
+        // for the payment and then throws it away, leaving the customer (and
+        // every invoice generated from it) blank.
+        billing_address_collection: "required",
+        customer_update: { address: "auto", name: "auto" },
         success_url: `${origin}/developers/dashboard?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/developers/dashboard`,
         metadata: { userId, plan },
@@ -90,7 +133,10 @@ export async function POST(req: NextRequest) {
           metadata: { userId, plan },
         },
       },
-      { idempotencyKey: `checkout:${userId}:${plan}` }
+      // Versioned: Stripe replays the stored response for 24h, so without the
+      // bump a customer who opened checkout just before address collection was
+      // turned on would keep getting the old address-less session back.
+      { idempotencyKey: `checkout:v2:${userId}:${plan}` }
     );
 
     return NextResponse.json({ url: session.url });

@@ -33,8 +33,24 @@ export async function GET(req: NextRequest) {
 
     // Get user's active API key + plain key (one-time reveal)
     const keyRows = await db.execute(sql`
-      SELECT id, key_hash, name, daily_limit, per_minute_limit, request_count,
-             usage_date, last_used_at, created_at, plain_key_temp
+      SELECT id, key_hash, name, monthly_limit, daily_limit, per_minute_limit,
+             month_count, month_window, last_used_at, created_at,
+             -- The plaintext reveal EXPIRES, whether or not anyone acked it.
+             --
+             -- Clearing it was previously the sole responsibility of
+             -- POST /ack-key-reveal, which only fires if the dashboard actually
+             -- renders the key. A customer who buys a key and never opens the
+             -- dashboard — or whose ack request fails — left their key sitting
+             -- in the database in plaintext indefinitely. Six live keys were in
+             -- that state when this was found, the oldest 50 days old, which
+             -- defeats the entire point of storing only a hash.
+             --
+             -- A reveal is only ever useful in the minutes after issuance, so
+             -- anything older than an hour is treated as gone on read and
+             -- deleted below.
+             CASE WHEN created_at > NOW() - INTERVAL '1 hour'
+                  THEN plain_key_temp ELSE NULL END AS plain_key_temp,
+             (plain_key_temp IS NOT NULL AND created_at <= NOW() - INTERVAL '1 hour') AS plain_key_expired
       FROM api_keys
       WHERE user_id = ${userId} AND is_active = true
       ORDER BY created_at DESC
@@ -50,6 +66,16 @@ export async function GET(req: NextRequest) {
     const userRow = (userRows.rows ?? userRows)[0] as any;
     const keyRow = (keyRows.rows ?? keyRows)[0] as any;
 
+    // Actually delete an expired reveal rather than merely hiding it — hiding
+    // it from this response would leave the credential readable to anything
+    // with database access, which is exactly the problem.
+    if (keyRow?.plain_key_expired) {
+      await db.execute(sql`
+        UPDATE api_keys SET plain_key_temp = NULL
+        WHERE id = ${keyRow.id} AND plain_key_temp IS NOT NULL
+      `).catch((err) => console.error("[/api/developers/me] expiring stale key reveal failed", err));
+    }
+
     if (!userRow) return noStore({ error: "User not found" }, { status: 404 });
 
     // This is a plain read now — no side effects. The plaintext key reveal is
@@ -60,18 +86,22 @@ export async function GET(req: NextRequest) {
     // of those calls happened to land first would silently blank the key for
     // every later read.)
 
-    // Monthly usage: count requests in current calendar month
-    let monthlyUsed = 0;
-    if (keyRow) {
-      const usageRows = await db.execute(sql`
-        SELECT COUNT(*)::int AS cnt
-        FROM api_request_logs
-        WHERE api_key_id = ${keyRow.id}
-          AND created_at >= date_trunc('month', NOW())
-      `);
-      const usageRow = (usageRows.rows ?? usageRows)[0] as any;
-      monthlyUsed = usageRow?.cnt ?? 0;
-    }
+    // Monthly usage, read off the same counter the API actually enforces
+    // rather than re-counting api_request_logs.
+    //
+    // The log count was both slower (a growing scan of one key's history on
+    // every dashboard load and every post-checkout poll) and, more
+    // importantly, a *different number* from the one that triggers a 429:
+    // a request rejected for being over quota still writes a log row, and a
+    // log write that fails does not refund quota. A customer seeing "1,002 of
+    // 1,000 used" or "998 of 1,000 used" while being blocked has no way to
+    // tell which figure is real. There is exactly one enforced counter, so
+    // this shows that one.
+    //
+    // month_window is 'YYYY-MM' in UTC; a stale window means nothing has been
+    // spent yet this month.
+    const nowMonth = `${new Date().getUTCFullYear()}-${String(new Date().getUTCMonth() + 1).padStart(2, "0")}`;
+    const monthlyUsed = keyRow && keyRow.month_window === nowMonth ? Number(keyRow.month_count ?? 0) : 0;
 
     const planKey = (userRow.stripe_plan as PlanKey) ?? null;
     const planInfo = planKey && PLANS[planKey] ? PLANS[planKey] : null;
@@ -80,7 +110,14 @@ export async function GET(req: NextRequest) {
     // derive a monthly figure from the key's own daily limit rather than showing "no plan".
     const isPartnerKey = !planInfo && !!keyRow;
     const planName = planInfo?.name ?? (isPartnerKey ? "Partner access" : null);
-    const monthlyQuota = planInfo?.monthlyQuota ?? (isPartnerKey ? keyRow.daily_limit * 30 : null);
+    // The key's own monthly_limit is authoritative — it is what the API
+    // enforces. The plan figure is only a fallback for a key issued before
+    // that column existed, and daily_limit * 30 mirrors the same fallback the
+    // API applies when monthly_limit is NULL.
+    const monthlyQuota =
+      (keyRow?.monthly_limit != null ? Number(keyRow.monthly_limit) : null) ??
+      planInfo?.monthlyQuota ??
+      (isPartnerKey ? keyRow.daily_limit * 30 : null);
 
     return noStore({
       user: {
@@ -95,7 +132,7 @@ export async function GET(req: NextRequest) {
             id: keyRow.id,
             name: keyRow.name,
             plainKeyTemp: keyRow.plain_key_temp ?? null,
-            dailyLimit: keyRow.daily_limit,
+            monthlyLimit: monthlyQuota,
             perMinuteLimit: keyRow.per_minute_limit,
             lastUsedAt: keyRow.last_used_at ?? null,
             createdAt: keyRow.created_at ?? null,
