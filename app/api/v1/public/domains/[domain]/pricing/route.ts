@@ -356,7 +356,11 @@ export async function GET(
 
   // 4. Optional niche filter — accepts both the API's canonical ids and the
   //    dashboard's spellings for the same niches (see lib/public-api/pricing).
-  const nicheParam = req.nextUrl.searchParams.get("niche");
+  // `?niche=` and `?niche=%20` mean the same thing as omitting it — an empty
+  // value is a caller whose variable was blank, not a request for a niche
+  // called "". Rejecting one and accepting the other made the two spellings of
+  // "no filter" behave differently for no reason.
+  const nicheParam = (req.nextUrl.searchParams.get("niche") ?? "").trim();
   const nicheFilter = resolveNiche(nicheParam);
   if (nicheParam && !nicheFilter) {
     httpStatus = 422;

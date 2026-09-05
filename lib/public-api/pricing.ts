@@ -50,7 +50,14 @@ export const NICHE_IDS = Object.keys(NICHES) as NicheId[];
 /** Every accepted spelling, canonical ids first — used verbatim in error messages and docs. */
 export const ACCEPTED_NICHE_VALUES: string[] = NICHE_IDS.flatMap((id) => [id, ...NICHES[id].aliases]);
 
-/** Canonical niche id for any accepted spelling, or null if unrecognized. */
+/**
+ * Canonical niche id for any accepted spelling, or null if unrecognized.
+ *
+ * Callers of a REST API type this value rather than picking it from a list, so
+ * it arrives with whatever casing and padding their string handling produced.
+ * Trimming and lowercasing is deliberate leniency for that; anything that is
+ * still not a niche we price is rejected rather than guessed at.
+ */
 export function resolveNiche(raw: string | null | undefined): NicheId | null {
   if (!raw) return null;
   const v = raw.trim().toLowerCase();
