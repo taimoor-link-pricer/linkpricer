@@ -12,6 +12,18 @@ type StripeJs = NonNullable<Awaited<ReturnType<typeof loadStripe>>>;
 // refetches Stripe.js and throws away the mounted iframe on every keystroke.
 // It's lazy so a page that never opens the card form never loads Stripe.js.
 let stripePromise: Promise<Stripe | null> | null = null;
+
+// Whether this build was given a publishable key at all.
+//
+// NEXT_PUBLIC_* values are inlined at BUILD time, so a deployment whose build
+// environment lacks this variable ships a bundle with no key in it — and no
+// amount of setting it afterwards helps until the app is rebuilt. That is a
+// server misconfiguration, but every symptom of it appears in the browser
+// (Elements gets a null Stripe, the card element never mounts, the form sits
+// there), which is exactly how it got misdiagnosed for a while as an
+// ad-blocker problem. Exported so the UI can say which of the two it is.
+export const STRIPE_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
+
 function getStripe() {
   if (!stripePromise) {
     const pk = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -52,6 +64,9 @@ function CardFields({
   // see from here (blocked third-party frames is by far the most common).
   useEffect(() => {
     if (ready) return;
+    // No key means this can never become ready — say so immediately instead of
+    // making the customer watch a skeleton for twelve seconds first.
+    if (!STRIPE_CONFIGURED) { setStalled(true); return; }
     const t = setTimeout(() => setStalled(true), 12_000);
     return () => clearTimeout(t);
   }, [ready]);
@@ -118,8 +133,18 @@ function CardFields({
       {!ready && !error && !stalled && <div className="bl-pe-loading">Loading card form…</div>}
       {!ready && !error && stalled && (
         <div className="bl-error">
-          The card form isn&apos;t loading. This is usually a browser extension or privacy setting blocking
-          js.stripe.com — try disabling ad/tracker blocking for this site, or use a different browser.
+          {STRIPE_CONFIGURED ? (
+            <>
+              The card form isn&apos;t loading. This is usually a browser extension or privacy setting
+              blocking js.stripe.com — try disabling ad/tracker blocking for this site, or use a
+              different browser.
+            </>
+          ) : (
+            <>
+              Card payments aren&apos;t configured on this deployment, so this form can&apos;t load. This
+              is on our side, not yours — please contact support rather than retrying.
+            </>
+          )}
         </div>
       )}
       {error && <div className="bl-error">{error}</div>}
