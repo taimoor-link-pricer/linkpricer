@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { orders } from "@/lib/db/schema";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/get-current-user";
-import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS, DEFAULT_CONTENT_WORD_COUNT, MAX_ADDITIONAL_LINKS } from "@/lib/orders/types";
+import { ORDER_TYPES, PRICE_TYPES, CONTENT_OPTIONS, CONTENT_WORD_COUNT_OPTIONS, DEFAULT_CONTENT_WORD_COUNT, isContentWordCount, MAX_ADDITIONAL_LINKS } from "@/lib/orders/types";
 import { computeOrderPricing, centsToAmount, OfferResolutionError, resolveOffer } from "@/lib/orders/pricing";
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { withOrderMetaExt } from "@/lib/orders/metadata";
@@ -152,6 +152,16 @@ export async function POST(req: NextRequest) {
       if (item.contentOption === "provided" && !item.wordCount) {
         return NextResponse.json(
           { error: "Validation failed", details: [{ index: i, domain: item.domain, reason: "wordCount is required when contentOption is 'provided'" }] },
+          { status: 400 }
+        );
+      }
+      // The charge is wordCount * CONTENT_PRICE_PER_WORD_CENTS, so an
+      // arbitrary length is an arbitrary price. Only the lengths checkout
+      // actually offers are accepted, which keeps every order's content
+      // charge to one of the three quotes the customer was shown.
+      if (item.contentOption === "provided" && !isContentWordCount(item.wordCount)) {
+        return NextResponse.json(
+          { error: "Validation failed", details: [{ index: i, domain: item.domain, reason: `wordCount must be one of ${CONTENT_WORD_COUNT_OPTIONS.join(", ")}` }] },
           { status: 400 }
         );
       }

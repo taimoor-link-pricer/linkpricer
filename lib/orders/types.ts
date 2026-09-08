@@ -65,6 +65,18 @@ export function contentPriceCents(wordCount: number): number {
   return Math.round(wordCount * CONTENT_PRICE_PER_WORD_CENTS);
 }
 
+// The article lengths checkout offers when Linkpricer writes the article.
+// Every one is priced by the same per-word rule above — this list is purely
+// *which* lengths a customer may pick. POST /api/orders validates against it
+// too, so a hand-rolled request can't buy a length the UI never offered and
+// be charged a price no estimate ever showed. DEFAULT_CONTENT_WORD_COUNT is
+// the first entry and must stay a member of this list.
+export const CONTENT_WORD_COUNT_OPTIONS = [750, 1000, 1250] as const;
+export type ContentWordCount = (typeof CONTENT_WORD_COUNT_OPTIONS)[number];
+export function isContentWordCount(n: number | undefined): n is ContentWordCount {
+  return n !== undefined && (CONTENT_WORD_COUNT_OPTIONS as readonly number[]).includes(n);
+}
+
 export const ORDER_TYPES = ["managed", "direct"] as const;
 export type OrderTypeValue = (typeof ORDER_TYPES)[number];
 

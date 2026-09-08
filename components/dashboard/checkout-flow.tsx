@@ -17,6 +17,7 @@ import { RATES, SYMS } from "@/lib/design-v1/format";
 import { persistCart } from "@/lib/cart-storage";
 import {
   contentPriceCents,
+  CONTENT_WORD_COUNT_OPTIONS,
   DEFAULT_CONTENT_WORD_COUNT,
   MAX_ADDITIONAL_LINKS,
   type OrderLinkPair,
@@ -253,6 +254,12 @@ type BriefItem = CartItem & {
   // case) changes shape or behavior.
   additionalLinks: OrderLinkPair[];
   contentMode: "linkpricer" | "upload" | "url";
+  // Only meaningful for contentMode "linkpricer" — the article length the
+  // customer picked, which is what the content charge is derived from
+  // (wordCount * 5c, same formula the server bills). Kept on the item even
+  // while another mode is selected so switching back restores the choice
+  // rather than silently resetting it to the default.
+  wordCount: number;
   brief: string; articleUrl: string; tone: string; contentPrice: number;
   selectedFile: File | null; uploadError: string | null;
 };
@@ -432,7 +439,8 @@ const UPLOAD_ACCEPT_EXT = [".docx", ".md", ".pdf"];
 // hardcoded to 120 here before, independent of the real $37.50 charge for
 // the same 750-word default, so the checkout estimate never matched the
 // eventual invoice.
-const CONTENT_FEE_USD = contentPriceCents(DEFAULT_CONTENT_WORD_COUNT) / 100;
+const contentFeeUsd = (wordCount: number) => contentPriceCents(wordCount) / 100;
+const CONTENT_FEE_USD = contentFeeUsd(DEFAULT_CONTENT_WORD_COUNT);
 
 // Shape of a row returned by POST /api/orders — enough fields to build a
 // real receipt client-side, no separate receipt endpoint needed.
@@ -457,7 +465,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
 }) {
   const { profile } = useAuthContext();
   const [items, setItems] = useState<BriefItem[]>(() =>
-    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", additionalLinks: [], niche: "", contentMode: "linkpricer", brief: "", articleUrl: "", tone: "Editorial", contentPrice: CONTENT_FEE_USD, selectedFile: null, uploadError: null }))
+    cartItems.map(c => ({ ...c, title: "", targetUrl: "", anchorText: "", additionalLinks: [], niche: "", contentMode: "linkpricer", wordCount: DEFAULT_CONTENT_WORD_COUNT, brief: "", articleUrl: "", tone: "Editorial", contentPrice: CONTENT_FEE_USD, selectedFile: null, uploadError: null }))
   );
   const [expandedIdx, setExpandedIdx] = useState(0);
   const [placing, setPlacing] = useState(false);
@@ -799,7 +807,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
             // the customer never saw or chose.
             contentTone: i.contentMode === "linkpricer" ? i.tone || undefined : undefined,
             contentOption: i.contentMode === "linkpricer" ? "provided" : i.contentMode === "upload" ? "uploaded" : "url",
-            wordCount: i.contentMode === "linkpricer" ? DEFAULT_CONTENT_WORD_COUNT : undefined,
+            wordCount: i.contentMode === "linkpricer" ? i.wordCount : undefined,
             requirements: i.contentMode === "linkpricer" ? i.brief || undefined : undefined,
             articleUrl: i.contentMode === "url" ? i.articleUrl : undefined,
             uploadedFileName: uploadResults.get(idx)?.uploadedFileName,
@@ -1190,7 +1198,7 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                       <div>
                         <FieldLabel required>Who writes the article?</FieldLabel>
                         <div className="checkout-brief-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${CONTENT_FEE_USD.toFixed(2)} · ${DEFAULT_CONTENT_WORD_COUNT} words`, cp: CONTENT_FEE_USD }, { mode: "upload", title: "I'll upload content", sub: "Free · file or link", cp: 0 }].map(opt => {
+                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${contentFeeUsd(item.wordCount).toFixed(2)} · ${item.wordCount.toLocaleString()} words`, cp: contentFeeUsd(item.wordCount) }, { mode: "upload", title: "I'll upload content", sub: "Free · file or link", cp: 0 }].map(opt => {
                             // The "I'll upload content" card now owns BOTH
                             // customer-supplied modes — contentMode "upload"
                             // (a file) and "url" (a link) — so it reads as
@@ -1212,6 +1220,17 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                             );
                           })}
                         </div>
+                        {/* One sub-row under the cards, whichever card is
+                        chosen: the article length when Linkpricer writes it
+                        (that's what the per-word charge is derived from), or
+                        file-vs-link when the customer supplies the copy. */}
+                        {item.contentMode === "linkpricer" && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" as const }}>
+                            {CONTENT_WORD_COUNT_OPTIONS.map(w => (
+                              <button key={w} onClick={() => change(i, { wordCount: w, contentPrice: contentFeeUsd(w) })} style={{ padding: "6px 11px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: item.wordCount === w ? C.ink : "#fff", color: item.wordCount === w ? "#fff" : C.ink2, border: `1px solid ${item.wordCount === w ? C.ink : C.line}` }}>{w.toLocaleString()} words</button>
+                            ))}
+                          </div>
+                        )}
                         {item.contentMode !== "linkpricer" && (
                           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                             {[{ m: "upload", label: "Upload a file" }, { m: "url", label: "Paste a link" }].map(o => (
@@ -1352,8 +1371,8 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                   const feeDisplay = totalDisplay - placementDisplay - writingDisplay;
                   return [
                     { l: `${items.length} placements subtotal`, v: `${SYMS[currency]}${placementDisplay.toLocaleString()}` },
-                    // Every item chose a free content option (upload/already
-                    // published) — nothing to charge for writing, so this
+                    // Every item supplied its own content (a file or a link)
+                    // — nothing to charge for writing, so this
                     // reads the same "nothing here" way VAT does rather than
                     // a "$0" that looks like a stray/broken line.
                     writingSubtotalCents === 0
