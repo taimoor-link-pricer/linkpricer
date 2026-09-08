@@ -87,15 +87,26 @@ function RSDropdown({
   );
 }
 
-// ── searchable multi-select dropdown (TLD filter) ────────────────────────────
+// ── searchable multi-select dropdown ─────────────────────────────────────────
 // Same shell/behavior as RSDropdown above (search box, click-outside/Escape
 // to close, identical visual tokens) but for "select any number of these"
 // instead of "pick exactly one" — RSDropdown closes on selection and shows a
 // single label, which doesn't fit "filter by .com OR .de OR .fr at once."
+// Used by TLD, Country and Niche; the TLD-specific bits (the rendered
+// leading dot, the two-column grid, the placeholder) are props rather than
+// baked in, since a country name is far too wide for two columns.
 function RSMultiDropdown({
   label, values, options, onChange, minWidth = 128,
+  allLabel, noun, searchPlaceholder, itemPrefix = "", columns = 1,
 }: {
   label?: string; values: string[]; options: DropdownOption[]; onChange: (ids: string[]) => void; minWidth?: number;
+  // What the closed button reads with nothing selected ("All countries").
+  allLabel: string;
+  // Plural noun for the counts ("countries selected", "Clear selected niches").
+  noun: string;
+  searchPlaceholder: string;
+  itemPrefix?: string;
+  columns?: 1 | 2;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -120,10 +131,13 @@ function RSMultiDropdown({
     onChange(selectedSet.has(id) ? values.filter((v) => v !== id) : [...values, id]);
   }
 
+  // One selection shows the option's own label rather than its id — "United
+  // States", not "US" — matching what the single-select dropdown showed
+  // before these filters became multi-select.
   const buttonLabel =
-    values.length === 0 ? `All ${(label ?? "").toLowerCase()}` :
-    values.length === 1 ? `.${values[0]}` :
-    `${values.length} ${(label ?? "").toLowerCase()} selected`;
+    values.length === 0 ? allLabel :
+    values.length === 1 ? `${itemPrefix}${options.find((o) => o.id === values[0])?.label ?? values[0]}` :
+    `${values.length} ${noun} selected`;
 
   return (
     <div ref={ref} style={{ position: "relative", flex: label ? "1 1 128px" : "0 0 auto", minWidth }}>
@@ -142,7 +156,7 @@ function RSMultiDropdown({
               ref={searchRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Quick search TLDs… (e.g. .lt)"
+              placeholder={searchPlaceholder}
               style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 8, border: `1px solid ${C.line}`, fontSize: 12.5, color: C.ink, outline: "none" }}
             />
           </div>
@@ -151,13 +165,13 @@ function RSMultiDropdown({
               onClick={() => onChange([])}
               style={{ display: "block", width: "100%", padding: "7px 10px", margin: "2px 0", borderRadius: 7, border: "none", background: "transparent", color: C.accent700, fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}
             >
-              ✕ Clear selected TLDs ({values.length})
+              ✕ Clear selected {noun} ({values.length})
             </button>
           )}
           {filtered.length === 0 ? (
             <div style={{ padding: "12px 10px", fontSize: 12.5, color: C.mute, textAlign: "center" }}>No matches</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
+            <div style={{ display: "grid", gridTemplateColumns: columns === 2 ? "1fr 1fr" : "1fr", gap: 2 }}>
               {filtered.map((o) => {
                 const checked = selectedSet.has(o.id);
                 return (
@@ -169,7 +183,7 @@ function RSMultiDropdown({
                     <span style={{ width: 14, height: 14, flexShrink: 0, borderRadius: 4, border: `1.5px solid ${checked ? C.accent : C.line}`, background: checked ? C.accent : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, lineHeight: 1 }}>
                       {checked ? "✓" : ""}
                     </span>
-                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>.{o.label}</span>
+                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{itemPrefix}{o.label}</span>
                   </button>
                 );
               })}
@@ -387,14 +401,26 @@ const RS_COLUMNS: { label: string; sortKey?: SortableColumn }[] = [
 ];
 const PAGE_SIZE = 25;
 
-const RS_DEFAULT_FILTERS = { country: "any", language: "any", niche: "any", grade: "any" };
+// Country and niche are NOT in here: they are multi-select now, and an
+// empty array (like `tlds`) is their "no filter" state, which the "any"
+// sentinel this object uses can't express. Language and grade stay
+// single-select — one written language / one minimum grade is the whole
+// meaning of those filters.
+const RS_DEFAULT_FILTERS = { language: "any", grade: "any" };
+
+// The multi-select lists drop the "any"/"Any niche" sentinel row: with
+// checkboxes, "nothing ticked" already means "no filter", and leaving the
+// sentinel in would give the user a tickable option that contradicts every
+// other tick.
+const RS_COUNTRY_OPTIONS: DropdownOption[] = RS_FILTERS.country.filter((o) => o.id !== "any");
+const RS_NICHE_OPTIONS: DropdownOption[] = RS_FILTERS.niche.filter((o) => o.id !== "any");
 
 // ── tour (verbatim copy from RSTour/tourSteps) ───────────────────────────────
 type TourStep = { selector: string; title: string; body: string };
 const TOUR_STEPS: TourStep[] = [
   { selector: '[data-tour="search"]', title: "Search by topic, not domain", body: 'Describe the kind of sites you want in plain language — e.g. "football news" — and we rank every site in the marketplace by how well it matches.' },
   { selector: '[data-tour="mysite"]', title: "Add your domain", body: "Enter your own website and we'll skip any site that already links to you — so you only see new referring domains, never the ones you've already got." },
-  { selector: '[data-tour="filters"]', title: "Narrow it down", body: "Filter by country, language, traffic, DR, price, niche and value grade. The Country and Language menus are searchable — just start typing." },
+  { selector: '[data-tour="filters"]', title: "Narrow it down", body: "Filter by country, language, traffic, DR, price, niche and value grade. Country, niche and domain extension take as many picks as you like — several countries means \"any of these\". The Country and Language menus are searchable, so just start typing." },
   { selector: '[data-tour="results"]', title: "Compare & order, right here", body: "Every result shows its match score, metrics and live prices. Click any row to expand it, compare marketplaces side by side, save to Favorites, and order in one click." },
 ];
 
@@ -718,6 +744,12 @@ export default function RelatedSitesPage() {
   // above it doesn't fit RS_DEFAULT_FILTERS's "any" sentinel — an empty
   // array already unambiguously means "no TLD filter."
   const [tlds, setTlds] = useState<string[]>([]);
+  // Country and niche are multi-select for the same reason TLD is: a domain
+  // has exactly one of each, so several selections are an OR ("US or Canada
+  // or UK"), which is a normal thing to want and which a single-value
+  // dropdown made impossible. Empty array = no filter.
+  const [countries, setCountries] = useState<string[]>([]);
+  const [niches, setNiches] = useState<string[]>([]);
   // Traffic/DR/price are now sent to the server as real SQL filters (see
   // runSearch) instead of trimmed client-side after the fact, so `results`
   // already reflects them by the time it lands here.
@@ -801,7 +833,11 @@ export default function RelatedSitesPage() {
     (trafficFilterActive ? 1 : 0) +
     (drFilterActive ? 1 : 0) +
     (priceFilterActive ? 1 : 0) +
-    (tlds.length > 0 ? 1 : 0);
+    (tlds.length > 0 ? 1 : 0) +
+    // One badge per filter, not per selected value — "Country" is one
+    // filter whether it holds one country or twelve, same as TLD.
+    (countries.length > 0 ? 1 : 0) +
+    (niches.length > 0 ? 1 : 0);
 
   useEffect(() => {
     hydrateRates();
@@ -818,6 +854,8 @@ export default function RelatedSitesPage() {
     filters?: typeof RS_DEFAULT_FILTERS;
     trafficFilterActive?: boolean; drFilterActive?: boolean; priceFilterActive?: boolean;
     tlds?: string[];
+    countries?: string[];
+    niches?: string[];
   }) {
     if (!query.trim() || searching) return;
     const useSortBy = overrides?.sortBy ?? sortBy;
@@ -837,6 +875,8 @@ export default function RelatedSitesPage() {
     const useDrFilterActive = overrides?.drFilterActive ?? drFilterActive;
     const usePriceFilterActive = overrides?.priceFilterActive ?? priceFilterActive;
     const useTlds = overrides?.tlds ?? tlds;
+    const useCountries = overrides?.countries ?? countries;
+    const useNiches = overrides?.niches ?? niches;
     setSearching(true);
     setError(null);
     try {
@@ -849,9 +889,12 @@ export default function RelatedSitesPage() {
       // user hits Clear, and a fresh, never-touched slider never sends a
       // spurious constraint that could zero out a differently-scoped query.
       const parsedFilters: Record<string, string | number | string[]> = {};
-      if (useFilters.country !== "any") parsedFilters.country = useFilters.country;
+      // `countries`/`categories` (plural) are the multi-select fields
+      // catalog-search.ts ORs together; the singular `country`/`category` it
+      // still accepts are the public homepage's single-value path.
+      if (useCountries.length > 0) parsedFilters.countries = useCountries;
+      if (useNiches.length > 0) parsedFilters.categories = useNiches;
       if (useFilters.language !== "any") parsedFilters.language = useFilters.language;
-      if (useFilters.niche !== "any") parsedFilters.category = useFilters.niche;
       if (useFilters.grade !== "any") parsedFilters.grade = useFilters.grade;
       if (useTrafficFilterActive) { parsedFilters.minTraffic = useTrafficMin; parsedFilters.maxTraffic = useTrafficMax; }
       if (useDrFilterActive) { parsedFilters.minDr = useDrMin; parsedFilters.maxDr = useDrMax; }
@@ -970,6 +1013,8 @@ export default function RelatedSitesPage() {
     setDrFilterActive(false);
     setPriceFilterActive(false);
     setTlds([]);
+    setCountries([]);
+    setNiches([]);
     // Filters are now applied server-side (see runSearch), so clearing them
     // has to re-run the search to actually get the unfiltered set back —
     // explicit overrides sidestep the stale-closure trap of reading state
@@ -979,6 +1024,8 @@ export default function RelatedSitesPage() {
         filters: RS_DEFAULT_FILTERS,
         trafficFilterActive: false, drFilterActive: false, priceFilterActive: false,
         tlds: [],
+        countries: [],
+        niches: [],
       });
     }
   }
@@ -986,6 +1033,8 @@ export default function RelatedSitesPage() {
   function handleDrChange(min: number, max: number) { setDrMin(min); setDrMax(max); setDrFilterActive(true); setPage(1); }
   function handlePriceChange(min: number, max: number) { setPriceMin(min); setPriceMax(max); setPriceFilterActive(true); setPage(1); }
   function handleTldsChange(next: string[]) { setTlds(next); setPage(1); }
+  function handleCountriesChange(next: string[]) { setCountries(next); setPage(1); }
+  function handleNichesChange(next: string[]) { setNiches(next); setPage(1); }
   function toggleRow(domain: string) { setExpanded((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; }); }
   function toggleFav(row: RelatedSite) {
     const wasFav = favorites.has(row.domain);
@@ -1193,11 +1242,11 @@ export default function RelatedSitesPage() {
             items don't participate in flex sizing, so each row just takes
             its natural height. */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr", rowGap: 14 }}>
-              <RSDropdown label="Country" value={filters.country} options={RS_FILTERS.country} onChange={(v) => setFilters((f) => ({ ...f, country: v }))} searchable />
+              <RSMultiDropdown label="Country" values={countries} options={RS_COUNTRY_OPTIONS} onChange={handleCountriesChange} allLabel="All countries" noun="countries" searchPlaceholder="Search country…" />
               <RSDropdown label="Language" value={filters.language} options={RS_FILTERS.language} onChange={(v) => setFilters((f) => ({ ...f, language: v }))} searchable />
-              <RSDropdown label="Niche" value={filters.niche} options={RS_FILTERS.niche} onChange={(v) => setFilters((f) => ({ ...f, niche: v }))} />
+              <RSMultiDropdown label="Niche" values={niches} options={RS_NICHE_OPTIONS} onChange={handleNichesChange} allLabel="Any niche" noun="niches" searchPlaceholder="Search niche…" />
               <RSDropdown label="Value grade" value={filters.grade} options={RS_FILTERS.grade} onChange={(v) => setFilters((f) => ({ ...f, grade: v }))} />
-              <RSMultiDropdown label="Domain extension (TLD)" values={tlds} options={RS_TLD_OPTIONS} onChange={handleTldsChange} />
+              <RSMultiDropdown label="Domain extension (TLD)" values={tlds} options={RS_TLD_OPTIONS} onChange={handleTldsChange} allLabel="All TLDs" noun="TLDs" searchPlaceholder="Quick search TLDs… (e.g. .lt)" itemPrefix="." columns={2} />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.line2}` }}>

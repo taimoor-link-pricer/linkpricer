@@ -37,13 +37,26 @@ const SEARCH_CACHE_TTL_MS = 3 * 60 * 1000;
 const SEARCH_CACHE_MAX_ENTRIES = 200;
 const searchCache = new Map<string, { result: CatalogSearchOutput; cachedAt: number }>();
 
+// Folds a multi-select list plus its legacy single-value field into one
+// trimmed, de-duplicated, sorted list. Sorting is what makes the cache key
+// order-independent; de-duplication keeps a repeated value from widening the
+// generated OR clause for no reason.
+export function normalizeFilterList(list: string[] | undefined, single: string | undefined): string[] {
+  const all = [...(list ?? []), ...(single ? [single] : [])].map((v) => v.trim()).filter(Boolean);
+  return [...new Set(all)].sort();
+}
+
 function searchCacheKey(opts: CatalogSearchOptions): string {
   const f = opts.filters ?? {};
   return JSON.stringify([
     opts.query.trim().toLowerCase(),
-    f.country ?? null, f.language ?? null, f.minTraffic ?? null, f.maxTraffic ?? null,
+    // Country/category go in as their normalized, sorted list form so that
+    // {country:"US"} and {countries:["US"]} — the same filter expressed two
+    // ways — share one cache entry, and so click order never splits the key.
+    normalizeFilterList(f.countries, f.country),
+    f.language ?? null, f.minTraffic ?? null, f.maxTraffic ?? null,
     f.minDr ?? null, f.maxDr ?? null, f.minPrice ?? null, f.maxPrice ?? null,
-    f.category ?? null, f.grade ?? null,
+    normalizeFilterList(f.categories, f.category), f.grade ?? null,
     // Sorted so ["com","de"] and ["de","com"] (same filter, different UI
     // click order) hit the same cache entry instead of missing each other.
     (f.tlds && f.tlds.length ? [...f.tlds].map((t) => t.toLowerCase()).sort() : null),
@@ -141,6 +154,13 @@ export interface CatalogSearchFilters {
   maxPrice?: number;
   category?: string;
   grade?: string;
+  // Multi-select variants of `country` / `category`. Both are OR sets — a
+  // domain matches if it is in ANY selected country / ANY selected niche,
+  // the same semantics as `tlds` above. The singular fields stay for the
+  // public homepage caller (and older clients), and are folded into these
+  // lists at query time so there is exactly one code path building the SQL.
+  countries?: string[];
+  categories?: string[];
   // Domain extension(s), no leading dot ("com", not ".com") — a domain
   // matches if it ends in ANY of these (OR, not AND — a domain only has one
   // TLD, so "must match every selected TLD" would always return nothing).
@@ -403,6 +423,10 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // nothing (see normalizeLanguage in lib/search/language-normalize.ts for
   // the full story). It's applied in JS against matchedRows below instead,
   // after normalizing both sides to the same ISO 639-1 code.
+  // Selected niches, folded from the multi-select list + the legacy single
+  // field. Used both here and in the candidate CTEs below.
+  const categories = normalizeFilterList(f.categories, f.category);
+
   const outerFilterClauses = [
     f.minTraffic != null ? sql`AND COALESCE(traffic, 0) >= ${f.minTraffic}` : sql``,
     f.maxTraffic != null ? sql`AND COALESCE(traffic, 0) <= ${f.maxTraffic}` : sql``,
@@ -410,7 +434,9 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     f.maxDr != null ? sql`AND COALESCE(dr, 0) <= ${f.maxDr}` : sql``,
     f.minPrice != null ? sql`AND best_price >= ${f.minPrice}` : sql``,
     f.maxPrice != null ? sql`AND best_price <= ${f.maxPrice}` : sql``,
-    f.category ? sql`AND LOWER(raw_category) LIKE LOWER(${"%" + f.category + "%"})` : sql``,
+    categories.length
+      ? sql`AND (${sql.join(categories.map((c) => sql`LOWER(raw_category) LIKE LOWER(${"%" + c + "%"})`), sql` OR `)})`
+      : sql``,
     f.grade && GRADE_RANK[f.grade] != null
       ? sql`AND (CASE COALESCE(ai_grade, CASE WHEN COALESCE(dr, 0) >= 70 THEN 'A+' WHEN COALESCE(dr, 0) >= 55 THEN 'A' WHEN COALESCE(dr, 0) >= 40 THEN 'B+' ELSE 'B' END)
             WHEN 'A+' THEN 4 WHEN 'A' THEN 3 WHEN 'B+' THEN 2 ELSE 1 END) >= ${GRADE_RANK[f.grade]}`
@@ -530,7 +556,6 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     f.maxDr != null ? sql`AND COALESCE(d.domain_rating, 0) <= ${f.maxDr}` : sql``,
     f.minTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) >= ${f.minTraffic}` : sql``,
     f.maxTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) <= ${f.maxTraffic}` : sql``,
-    f.category ? sql`AND LOWER(d.category) LIKE LOWER(${"%" + f.category + "%"})` : sql``,
   ];
   const poolFilters = sql.join(poolFilterClauses, sql` `);
 
@@ -541,12 +566,25 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // returned zero results while the unfiltered search returned thirty —
   // there were plenty of US domains, just none that happened to survive the
   // cut. Filtering early builds the pool from that country instead.
-  const countryPrefixes = f.country ? countryMatchPrefixes(f.country) : null;
-  const countryClause = countryPrefixes?.length
+  const countryPrefixes = [
+    ...new Set(normalizeFilterList(f.countries, f.country).flatMap((c) => countryMatchPrefixes(c) ?? [])),
+  ];
+  const countryClause = countryPrefixes.length
     ? sql`AND (${sql.join(
         countryPrefixes.map(
           (p) => sql`btrim(regexp_replace(regexp_replace(lower(d.country_main_traffic), '\(the\)|\ythe\y', ' ', 'g'), '[^a-z ]+', ' ', 'g')) LIKE ${p + "%"}`,
         ),
+        sql` OR `,
+      )})`
+    : sql``;
+
+  // Niche/category, like country and TLD, must be applied inside the
+  // candidate CTEs rather than after the pool LIMIT — see the comment above.
+  // Multiple selections are OR'd: a domain carries one category string, so
+  // AND-ing them would always return nothing.
+  const categoryClause = categories.length
+    ? sql`AND (${sql.join(
+        categories.map((c) => sql`LOWER(d.category) LIKE LOWER(${"%" + c + "%"})`),
         sql` OR `,
       )})`
     : sql``;
@@ -580,6 +618,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           ${wordClauses.length ? sql`AND (${sql.join(wordClauses, sql` OR `)})` : sql`AND false`}
           ${tldClause}
           ${countryClause}
+          ${categoryClause}
           ${poolFilters}
         -- Bound the keyword scan. The word-boundary regex has no index, so a
         -- broad query ("football news") matches tens of thousands of rows and
@@ -612,6 +651,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         WHERE ${vectorIdClause ?? sql`false`}
           ${tldClause}
           ${countryClause}
+          ${categoryClause}
           ${poolFilters}
       ),
       text_matched AS (
