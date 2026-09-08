@@ -103,7 +103,7 @@ type ApiRow = {
 const CONTENT_OPTION_LABEL: Record<string, string> = {
   provided: "We Write",
   uploaded: "Client Upload",
-  url: "Existing Article",
+  url: "Client Link",
 };
 
 function fmtDate(iso: string | null): string | null {
@@ -424,7 +424,7 @@ function DetailsModal({ order, onClose }: { order: AdminOrder; onClose: () => vo
     ["Content", order.contentOption],
     ["Content tone", order.contentTone ?? "—"],
     ["Brief", order.requirements ?? "—"],
-    ...(order.contentOption === "Existing Article" ? [["Article URL", order.articleUrl ?? "—"] as [string, string]] : []),
+    ...(order.contentOption === "Client Link" ? [["Article link", order.articleUrl ?? "—"] as [string, string]] : []),
     ...(order.contentOption === "Client Upload" ? [["Uploaded file", order.originalFileName ?? order.uploadedFileName ?? "—"] as [string, string]] : []),
     ["Word count", order.wordCount ? String(order.wordCount) : "—"],
     ["Niche", order.niche],

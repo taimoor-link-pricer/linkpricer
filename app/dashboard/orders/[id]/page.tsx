@@ -84,7 +84,7 @@ interface ApiOrder {
 const CONTENT_OPTION_LABEL: Record<string, string> = {
   provided: "We Write",
   uploaded: "Client Upload",
-  url: "Existing Article",
+  url: "Client Link",
 };
 
 // ── Timeline ─────────────────────────────────────────────────────────────────

@@ -308,7 +308,7 @@ function missingFieldsFor(v: BriefItemValidation): string[] {
   if (v.anchorTextError) out.push("Anchor text");
   v.additionalTargetUrlErrors.forEach((e, idx) => { if (e) out.push(`Target URL #${idx + 2}`); });
   v.additionalAnchorTextErrors.forEach((e, idx) => { if (e) out.push(`Anchor text #${idx + 2}`); });
-  if (v.articleUrlError) out.push("Article URL");
+  if (v.articleUrlError) out.push("Article link");
   if (v.fileError) out.push("Article file");
   return out;
 }
@@ -335,7 +335,7 @@ function validateBriefItem(item: BriefItem): BriefItemValidation {
   // other two modes' fields aren't rendered at all, so validating them would
   // block submit on something the customer can't even see.
   const articleUrlError = item.contentMode === "url"
-    ? urlFieldError("Article URL", item.articleUrl, true)
+    ? urlFieldError("Article link", item.articleUrl, true)
     : null;
   const fileError = item.contentMode === "upload"
     ? (item.uploadError ?? (item.selectedFile ? null : "An article file is required."))
@@ -1189,25 +1189,43 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       <div>
                         <FieldLabel required>Who writes the article?</FieldLabel>
-                        <div className="checkout-brief-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${CONTENT_FEE_USD.toFixed(2)} · ${DEFAULT_CONTENT_WORD_COUNT} words`, cp: CONTENT_FEE_USD }, { mode: "upload", title: "I'll upload content", sub: "Free · .docx, .md, .pdf", cp: 0 }].map(opt => (
-                            <button key={opt.mode} onClick={() => change(i, { contentMode: opt.mode as BriefItem["contentMode"], contentPrice: opt.cp })} style={{ padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === opt.mode ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === opt.mode ? C.accent : C.line}` }}>
-                              <div style={{ fontWeight: 700, fontSize: 12.5, color: item.contentMode === opt.mode ? C.accent : C.ink2 }}>{opt.title}</div>
-                              <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>{opt.sub}</div>
-                            </button>
-                          ))}
+                        <div className="checkout-brief-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          {[{ mode: "linkpricer", title: "Linkpricer writes it", sub: `+$${CONTENT_FEE_USD.toFixed(2)} · ${DEFAULT_CONTENT_WORD_COUNT} words`, cp: CONTENT_FEE_USD }, { mode: "upload", title: "I'll upload content", sub: "Free · file or link", cp: 0 }].map(opt => {
+                            // The "I'll upload content" card now owns BOTH
+                            // customer-supplied modes — contentMode "upload"
+                            // (a file) and "url" (a link) — so it reads as
+                            // selected for either one, and re-clicking it
+                            // while one is already chosen must not reset the
+                            // sub-choice below. The separate third card
+                            // ("Article already published") is gone; "url"
+                            // survives only as that sub-choice, which keeps
+                            // the submitted contentOption values ("uploaded"
+                            // / "url") and the server contract unchanged.
+                            const selected = opt.mode === "linkpricer"
+                              ? item.contentMode === "linkpricer"
+                              : item.contentMode !== "linkpricer";
+                            return (
+                              <button key={opt.mode} onClick={() => { if (selected) return; change(i, { contentMode: opt.mode as BriefItem["contentMode"], contentPrice: opt.cp }); }} style={{ padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: selected ? C.accent50 : "#fff", border: `1px solid ${selected ? C.accent : C.line}` }}>
+                                <div style={{ fontWeight: 700, fontSize: 12.5, color: selected ? C.accent : C.ink2 }}>{opt.title}</div>
+                                <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>{opt.sub}</div>
+                              </button>
+                            );
+                          })}
                         </div>
-                        <button onClick={() => change(i, { contentMode: "url", contentPrice: 0 })} style={{ width: "100%", padding: "10px", borderRadius: 10, textAlign: "left" as const, cursor: "pointer", background: item.contentMode === "url" ? C.accent50 : "#fff", border: `1px solid ${item.contentMode === "url" ? C.accent : C.line}` }}>
-                          <div style={{ fontWeight: 700, fontSize: 12.5, color: item.contentMode === "url" ? C.accent : C.ink2 }}>Article already published</div>
-                          <div style={{ fontSize: 11, color: C.mute, marginTop: 2 }}>Free · provide URL to existing article</div>
-                        </button>
+                        {item.contentMode !== "linkpricer" && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            {[{ m: "upload", label: "Upload a file" }, { m: "url", label: "Paste a link" }].map(o => (
+                              <button key={o.m} onClick={() => change(i, { contentMode: o.m as BriefItem["contentMode"], contentPrice: 0 })} style={{ padding: "6px 11px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: item.contentMode === o.m ? C.ink : "#fff", color: item.contentMode === o.m ? "#fff" : C.ink2, border: `1px solid ${item.contentMode === o.m ? C.ink : C.line}` }}>{o.label}</button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <FieldLabel
                           required={item.contentMode !== "linkpricer"}
                           hint={item.contentMode === "linkpricer" ? "optional" : undefined}
                         >
-                          {item.contentMode === "linkpricer" ? "Brief for the editor" : item.contentMode === "upload" ? "Upload article" : "Article URL"}
+                          {item.contentMode === "linkpricer" ? "Brief for the editor" : item.contentMode === "upload" ? "Upload article" : "Article link"}
                         </FieldLabel>
                         {item.contentMode === "linkpricer" ? (
                           <textarea value={item.brief} onChange={e => change(i, { brief: e.target.value })} style={{ ...inp, minHeight: 100, resize: "vertical" as const, lineHeight: 1.5 }} placeholder="Editorial piece — lead with industry insight…" />
@@ -1262,16 +1280,18 @@ export function CheckoutModal({ cartItems, currency, onClose, onPlaced, onEmpty 
                               aria-required="true"
                               aria-invalid={liveErr("articleUrl", v.articleUrlError)}
                               style={{ ...(liveErr("articleUrl", v.articleUrlError) ? inpErr : inp), fontFamily: C.mono }}
-                              placeholder="https://yourbrand.com/blog/article-title"
+                              placeholder="https://docs.google.com/document/d/…"
                             />
-                            {liveErr("articleUrl", v.articleUrlError) && fieldErr(v.articleUrlError!)}
+                            {liveErr("articleUrl", v.articleUrlError)
+                              ? fieldErr(v.articleUrlError!)
+                              : <div style={{ fontSize: 11, color: C.mute, marginTop: 6 }}>Google Doc, Dropbox, or a live article URL — make sure it&apos;s viewable by anyone with the link.</div>}
                           </>
                         )}
                       </div>
                       {/* Tone only steers an article Linkpricer is about to
-                      write. For an uploaded or already-published article the
-                      copy is finished, so asking for a tone would imply an
-                      edit we don't make. */}
+                      write. For content the customer supplies themselves —
+                      as a file or as a link — the copy is finished, so
+                      asking for a tone would imply an edit we don't make. */}
                       {item.contentMode === "linkpricer" && (
                         <div>
                           <FieldLabel hint="optional">Tone</FieldLabel>
