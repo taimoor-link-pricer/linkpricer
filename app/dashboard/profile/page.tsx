@@ -105,9 +105,11 @@ export default function ProfilePage() {
 
   return (
     <>
-    <style>{`.profile-page{padding:32px 40px;max-width:700px;margin:0 auto}@media(max-width:768px){.profile-page{padding:20px 16px}}`}</style>
+    <style>{`.profile-page{padding:20px 32px 40px;max-width:1440px;margin:0 auto}.profile-body{max-width:700px}@media(max-width:768px){.profile-page{padding:20px 16px}}`}</style>
     <div className="profile-page">
       <DashboardNav breadcrumb="/ app / profile" />
+
+      <div className="profile-body">
 
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
@@ -262,6 +264,7 @@ export default function ProfilePage() {
           </div>
         </div>
       </SectionCard>
+      </div>
     </div>
     </>
   );

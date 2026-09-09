@@ -25,7 +25,6 @@ export const ROUTES = {
   appRelatedSites: "/dashboard/related-sites",
   orders: "/dashboard/orders",
   favorites: "/dashboard/favorites",
-  monitors: "/dashboard/monitors",
   profile: "/dashboard/profile",
   settings: "/dashboard/settings",
   admin: "/admin",

@@ -97,7 +97,7 @@ export default function FavoritesPage() {
   return (
     <>
     <style>{`
-      .favs-page { padding: 32px 40px; max-width: 1100px; margin: 0 auto; }
+      .favs-page { padding: 20px 32px 40px; max-width: 1440px; margin: 0 auto; }
       .favs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
       .favs-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 12px; }
       @media (max-width: 768px) {

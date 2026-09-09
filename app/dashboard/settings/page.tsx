@@ -104,9 +104,11 @@ export default function SettingsPage() {
 
   return (
     <>
-    <style>{`.settings-page{padding:32px 40px;max-width:700px;margin:0 auto}@media(max-width:768px){.settings-page{padding:20px 16px}}`}</style>
+    <style>{`.settings-page{padding:20px 32px 40px;max-width:1440px;margin:0 auto}.settings-body{max-width:700px}@media(max-width:768px){.settings-page{padding:20px 16px}}`}</style>
     <div className="settings-page">
       <DashboardNav breadcrumb="/ app / settings" />
+
+      <div className="settings-body">
 
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
@@ -265,6 +267,7 @@ export default function SettingsPage() {
         >
           Delete account — contact support
         </button>
+      </div>
       </div>
     </div>
     </>

@@ -707,7 +707,7 @@ export default function OrdersPage() {
   ];
 
   return (
-    <div style={{ padding: "20px 32px 40px", maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: "20px 32px 40px", maxWidth: 1440, margin: "0 auto" }}>
       <style>{`
         * { box-sizing: border-box; }
         .order-row-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 88px; gap: 16px; }
