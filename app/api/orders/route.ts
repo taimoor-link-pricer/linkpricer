@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
 import { urlProblem, urlProblemMessage } from "@/lib/validate-url";
 import { db } from "@/lib/db";
@@ -10,6 +10,7 @@ import { computeOrderPricing, centsToAmount, OfferResolutionError, resolveOffer 
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { withOrderMetaExt } from "@/lib/orders/metadata";
 import { mirrorOrderToFirestore } from "@/lib/orders/firestore-mirror";
+import { notifyNewOrders } from "@/lib/orders/notify";
 
 export const dynamic = "force-dynamic";
 
@@ -226,6 +227,9 @@ export async function POST(req: NextRequest) {
     }
 
     const createdOrders = [];
+    // Only rows this request actually inserted — a retried/double-submitted
+    // order that hit the id conflict below was already announced the first time.
+    const newlyInserted: Array<typeof orders.$inferSelect> = [];
     for (const { item, offer, pricing } of resolved) {
       const initialStatus = item.orderType === "managed" ? "confirming_with_marketplace" : "approved";
 
@@ -326,6 +330,12 @@ export async function POST(req: NextRequest) {
       });
 
       createdOrders.push(order);
+      newlyInserted.push(order);
+    }
+
+    if (newlyInserted.length > 0) {
+      const origin = req.nextUrl.origin;
+      after(() => notifyNewOrders(newlyInserted, origin));
     }
 
     return NextResponse.json({ orders: createdOrders }, { status: 201 });
