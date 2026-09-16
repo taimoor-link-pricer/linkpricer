@@ -30,8 +30,8 @@ const C = {
 
 type OrderStatus =
   | "confirming_with_marketplace" | "approval_required" | "price_increase_requested"
-  | "article_review" | "payment_pending" | "waiting_for_publication" | "approved"
-  | "published" | "complete" | "cancelled";
+  | "article_review" | "payment_pending" | "information_required" | "waiting_for_publication" | "approved"
+  | "published" | "complete" | "cancelled" | "refunded";
 
 const STATUS_CONFIG: Record<OrderStatus, { label: string; color: string; bg: string; urgent: boolean }> = {
   confirming_with_marketplace: { label: "Confirming with Marketplace", color: "#003d99", bg: "#cce5ff", urgent: false },
@@ -39,11 +39,13 @@ const STATUS_CONFIG: Record<OrderStatus, { label: string; color: string; bg: str
   price_increase_requested: { label: "Price Increase Requested", color: "#8b5900", bg: "#fce8c6", urgent: true },
   article_review: { label: "Article Review", color: "#8b5900", bg: "#fce8c6", urgent: true },
   payment_pending: { label: "Payment Pending", color: "#8b5900", bg: "#fce8c6", urgent: true },
+  information_required: { label: "Information Required", color: "#8b5900", bg: "#fce8c6", urgent: true },
   waiting_for_publication: { label: "Waiting for Publication", color: "#003d99", bg: "#cce5ff", urgent: false },
   approved: { label: "Approved", color: "#003d99", bg: "#cce5ff", urgent: false },
   published: { label: "Published", color: "#006621", bg: "#d4f4dd", urgent: false },
   complete: { label: "Complete", color: "#006621", bg: "#d4f4dd", urgent: false },
   cancelled: { label: "Cancelled", color: "#8b0000", bg: "#ffcccb", urgent: false },
+  refunded: { label: "Refunded", color: "#8b0000", bg: "#ffcccb", urgent: false },
 };
 
 interface Order {

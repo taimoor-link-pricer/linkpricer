@@ -11,6 +11,7 @@ import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from
 import { withOrderMetaExt } from "@/lib/orders/metadata";
 import { mirrorOrderToFirestore } from "@/lib/orders/firestore-mirror";
 import { notifyNewOrders } from "@/lib/orders/notify";
+import { notifyOrdersPlaced } from "@/lib/notifications/orders";
 
 export const dynamic = "force-dynamic";
 
@@ -336,6 +337,10 @@ export async function POST(req: NextRequest) {
     if (newlyInserted.length > 0) {
       const origin = req.nextUrl.origin;
       after(() => notifyNewOrders(newlyInserted, origin));
+      // Client receipt + the team's Telegram ping. Separate from the team email
+      // above, which predates the notification module and still owns the
+      // detailed internal breakdown.
+      after(() => notifyOrdersPlaced(newlyInserted, origin));
     }
 
     return NextResponse.json({ orders: createdOrders }, { status: 201 });
