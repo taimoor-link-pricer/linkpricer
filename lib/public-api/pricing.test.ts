@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ACCEPTED_NICHE_VALUES,
+  FEE_PERCENT,
   NICHE_IDS,
   aggregatePricing,
   nicheOfferPrice,
@@ -10,6 +11,11 @@ import {
 } from "./pricing";
 
 const RATES = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
+
+/** Mirrors the rounding aggregatePricing applies to every money field. */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 function offer(prices: Record<string, number | null>, opts: { currency?: string; trusted?: boolean } = {}): RawOffer {
   return {
@@ -114,7 +120,7 @@ describe("ourPrice", () => {
 });
 
 describe("aggregatePricing", () => {
-  it("returns the five figures over a spread of offers", () => {
+  it("returns the whole figure set over a spread of offers", () => {
     const offers = [
       offer({ min_price: 100 }),
       offer({ min_price: 200 }),
@@ -122,13 +128,24 @@ describe("aggregatePricing", () => {
     ];
     const out = aggregatePricing(offers, RATES, null);
     expect(out.standard).toEqual({
+      // Marketplace money, no fee.
       best_price: 100,
       average_price: 200,
       highest_price: 300,
+      // Fee-inclusive, in their published flat spelling.
       our_price: 115,
       recommended_price: null, // nothing trusted yet
       offer_count: 3,
       currency: "USD",
+      // ...and the same fee-inclusive figures grouped, where the basis is
+      // legible from the field names alone.
+      lp_prices: {
+        lowest: 115,
+        average: 230,
+        highest: 345,
+        recommended: null,
+      },
+      lp_fee_percent: 15,
     });
   });
 
@@ -223,9 +240,158 @@ describe("aggregatePricing", () => {
     expect(out.gambling.average_price).toBe(500);
   });
 
+  // ─── lp_prices: the fee-inclusive mirror ──────────────────────────────────
+  //
+  // The flat fields split three-without-fee / two-with-fee and cannot be
+  // renamed (published contract), so lp_prices is the additive fix. These
+  // tests exist to hold two properties that make it worth having: it never
+  // disagrees with the flat fields it duplicates, and its average is a real
+  // average of real prices rather than a marked-up average.
+
+  it("mirrors our_price and recommended_price exactly, so the two spellings can never disagree", () => {
+    const out = aggregatePricing(
+      [
+        offer({ min_price: 100 }),
+        offer({ min_price: 250 }, { trusted: true }),
+        offer({ min_price: 400 }, { trusted: true }),
+      ],
+      RATES,
+      null
+    );
+    expect(out.standard.lp_prices.lowest).toBe(out.standard.our_price);
+    expect(out.standard.lp_prices.recommended).toBe(out.standard.recommended_price);
+  });
+
+  it("carries a null recommendation through rather than inventing one", () => {
+    const out = aggregatePricing(
+      [offer({ min_price: 100, gambling_min_price: 400 })],
+      RATES,
+      null
+    );
+    expect(out.gambling.recommended_price).toBeNull();
+    expect(out.gambling.lp_prices.recommended).toBeNull();
+  });
+
+  it("prices the spread: lowest and highest are the fee-inclusive ends of the market", () => {
+    const out = aggregatePricing(
+      [offer({ min_price: 100 }), offer({ min_price: 260 }), offer({ min_price: 400 })],
+      RATES,
+      null
+    );
+    expect(out.standard.best_price).toBe(100);
+    expect(out.standard.highest_price).toBe(400);
+    expect(out.standard.lp_prices.lowest).toBe(ourPrice(100));
+    expect(out.standard.lp_prices.highest).toBe(ourPrice(400));
+  });
+
+  it("averages the fee-inclusive prices rather than marking up the average", () => {
+    // The whole reason lp_prices.average is computed per offer. ourPrice()
+    // floors at one whole dollar over the marketplace price, so a $2 offer
+    // costs $3 (a 50% effective markup) while a $500 one costs $575 (15%).
+    //
+    //   per-offer:      (ourPrice(2) + ourPrice(500)) / 2 = (3 + 575) / 2 = 289
+    //   marked-up mean: ourPrice((2 + 500) / 2)           = ourPrice(251)  = 289
+    //
+    // ...which happen to agree here, so use an average that separates them.
+    const out = aggregatePricing(
+      [offer({ min_price: 1 }), offer({ min_price: 1 }), offer({ min_price: 100 })],
+      RATES,
+      null
+    );
+    // Each $1 offer prices at $2 (the floor, not $1.15), the $100 at $115.
+    expect(out.standard.lp_prices.average).toBe(round2((2 + 2 + 115) / 3));
+    // Marking up the market average would have produced a materially lower
+    // number, which is the bug this guards against.
+    expect(out.standard.lp_prices.average).toBeGreaterThan(ourPrice(out.standard.average_price));
+  });
+
+  it("publishes the fee percent alongside the prices it produced", () => {
+    const out = aggregatePricing([offer({ min_price: 200 })], RATES, null);
+    expect(out.standard.lp_fee_percent).toBe(FEE_PERCENT);
+    // The headline rate has to actually describe the headline price, or the
+    // field is decoration.
+    expect(out.standard.lp_prices.lowest).toBe(Math.round(200 * (1 + FEE_PERCENT / 100)));
+  });
+
+  it("leaves every published field untouched", () => {
+    // lp_prices is additive. Anything already integrated against this response
+    // must see the same keys and the same values it saw before.
+    const out = aggregatePricing(
+      [offer({ min_price: 100 }), offer({ min_price: 250 }, { trusted: true })],
+      RATES,
+      null
+    );
+    expect(Object.keys(out.standard).sort()).toEqual([
+      "average_price",
+      "best_price",
+      "currency",
+      "highest_price",
+      "lp_fee_percent",
+      "lp_prices",
+      "offer_count",
+      "our_price",
+      "recommended_price",
+    ]);
+    expect(out.standard.best_price).toBe(100);
+    expect(out.standard.average_price).toBe(175);
+    expect(out.standard.highest_price).toBe(250);
+    expect(out.standard.our_price).toBe(115);
+    expect(out.standard.recommended_price).toBe(288);
+    expect(out.standard.offer_count).toBe(2);
+    expect(out.standard.currency).toBe("USD");
+  });
+
+  it("only ever publishes whole dollars, except the average", () => {
+    // ourPrice() rounds to whole dollars, so three of the four lp figures are
+    // integers by construction. The average is the one that is not: it is a
+    // mean of those integers, carried to cents. Worth pinning, because the
+    // published examples on /developers/docs show exactly this shape and a
+    // reader will assume it holds.
+    const out = aggregatePricing(
+      [offer({ min_price: 100.5 }), offer({ min_price: 200.25 }, { trusted: true }), offer({ min_price: 301 })],
+      RATES,
+      null
+    );
+    const { lowest, average, highest, recommended } = out.standard.lp_prices;
+    for (const [name, v] of [["lowest", lowest], ["highest", highest], ["recommended", recommended]] as const) {
+      expect(Number.isInteger(v), `lp_prices.${name} must be a whole dollar, got ${v}`).toBe(true);
+    }
+    expect(average).toBe(round2((ourPrice(100.5) + ourPrice(200.25) + ourPrice(301)) / 3));
+  });
+
   it("never leaks a marketplace name or any identifying field", () => {
     const out = aggregatePricing([offer({ min_price: 100 }, { trusted: true })], RATES, null);
     const serialized = JSON.stringify(out);
     expect(serialized).not.toMatch(/marketplace|vendor|trusted|name/i);
+  });
+});
+
+// ─── the published examples ─────────────────────────────────────────────────
+//
+// /developers and /developers/docs both print a sample response with real
+// numbers in it. Those numbers were computed by hand, and one of them was
+// wrong on the first pass (890 reads as 1023, not 1024 — the markup lands a
+// hair under .5 in floating point and rounds down). A customer who reproduces
+// our own example and gets a different answer has no way to tell which side
+// is broken, so the samples are pinned here: change the fee and this fails,
+// naming the pages that need updating with it.
+describe("the sample response published on /developers and /developers/docs", () => {
+  const DOCUMENTED = [
+    { source: 150,   lp: 173 },
+    { source: 420,   lp: 483 },
+    { source: 350,   lp: 402 },
+    { source: 890,   lp: 1023 },
+    { source: 512.4, lp: 589 },
+    { source: 264.5, lp: 304 },
+  ];
+
+  it("prices every documented figure exactly as the code does", () => {
+    for (const { source, lp } of DOCUMENTED) {
+      expect(ourPrice(source), `the docs say $${source} prices at $${lp}`).toBe(lp);
+    }
+  });
+
+  it("documents the fee percent the code actually applies", () => {
+    expect(FEE_PERCENT, "/developers/docs states 15% in prose and in lp_fee_percent").toBe(15);
   });
 });

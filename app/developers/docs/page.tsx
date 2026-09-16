@@ -41,7 +41,14 @@ const RESPONSE_EXAMPLE = `{
       "our_price":         173,
       "recommended_price": 219,
       "offer_count":       6,
-      "currency":          "USD"
+      "currency":          "USD",
+      "lp_prices": {
+        "lowest":      173,
+        "average":     304.17,
+        "highest":     483,
+        "recommended": 219
+      },
+      "lp_fee_percent": 15
     },
     "gambling": {
       "best_price":        350.00,
@@ -50,7 +57,14 @@ const RESPONSE_EXAMPLE = `{
       "our_price":         402,
       "recommended_price": null,
       "offer_count":       3,
-      "currency":          "USD"
+      "currency":          "USD",
+      "lp_prices": {
+        "lowest":      402,
+        "average":     589.33,
+        "highest":     1023,
+        "recommended": null
+      },
+      "lp_fee_percent": 15
     }
   },
   "metrics": {
@@ -324,6 +338,29 @@ export default function DocsPage() {
               <pre>{RESPONSE_EXAMPLE}</pre>
             </div>
 
+            <h3 className="docs-h3">Marketplace prices vs. your price</h3>
+            <p className="docs-p">
+              Every price in the response is one of two things, and the field name tells you which.{" "}
+              <code className="docs-inline-code">best_price</code>, <code className="docs-inline-code">average_price</code> and{" "}
+              <code className="docs-inline-code">highest_price</code> are <strong>marketplace prices</strong> — what the sources
+              themselves charge, with no Linkpricer fee. Everything under{" "}
+              <code className="docs-inline-code">lp_prices</code>, along with <code className="docs-inline-code">our_price</code>{" "}
+              and <code className="docs-inline-code">recommended_price</code>, is <strong>your price</strong> — what you pay us to
+              place the link, fee included.
+            </p>
+            <p className="docs-p">
+              The fee is <code className="docs-inline-code">lp_fee_percent</code> (currently 15%), rounded to whole dollars and
+              never less than $1 over the source price. That minimum means the effective markup on a very cheap placement is
+              higher than 15% — a $4 source price becomes $5.
+            </p>
+            <p className="docs-p">
+              <code className="docs-inline-code">lp_prices.lowest</code> and{" "}
+              <code className="docs-inline-code">lp_prices.recommended</code> are the same numbers as{" "}
+              <code className="docs-inline-code">our_price</code> and <code className="docs-inline-code">recommended_price</code>.
+              Both spellings are supported and neither is going away; the grouped form exists so the fee boundary is visible
+              without consulting this table.
+            </p>
+
             <h3 className="docs-h3">Response fields</h3>
             <table className="docs-table">
               <thead>
@@ -334,11 +371,17 @@ export default function DocsPage() {
                   ["domain", "string", "The normalized domain you queried."],
                   ["found", "boolean", "false when nothing in this response is priced — either no source prices the domain at all, or the niche you filtered to has no offers. pricing is then {} and last_updated is null."],
                   ["pricing", "object", "One entry per niche that at least one source prices for this domain. A niche nobody prices is absent — never present with nulls."],
-                  ["pricing.<niche>.best_price", "number", "Lowest price any source charges for this niche, in USD. This is the market low, anonymized — we never say which source it came from."],
-                  ["pricing.<niche>.average_price", "number", "Mean price across every source that prices this niche, in USD."],
-                  ["pricing.<niche>.highest_price", "number", "Highest price any source charges for this niche, in USD."],
-                  ["pricing.<niche>.our_price", "number", "What Linkpricer charges to place this for you at the best price. Identical to the price shown on the dashboard's Buy button."],
-                  ["pricing.<niche>.recommended_price", "number | null", "What Linkpricer charges via the cheapest source our team has vetted. null when no vetted source prices this niche for this domain — the placement is still available at our_price."],
+                  ["pricing.<niche>.best_price", "number", "WITHOUT fee. Lowest price any source charges for this niche, in USD. This is the market low, anonymized — we never say which source it came from."],
+                  ["pricing.<niche>.average_price", "number", "WITHOUT fee. Mean price across every source that prices this niche, in USD."],
+                  ["pricing.<niche>.highest_price", "number", "WITHOUT fee. Highest price any source charges for this niche, in USD."],
+                  ["pricing.<niche>.our_price", "number", "WITH fee. What Linkpricer charges to place this for you at the best price. Identical to the price shown on the dashboard's Buy button, and to lp_prices.lowest."],
+                  ["pricing.<niche>.recommended_price", "number | null", "WITH fee. What Linkpricer charges via the cheapest source our team has vetted. Identical to lp_prices.recommended. null when no vetted source prices this niche for this domain — the placement is still available at our_price."],
+                  ["pricing.<niche>.lp_prices", "object", "Every figure Linkpricer charges, WITH fee, in one place. Use these when you want what a customer pays; use best_price / average_price / highest_price when you want what the market charges."],
+                  ["pricing.<niche>.lp_prices.lowest", "number", "WITH fee. Your price at the cheapest source. Always identical to our_price."],
+                  ["pricing.<niche>.lp_prices.average", "number", "WITH fee. The mean of your price at every source. This is NOT average_price plus the fee — each source is priced individually and then averaged, so the whole-dollar minimum on cheap placements is reflected honestly."],
+                  ["pricing.<niche>.lp_prices.highest", "number", "WITH fee. Your price at the most expensive source."],
+                  ["pricing.<niche>.lp_prices.recommended", "number | null", "WITH fee. Your price at the cheapest vetted source. Always identical to recommended_price, null included."],
+                  ["pricing.<niche>.lp_fee_percent", "number", "The Linkpricer fee applied to every lp_prices figure, as a percentage. Currently 15. Note that prices are rounded to whole dollars and always land at least $1 above the source price, so on a very cheap placement the effective markup is higher than this number."],
                   ["pricing.<niche>.offer_count", "number", "How many independent sources back these figures."],
                   ["pricing.<niche>.currency", "string", "Always \"USD\". Source prices in other currencies are converted before any comparison."],
                   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],
@@ -370,7 +413,7 @@ export default function DocsPage() {
               </thead>
               <tbody>
                 {ERROR_CODES.map((e) => (
-                  <tr key={e.code}>
+                  <tr key={e.name}>
                     <td>
                       <span className={`docs-badge docs-badge-${e.code === "401" || e.code === "500" ? "401" : e.code === "404" ? "404" : "429"}`}>
                         {e.code}
