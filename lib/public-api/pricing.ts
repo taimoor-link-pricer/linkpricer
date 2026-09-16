@@ -101,13 +101,51 @@ export function nicheOfferPrice(offer: RawOffer, niche: NicheId): number | null 
   return n;
 }
 
+/**
+ * The headline markup, published as `lp_fee_percent` so a caller can see the
+ * basis rather than reverse-engineering it from two numbers.
+ *
+ * It is the headline rate, not always the effective one: ourPrice() also
+ * enforces a floor of one whole dollar over the marketplace price, which on a
+ * cheap offer bites harder than the percentage (a $4 offer prices at $5, an
+ * effective 25%). Documented on /developers/docs rather than modelled in the
+ * response, because the floor is a property of the rounding, not a second fee.
+ */
+export const FEE_PERCENT = 15;
+
 /** LinkPricer's own price for a marketplace price. Identical to withFee() on the Analyze page. */
 export function ourPrice(marketplacePrice: number): number {
-  return Math.max(Math.round(marketplacePrice * 1.15), Math.floor(marketplacePrice) + 1);
+  return Math.max(Math.round(marketplacePrice * (1 + FEE_PERCENT / 100)), Math.floor(marketplacePrice) + 1);
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * What a customer pays LinkPricer, as opposed to what the marketplaces charge.
+ *
+ * The flat price fields on NichePricing are a published contract and stay
+ * exactly as they are: three of them (best/average/highest) are raw
+ * marketplace money and two (our_price/recommended_price) already carry the
+ * fee, which is a split a caller has no way to see from the field names. This
+ * object is the additive fix — everything inside it includes the fee, named
+ * once in one place, so the boundary is legible without reading the docs.
+ *
+ * `lowest` and `recommended` deliberately repeat our_price and
+ * recommended_price. Completeness is the point: a caller reading lp_prices
+ * should never have to reach back into the flat fields to assemble the full
+ * set of LinkPricer figures.
+ */
+export interface LpPrices {
+  /** Fee-inclusive price at the cheapest source. Always equal to our_price. */
+  lowest: number;
+  /** Mean of the fee-inclusive price of every offer — NOT average_price marked up (see aggregatePricing). */
+  average: number;
+  /** Fee-inclusive price at the most expensive source. */
+  highest: number;
+  /** Fee-inclusive price at the cheapest trusted source. Always equal to recommended_price. */
+  recommended: number | null;
 }
 
 export interface NichePricing {
@@ -124,6 +162,10 @@ export interface NichePricing {
   /** How many distinct sources back these figures. Never names them. */
   offer_count: number;
   currency: "USD";
+  /** Every figure above, fee-inclusive. The flat best/average/highest prices are not. */
+  lp_prices: LpPrices;
+  /** The headline markup behind lp_prices, as a percentage. See FEE_PERCENT. */
+  lp_fee_percent: number;
 }
 
 /**
@@ -163,6 +205,20 @@ export function aggregatePricing(
     const average = usdPrices.reduce((a, b) => a + b, 0) / usdPrices.length;
     const cheapestTrusted = trustedUsdPrices.length ? Math.min(...trustedUsdPrices) : null;
 
+    // Marked up per offer, then averaged — not average_price marked up.
+    //
+    // The two differ because ourPrice() is not linear: its whole-dollar floor
+    // lifts cheap offers by more than the percentage would, so marking up the
+    // mean understates what the offers actually cost. Averaging the real
+    // per-offer prices is the figure that matches what a customer would pay,
+    // which is the only thing this field is good for.
+    //
+    // min and max need no such care — ourPrice() is monotonic, so the cheapest
+    // offer is still the cheapest after the fee. They are computed through it
+    // anyway so all four lp figures come from one expression.
+    const lpPrices = usdPrices.map(ourPrice);
+    const lpAverage = lpPrices.reduce((a, b) => a + b, 0) / lpPrices.length;
+
     out[niche] = {
       best_price: round2(best),
       average_price: round2(average),
@@ -171,6 +227,13 @@ export function aggregatePricing(
       recommended_price: cheapestTrusted == null ? null : ourPrice(cheapestTrusted),
       offer_count: usdPrices.length,
       currency: "USD",
+      lp_prices: {
+        lowest: ourPrice(best),
+        average: round2(lpAverage),
+        highest: ourPrice(highest),
+        recommended: cheapestTrusted == null ? null : ourPrice(cheapestTrusted),
+      },
+      lp_fee_percent: FEE_PERCENT,
     };
   }
 

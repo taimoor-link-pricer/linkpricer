@@ -31,7 +31,7 @@ const TIERS = [
 ];
 
 const FEATURES = [
-  { icon: "🔍", title: "Full price spread, anonymized", body: "Query any domain and get the best, average and highest price across every marketplace we track — no marketplace names ever exposed." },
+  { icon: "🔍", title: "Full price spread, anonymized", body: "Query any domain and get the best, average and highest price across every marketplace we track — plus what the same placement costs through us, fee included. No marketplace names ever exposed." },
   { icon: "📊", title: "Rich domain metrics", body: "Domain rating, organic traffic, referring domains, country, and niche data bundled in every response." },
   { icon: "⚡", title: "Fast & reliable", body: "Prices are read live from source on every call — no stale cache layer in front of them. Data refreshed daily from 50+ marketplaces and growing." },
   { icon: "🔒", title: "Secure by default", body: "API key auth on every request. Server-to-server only — no browser CORS. Keys scoped per account." },
@@ -50,7 +50,14 @@ const EXAMPLE_RESPONSE = `{
       "our_price":         173,
       "recommended_price": 219,
       "offer_count":       6,
-      "currency":          "USD"
+      "currency":          "USD",
+      "lp_prices": {
+        "lowest":      173,
+        "average":     304.17,
+        "highest":     483,
+        "recommended": 219
+      },
+      "lp_fee_percent": 15
     },
     "gambling": {
       "best_price":        350.00,
@@ -59,7 +66,14 @@ const EXAMPLE_RESPONSE = `{
       "our_price":         402,
       "recommended_price": null,
       "offer_count":       3,
-      "currency":          "USD"
+      "currency":          "USD",
+      "lp_prices": {
+        "lowest":      402,
+        "average":     589.33,
+        "highest":     1023,
+        "recommended": null
+      },
+      "lp_fee_percent": 15
     }
   },
   "metrics": {
