@@ -385,13 +385,20 @@ function ConversationThread({ orderId, meta, onBack, onClose }: { orderId: strin
     if (!text || !profile) return;
     setInputValue("");
     try {
-      await addDoc(collection(db, "orders", orderId, "messages"), {
+      const ref = await addDoc(collection(db, "orders", orderId, "messages"), {
         senderId: profile.uid,
         senderType: "admin",
         senderName: profile.displayName || profile.email || "Linkpricer team",
         body: text,
         createdAt: serverTimestamp(),
       });
+      // Emails the client that the team replied (spec #8). Fire-and-forget: the
+      // message is already in Firestore and visible to them either way.
+      fetch(`/api/orders/${orderId}/notify-message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: ref.id }),
+      }).catch((err) => console.error("[ChatDock thread] notify failed", err));
     } catch (err) {
       console.error("[ChatDock thread] send failed", err);
       setError("Message didn't send.");
