@@ -392,8 +392,9 @@ function ConversationThread({ orderId, meta, onBack, onClose }: { orderId: strin
         body: text,
         createdAt: serverTimestamp(),
       });
-      // Emails the client that the team replied (spec #8). Fire-and-forget: the
-      // message is already in Firestore and visible to them either way.
+      // Lets the server know about the message. The client is only emailed if
+      // they haven't replied within 10 minutes (lib/notifications/chat.ts).
+      // Fire-and-forget: the message is already in Firestore either way.
       fetch(`/api/orders/${orderId}/notify-message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

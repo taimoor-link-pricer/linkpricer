@@ -224,13 +224,19 @@ function ChatModal({ order, onClose }: { order: Order; onClose: () => void }) {
     setAttachments([]);
     setUploadErr("");
     try {
-      await addDoc(collection(db, "orders", order.id, "messages"), {
+      const ref = await addDoc(collection(db, "orders", order.id, "messages"), {
         senderId: profile.uid,
         senderType: "client",
         senderName: profile.displayName || profile.email || "Client",
         body: text,
         createdAt: serverTimestamp(),
       });
+      // Pings the team on Telegram — same call as the order detail page.
+      fetch(`/api/orders/${order.id}/notify-message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: ref.id }),
+      }).catch(() => {});
     } catch (err) {
       console.error("[ChatModal] send failed", err);
       setChatError("Message didn't send. Check your connection and try again.");

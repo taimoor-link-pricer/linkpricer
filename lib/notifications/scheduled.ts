@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import type { OrderStatus } from "@/lib/orders/types";
-import { isTestOrder, NEW_ORDER_RECIPIENTS } from "@/lib/orders/notify";
+import { isTestOrder, teamRecipients } from "@/lib/orders/notify";
 import { notify } from "./index";
 import { clientOrderUrl, adminOrderUrl } from "./orders";
 
@@ -259,7 +259,7 @@ async function sendDailyDigest(open: OpenOrderRow[], origin: string, now: Date) 
     // One digest per calendar day, however many times the cron fires.
     dedupeKey: `daily_digest:${now.toISOString().slice(0, 10)}`,
     dedupeWindowMs: DAY,
-    to: NEW_ORDER_RECIPIENTS,
+    to: teamRecipients(),
     subject: `LinkPricer daily digest — ${changes.rows.length} status changes, ${waitingOnClient.length} waiting on clients`,
     text: lines.join("\n"),
     // Internal digest: filed under no particular client, so it lives in the
