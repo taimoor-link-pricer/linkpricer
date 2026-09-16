@@ -39,11 +39,13 @@ const STATUS_TO_STAGE: Record<OrderStatus, StageId> = {
   price_increase_requested: "in_progress",
   article_review: "in_progress",
   payment_pending: "in_progress",
+  information_required: "in_progress",
   approved: "in_progress",
   waiting_for_publication: "waiting_for_publication",
   published: "published",
   complete: "complete",
   cancelled: "in_progress",
+  refunded: "in_progress",
 };
 
 const STATUS_LABEL: Record<OrderStatus, string> = {
@@ -52,11 +54,13 @@ const STATUS_LABEL: Record<OrderStatus, string> = {
   price_increase_requested: "Price increase requested",
   article_review: "Article ready for review",
   payment_pending: "Payment pending",
+  information_required: "Information required",
   approved: "Approved",
   waiting_for_publication: "Waiting for publication",
   published: "Published",
   complete: "Complete",
   cancelled: "Cancelled",
+  refunded: "Refunded",
 };
 
 interface ApiOrder {
@@ -614,13 +618,22 @@ function Chat({ orderId, domain, title, statusRefreshKey }: { orderId: string; d
       // enforces senderId === request.auth.uid and the body constraints
       // server-side (Firestore's own server, not this app's), so this isn't
       // trusting the client any more than the REST route did.
-      await addDoc(collection(db, "orders", orderId, "messages"), {
+      const ref = await addDoc(collection(db, "orders", orderId, "messages"), {
         senderId: profile.uid,
         senderType: "client",
         senderName: profile.displayName || profile.email || "You",
         body: text,
         createdAt: serverTimestamp(),
       });
+      // Tells the server a message exists so it can alert the team (the server
+      // reads the message back out of Firestore — see the notify-message
+      // route). Deliberately not awaited into the send result: the message is
+      // already delivered, and a failed ping must not look like a failed send.
+      fetch(`/api/orders/${orderId}/notify-message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: ref.id }),
+      }).catch((err) => console.error("[Chat] notify failed", err));
     } catch (err) {
       console.error("[Chat] send failed", err);
       setChatError("Message didn't send.");

@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { adminAuth } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { cookies } from "next/headers";
+import { notifyUserSignup } from "@/lib/notifications/users";
 
 const COOKIE_NAME = "session";
 const FIVE_DAYS_MS = 60 * 60 * 24 * 5 * 1000;
@@ -38,14 +39,30 @@ export async function POST(req: NextRequest) {
       }
 
       if (decoded.email) {
-        await db.insert(users).values({
+        const inserted = await db.insert(users).values({
           id: decoded.uid,
           email: decoded.email,
           firstName,
           lastName,
           role: "client",
           hasCompletedOnboarding: false,
-        }).onConflictDoNothing();
+        }).onConflictDoNothing().returning({ id: users.id });
+
+        // A row only comes back when this sign-in created the account.
+        if (inserted.length > 0) {
+          const email = decoded.email;
+          const origin = req.nextUrl.origin;
+          after(() =>
+            notifyUserSignup({
+              userId: decoded.uid,
+              email,
+              firstName,
+              lastName,
+              provider: decoded.firebase?.sign_in_provider ?? null,
+              origin,
+            })
+          );
+        }
       }
     } catch (dbErr) {
       console.error("[/api/auth/session] PG upsert failed", dbErr);

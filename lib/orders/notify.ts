@@ -8,6 +8,14 @@ export const NEW_ORDER_RECIPIENTS = [
   "taimour@linkpricer.com",
 ];
 
+// TEAM_NOTIFICATION_EMAILS (comma-separated) replaces the list above. Local dev
+// shares the production database, so a real-looking test run would otherwise
+// email the whole team.
+export function teamRecipients(): string[] {
+  const override = process.env.TEAM_NOTIFICATION_EMAILS?.split(",").map((e) => e.trim()).filter(Boolean);
+  return override?.length ? override : NEW_ORDER_RECIPIENTS;
+}
+
 // "test" as its own token: test, tests, test1, my-test-site.com, /test/page.
 // A plain substring match would also hit "latest", "contest", "fastest" and
 // "A/B testing" — real orders with those in the title or anchor would then
@@ -75,7 +83,7 @@ export async function notifyNewOrders(created: OrderRow[], origin: string): Prom
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        personalizations: [{ to: NEW_ORDER_RECIPIENTS.map((email) => ({ email })) }],
+        personalizations: [{ to: teamRecipients().map((email) => ({ email })) }],
         from: { email: "noreply@linkpricer.com", name: "Linkpricer Orders" },
         subject,
         content: [{ type: "text/plain", value: body }],

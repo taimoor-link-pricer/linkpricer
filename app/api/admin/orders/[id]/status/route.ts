@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { orders } from "@/lib/db/schema";
@@ -8,6 +9,7 @@ import { ORDER_STATUSES } from "@/lib/orders/types";
 import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { getOrderMetaExt, withOrderMetaExt } from "@/lib/orders/metadata";
 import { upsertLinkMonitor } from "@/lib/orders/monitor";
+import { notifyOrderStatusChange } from "@/lib/notifications/orders";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +85,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       eventType: ORDER_EVENT_TYPES.statusChanged,
       metadata: eventMeta,
     });
+
+    // Fire-and-forget: a SendGrid or Telegram hiccup must not fail the status
+    // update that already committed.
+    const origin = req.nextUrl.origin;
+    after(() =>
+      notifyOrderStatusChange({
+        order: updated,
+        fromStatus: order.status,
+        toStatus: data.status,
+        actorRole: "admin",
+        note: data.note ?? null,
+        origin,
+      })
+    );
 
     let monitor = null;
     if (data.status === "published" && effectivePublishedUrl) {
