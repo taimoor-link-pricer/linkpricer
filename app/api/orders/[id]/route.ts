@@ -7,7 +7,7 @@ import { getCurrentUser } from "@/lib/get-current-user";
 import { CLIENT_ORDER_ACTIONS, CLIENT_ACTION_TRANSITIONS, type OrderStatus } from "@/lib/orders/types";
 import { recordOrderEvent, getOrderEvents, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { getOrderMetaExt, withOrderMetaExt } from "@/lib/orders/metadata";
-import { notifyClientOrderAction, notifyOrderStatusChange } from "@/lib/notifications/orders";
+import { notifyOrderStatusChange } from "@/lib/notifications/orders";
 
 export const dynamic = "force-dynamic";
 
@@ -120,17 +120,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     });
 
     // The client just told us something we have to act on today (approved,
-    // declined, accepted a price) — Telegram, plus the status alert for the
-    // money-moving transitions. actorRole "client" suppresses the client email:
-    // nobody needs a receipt for their own click.
+    // declined, accepted a price) — the team alert names the action.
+    // actorRole "client" suppresses the client email: nobody needs a receipt
+    // for their own click.
     const origin = req.nextUrl.origin;
-    after(() => notifyClientOrderAction({ order: updated, action: parsed.data.action, origin }));
     after(() =>
       notifyOrderStatusChange({
         order: updated,
         fromStatus: order.status,
         toStatus: transition.to,
         actorRole: "client",
+        clientAction: parsed.data.action,
         origin,
       })
     );

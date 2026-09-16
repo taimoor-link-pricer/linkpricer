@@ -2,6 +2,7 @@ import type { orders } from "@/lib/db/schema";
 import type { ClientOrderAction, OrderStatus } from "@/lib/orders/types";
 import { isTestOrder, NEW_ORDER_RECIPIENTS } from "@/lib/orders/notify";
 import { notify } from "./index";
+import { notifyTeam } from "./team";
 
 type OrderRow = typeof orders.$inferSelect;
 
@@ -173,21 +174,17 @@ const CLIENT_NOTICES: Partial<Record<OrderStatus, ClientNotice>> = {
   },
 };
 
-// Statuses the team needs on Telegram the moment they happen: money moving, or
-// fulfilment blocked/unblocked. Healthy step-by-step progress stays in the
-// daily digest instead.
-const INTERNAL_TELEGRAM_STATUSES: Partial<Record<OrderStatus, string>> = {
-  cancelled: "ORDER CANCELLED",
-  refunded: "REFUND ISSUED",
-  payment_pending: "PAYMENT PENDING",
-  published: "PUBLISHED",
-};
+function statusLabel(status: string | null) {
+  return status ? status.replace(/_/g, " ") : "new";
+}
 
 export async function notifyOrderStatusChange(params: {
   order: OrderRow;
   fromStatus: string | null;
   toStatus: OrderStatus;
   actorRole: "client" | "admin" | "system";
+  // Set when the client's own button click caused the change.
+  clientAction?: ClientOrderAction;
   note?: string | null;
   origin: string;
 }): Promise<void> {
@@ -217,28 +214,27 @@ export async function notifyOrderStatusChange(params: {
     });
   }
 
-  const internalTag = INTERNAL_TELEGRAM_STATUSES[toStatus];
-  if (internalTag) {
-    await notify({
-      event: `order_status_internal_${toStatus}`,
-      channel: "telegram",
-      dedupeKey: `order_status_internal_${toStatus}:${order.id}`,
-      text: [
-        `[${internalTag}] ${label(order)}`,
-        `Client: ${order.email ?? "unknown"} — ${money(order)}`,
-        params.note ? `Note: ${params.note}` : "",
-        adminOrderUrl(origin, order.id),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      userId: order.userId,
-      orderId: order.id,
-    });
-  }
+  // The team hears about every status change, whoever made it, so nothing
+  // moves on an order without someone seeing it.
+  const tag = params.clientAction ? CLIENT_ACTION_TAGS[params.clientAction] : "STATUS CHANGED";
+  const actor = params.actorRole === "client" ? "client" : params.actorRole === "admin" ? "team" : "system";
+  await notifyTeam({
+    event: "order_status_team",
+    dedupeKey: `order_status_team:${order.id}:${params.fromStatus ?? "new"}->${toStatus}`,
+    subject: `[${tag}] ${label(order)}: ${statusLabel(params.fromStatus)} → ${statusLabel(toStatus)}`,
+    lines: [
+      `Changed by: ${actor}`,
+      `Client: ${order.email ?? "unknown"} — ${money(order)}`,
+      params.note && `Note: ${params.note}`,
+      adminOrderUrl(origin, order.id),
+    ],
+    userId: order.userId,
+    orderId: order.id,
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Client actions (approve / decline / accept price)
+// Client actions (approve / decline / accept price) — labels for the status alert
 // ---------------------------------------------------------------------------
 
 const CLIENT_ACTION_TAGS: Record<ClientOrderAction, string> = {
@@ -249,36 +245,14 @@ const CLIENT_ACTION_TAGS: Record<ClientOrderAction, string> = {
   cancel: "CLIENT CANCELLED",
 };
 
-// Telegram triggers 4 and 5: the client either unblocked fulfilment or killed
-// the order, and both need someone on it today.
-export async function notifyClientOrderAction(params: {
-  order: OrderRow;
-  action: ClientOrderAction;
-  origin: string;
-}): Promise<void> {
-  const { order, action, origin } = params;
-  if (isTestOrder(order)) return;
-
-  await notify({
-    event: `client_action_${action}`,
-    channel: "telegram",
-    dedupeKey: `client_action_${action}:${order.id}`,
-    text: [
-      `[${CLIENT_ACTION_TAGS[action]}] ${label(order)}`,
-      `Client: ${order.email ?? "unknown"} — ${money(order)}`,
-      adminOrderUrl(origin, order.id),
-    ].join("\n"),
-    userId: order.userId,
-    orderId: order.id,
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Chat messages
 // ---------------------------------------------------------------------------
 
-// A client message pings the team on Telegram (response-time target); an admin
-// message emails the client. Nobody is ever notified about their own message.
+// A client message pings the team on Telegram straight away. Nothing is sent
+// for a team message here: the client is emailed only if they haven't replied
+// within the reply window (see chat.ts), so a quick back-and-forth in the chat
+// doesn't fill their inbox.
 export async function notifyOrderMessage(params: {
   order: OrderRow;
   messageId: string;
@@ -288,45 +262,24 @@ export async function notifyOrderMessage(params: {
   origin: string;
 }): Promise<void> {
   const { order, origin } = params;
-  if (isTestOrder(order)) return;
+  if (isTestOrder(order) || params.senderType !== "client") return;
   const preview = params.preview.length > 200 ? `${params.preview.slice(0, 200)}…` : params.preview;
 
-  if (params.senderType === "client") {
-    await notify({
-      event: "order_message_from_client",
-      channel: "telegram",
-      // Keyed on the message, not the order: two different questions minutes
-      // apart are two different alerts.
-      dedupeKey: `order_message:${params.messageId}`,
-      text: [
-        `[NEW CLIENT MESSAGE] ${label(order)}`,
-        `From: ${params.senderName ?? order.email ?? "client"}`,
-        preview,
-        adminOrderUrl(origin, order.id),
-      ].join("\n"),
-      userId: order.userId,
-      orderId: order.id,
-    });
-    return;
-  }
-
-  if (!order.email) return;
-  const body = clientEmail({
-    intro: `You have a new message from the LinkPricer team about your ${label(order)} order:`,
-    details: [preview],
-    cta: "Reply in the order chat",
-    url: clientOrderUrl(origin, order.id),
-  });
   await notify({
-    event: "order_message_from_team",
-    channel: "email",
+    event: "order_message_from_client",
+    channel: "telegram",
+    // Keyed on the message, not the order: two different questions minutes
+    // apart are two different alerts.
     dedupeKey: `order_message:${params.messageId}`,
-    to: [order.email],
-    subject: `New message about your ${label(order)} order`,
-    ...body,
+    text: [
+      `[NEW CLIENT MESSAGE] ${label(order)}`,
+      `From: ${params.senderName ?? order.email ?? "client"}`,
+      preview,
+      adminOrderUrl(origin, order.id),
+    ].join("\n"),
     userId: order.userId,
     orderId: order.id,
   });
 }
 
-export { NEW_ORDER_RECIPIENTS };
+export { NEW_ORDER_RECIPIENTS, clientEmail, label };
