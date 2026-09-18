@@ -20,6 +20,7 @@ import {
 } from "firebase/auth";
 import { auth } from "./client";
 import { ROUTES } from "@/lib/constants";
+import { track } from "@/lib/analytics";
 
 export function getAuthErrorMessage(code: string): string {
   switch (code) {
@@ -165,6 +166,7 @@ export async function signInWithEmail(email: string, password: string) {
   const { user } = await signInWithEmailAndPassword(auth, email, password);
   const idToken = await user.getIdToken();
   await createSession(idToken);
+  track("login", { method: "password" });
   return user;
 }
 
@@ -178,6 +180,7 @@ export async function signUpWithEmail(
   await updateProfile(user, { displayName: `${firstName} ${lastName}`.trim() });
   const idToken = await user.getIdToken();
   await createSession(idToken, { firstName, lastName });
+  track("sign_up", { method: "password" });
   return user;
 }
 
@@ -194,6 +197,7 @@ async function finalizeGoogleResult(result: UserCredential): Promise<{ user: Use
     await firebaseSignOut(auth).catch(() => {});
     throw err;
   }
+  track(isNewUser ? "sign_up" : "login", { method: "google" });
   return { user: result.user, isNewUser };
 }
 
@@ -253,6 +257,7 @@ async function recoverHungPopup(before: SignInMark): Promise<{ user: User; isNew
     const user = freshlySignedInUser(before);
     if (user) {
       await createSession(await user.getIdToken());
+      track("login", { method: "google" });
       // isNewUser is unavailable on this path (no UserCredential). No caller
       // branches on it — post-auth routing reads hasCompletedOnboarding from
       // the server — so reporting false here changes nothing.

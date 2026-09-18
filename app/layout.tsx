@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthSync } from "@/components/auth/auth-sync";
+import { AnalyticsTracker } from "@/components/analytics/analytics-tracker";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -51,6 +53,10 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col font-body text-on-surface bg-background selection:bg-primary-container selection:text-on-primary-container">
         <AuthSync />
+        {/* useSearchParams needs a boundary, or every static page opts out of prerendering. */}
+        <Suspense fallback={null}>
+          <AnalyticsTracker />
+        </Suspense>
         {children}
       </body>
     </html>

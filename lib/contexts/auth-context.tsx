@@ -14,6 +14,7 @@ import { signOut, refreshSessionCookie } from "@/lib/firebase/auth-client";
 import { usePathname, useRouter } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
 import { PageLoader } from "@/components/page-loader";
+import { markInternalTraffic } from "@/lib/analytics";
 
 // How long to wait for Firebase's onAuthStateChanged before falling back to
 // asking the server who this is. Long enough that a slow-but-working iframe
@@ -216,6 +217,7 @@ export function AuthProvider({ children, requireAdmin = false }: AuthProviderPro
           const data = await res.json();
           const resolved = toProfile(user.uid, user, data);
           setProfile(resolved);
+          if (resolved.isAdmin) markInternalTraffic();
 
           if (requireAdmin && !resolved.isAdmin) {
             router.replace(ROUTES.dashboard);

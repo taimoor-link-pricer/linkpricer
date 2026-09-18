@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import { track } from "@/lib/analytics";
 import type { PriceType } from "@/lib/orders/types";
 
 export { hydrateRates };
@@ -73,7 +74,10 @@ export function BuyDirectModal({
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={onClose}
+            onClick={() => {
+              track("buy_direct_click", { marketplace: marketplaceName.slice(0, 100), domain });
+              onClose();
+            }}
             style={{ flex: 1, padding: "11px 0", borderRadius: 9, background: C.accent, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}
           >
             Continue ↗

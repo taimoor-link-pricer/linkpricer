@@ -13,6 +13,7 @@ import type { PriceType } from "@/lib/orders/types";
 import { BuyDirectModal, RatingBadge, type CartItem } from "@/components/dashboard/results-shared";
 import { CartPopup } from "@/components/dashboard/checkout-flow";
 import { loadCart, persistCart } from "@/lib/cart-storage";
+import { track } from "@/lib/analytics";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -1759,6 +1760,7 @@ function SearchPageInner() {
       // started this request, so it stays correct even if the user changes
       // the dropdown while the request is still in flight.
       setResultsNiche(niche);
+      track("analyze_domains", { domain_count: Math.min(domains.length, MAX_DOMAINS), found_count: found.length, niche });
 
       // Only save real paste-box searches — a ?domain= auto-run arriving
       // from the homepage isn't something the user typed/pasted themselves.

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckoutModal, OrderPlacedModal, type PlacedOrder } from "@/components/dashboard/checkout-flow";
 import { loadCart, persistCart } from "@/lib/cart-storage";
+import { track, type AnalyticsItem } from "@/lib/analytics";
 
 // Used to be CheckoutModal rendered in-place by whichever page opened it
 // (search or related-sites), with cartItems passed straight down as a prop.
@@ -30,6 +31,21 @@ export default function CheckoutPage() {
     if (!orderPlaced && cart.items.length === 0) router.replace("/dashboard/search");
   }, [cart.items.length, orderPlaced, router]);
 
+  // Once per visit to a non-empty checkout. Cart prices are USD whatever the
+  // display currency is (cart.currency only drives formatting).
+  useEffect(() => {
+    if (cart.items.length === 0) return;
+    const items: AnalyticsItem[] = cart.items.map((c) => ({
+      item_id: c.domain,
+      item_name: c.domain,
+      item_brand: c.offerName,
+      item_category: c.orderType,
+      price: c.price,
+      quantity: 1,
+    }));
+    track("begin_checkout", { currency: "USD", value: items.reduce((sum, i) => sum + (i.price ?? 0), 0), items });
+  }, [cart.items]);
+
   if (orderPlaced) {
     return <OrderPlacedModal orders={placedOrders} currency={cart.currency} onClose={() => {}} />;
   }
@@ -43,6 +59,25 @@ export default function CheckoutPage() {
       onClose={() => router.back()}
       onPlaced={(orders) => {
         persistCart({ items: [], currency: cart.currency });
+        // One checkout can create several order rows; GA gets one transaction
+        // keyed on the first id. Amounts are always USD (see PlacedOrder).
+        // Orders are pay-after-publication, so this is booked value at
+        // placement — cancellations are not reversed in GA.
+        if (orders.length > 0) {
+          const items: AnalyticsItem[] = orders.map((o) => ({
+            item_id: o.snapshotDomain ?? o.id,
+            item_name: o.snapshotDomain ?? o.id,
+            item_brand: o.snapshotMarketplaceName ?? undefined,
+            price: o.totalAmount ? parseFloat(o.totalAmount) : 0,
+            quantity: 1,
+          }));
+          track("purchase", {
+            transaction_id: orders[0].id,
+            currency: "USD",
+            value: items.reduce((sum, i) => sum + (i.price ?? 0), 0),
+            items,
+          });
+        }
         setPlacedOrders(orders);
         setOrderPlaced(true);
       }}
