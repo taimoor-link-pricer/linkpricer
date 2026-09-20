@@ -8,6 +8,7 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { useUnreadOrders } from "@/lib/contexts/unread-orders-context";
 import { ROUTES } from "@/lib/constants";
 import { getOrderMetaExt } from "@/lib/orders/metadata";
+import { MIN_FEE_EUR } from "@/lib/pricing/fee";
 import { ORDER_STATUSES, type OrderStatus, type ClientOrderAction, currencySymbol, parseAdditionalLinks } from "@/lib/orders/types";
 import type { OrderStatusChangedMeta, OrderMessageMeta } from "@/lib/orders/events";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
@@ -179,8 +180,30 @@ function DetailsCard({ order }: { order: ApiOrder }) {
   // separate fee column exists to disambiguate the two after the fact, so
   // relabel honestly instead of asserting a specific number that may not be
   // (just) the management fee.
-  const expectedFee = order.orderType === "managed" ? Math.round((gpPrice + contentPrice) * 0.15 * 100) / 100 : 0;
-  const feeLabel = Math.abs(fee - expectedFee) > 0.01 ? "Fees & adjustments" : "Management fee";
+  //
+  // Two fees are "expected" here, because orders placed before the €25
+  // minimum (2026-09-18) carry the bare percentage and are not adjustments:
+  // the plain 15%, and the €25 minimum as charged now on a small order.
+  //
+  // The minimum is checked as a band rather than a number on purpose. It is
+  // €25 converted at whatever the EUR rate was the day the order was placed,
+  // and that rate is not stored anywhere — so instead of comparing against
+  // today's rate (which would relabel every older small order as an
+  // adjustment as the rate drifts) this asks the question that has a real
+  // answer: is this fee €25 at any plausible exchange rate? That also keeps
+  // the label independent of the live rate, so this page needs no rate fetch.
+  const pctFee = Math.round((gpPrice + contentPrice) * 0.15 * 100) / 100;
+  const plausibleEurUsd = { low: 0.9, high: 1.6 };
+  const isMinimumFee =
+    // The minimum only applies where it beats the percentage.
+    pctFee < fee &&
+    fee >= MIN_FEE_EUR * plausibleEurUsd.low - 0.01 &&
+    fee <= MIN_FEE_EUR * plausibleEurUsd.high + 0.01;
+  const isManagementFeeOnly =
+    order.orderType === "managed"
+      ? Math.abs(fee - pctFee) <= 0.01 || isMinimumFee
+      : Math.abs(fee) <= 0.01;
+  const feeLabel = isManagementFeeOnly ? "Management fee" : "Fees & adjustments";
   const currencySign = currencySymbol(order.snapshotCurrency);
 
   return (
@@ -745,7 +768,6 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   // event wouldn't otherwise show up in the conversation thread until a full
   // page reload.
   const [statusRefreshKey, setStatusRefreshKey] = useState(0);
-
   async function load() {
     setLoading(true);
     setLoadError(null);

@@ -2,6 +2,20 @@
 // v1-interactive/v1-app.jsx in the Karolis design handoff.
 
 import type { Currency, Domain, SortState } from "./types";
+import { FALLBACK_EUR_USD_DISPLAY, minFeeCents, withFeeUsd } from "@/lib/pricing/fee";
+
+// The €25 minimum managed fee in USD cents — the same figure /api/orders
+// charges with, kept here so every price the dashboard shows matches it.
+//
+// Mutable and hydrated from the admin EUR rate by hydrateRates() below, for
+// the same reason RATES is: the rate lives in the currency_rates table, not in
+// the bundle.
+//
+// Until then it holds the DISPLAY fallback, which errs high (see
+// FALLBACK_EUR_USD_DISPLAY): if the rate can't be fetched, a price shown here
+// must not come out under what /api/orders will charge. Not reassigned, so
+// importers see the update in place.
+export const FEE_FLOOR = { cents: minFeeCents({ EUR: FALLBACK_EUR_USD_DISPLAY }) };
 
 export const fmt = {
   num(n: number | null | undefined): string {
@@ -20,7 +34,7 @@ export const fmt = {
     return `${fmt.price(min, sym)} – ${fmt.price(max, sym)}`;
   },
   withFee(n: number | null | undefined): number | null {
-    return n == null ? null : Math.round(n * 1.15);
+    return n == null ? null : withFeeUsd(n, FEE_FLOOR.cents);
   },
 };
 
@@ -71,6 +85,11 @@ export function hydrateRates(): Promise<void> {
         const adminRate = data.rates?.[cur];
         if (adminRate && adminRate > 0) RATES[cur] = 1 / adminRate;
       }
+      // Converted from the admin rate map exactly as the server does it
+      // (minFeeCents), not from RATES above — deriving it from the inverted
+      // display rate would round differently and put the dashboard a cent or
+      // two away from what /api/orders charges.
+      FEE_FLOOR.cents = minFeeCents(data.rates);
       hydrated = true;
     })
     .catch((err) => {

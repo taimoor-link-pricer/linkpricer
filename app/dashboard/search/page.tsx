@@ -6,7 +6,8 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ref as storageRef, uploadBytes } from "firebase/storage";
 import { storage } from "@/lib/firebase/client";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
-import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
+import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates, FEE_FLOOR } from "@/lib/design-v1/format";
+import { withFeeUsd } from "@/lib/pricing/fee";
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
@@ -70,11 +71,9 @@ function drUpdatedText(updatedAt: string | null): string {
 }
 
 function withFee(p: number): number {
-  // Rounding to a whole currency unit can erase the 15% margin entirely on cheap
-  // prices (e.g. 1.21 * 1.15 = 1.39, which rounds down to 1 — below source price).
-  // Math.floor(p) + 1 guarantees at least one whole unit of real margin in that
-  // case, while leaving normal-priced offers unchanged.
-  return Math.max(Math.round(p * 1.15), Math.floor(p) + 1);
+  // Fee rule lives in lib/pricing/fee.ts — 15% of the price or the €25
+  // minimum, whichever is larger, exactly as /api/orders charges it.
+  return withFeeUsd(p, FEE_FLOOR.cents);
 }
 
 function countryFlag(code: string): string {

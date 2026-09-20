@@ -6,14 +6,15 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
 import AddCardForm from "./AddCardForm";
 import { countryName, countryOptions } from "@/lib/countries";
+import { API_PRICES_HIDDEN, planPrice, maskMoney } from "@/lib/pricing/plan-display";
 
 type PlanKey = "starter" | "growth" | "scale";
 
 const PLAN_ORDER: PlanKey[] = ["starter", "growth", "scale"];
 const PLAN_META: Record<PlanKey, { label: string; price: string; queries: string; rate: string }> = {
-  starter: { label: "Starter", price: "$10/mo", queries: "1,000 queries/mo", rate: "10 req/min" },
-  growth: { label: "Growth", price: "$20/mo", queries: "2,500 queries/mo", rate: "20 req/min" },
-  scale: { label: "Scale", price: "$50/mo", queries: "10,000 queries/mo", rate: "60 req/min" },
+  starter: { label: "Starter", price: planPrice("starter", { period: "/mo" }), queries: "1,000 queries/mo", rate: "10 req/min" },
+  growth: { label: "Growth", price: planPrice("growth", { period: "/mo" }), queries: "2,500 queries/mo", rate: "20 req/min" },
+  scale: { label: "Scale", price: planPrice("scale", { period: "/mo" }), queries: "10,000 queries/mo", rate: "60 req/min" },
 };
 
 interface Card {
@@ -603,7 +604,16 @@ export default function BillingPage() {
               <div>
                 <div className="bl-sub-plan">{sub.planName ?? "Unknown plan"}</div>
                 <div className="bl-sub-meta">
-                  {sub.amount != null && `${money(sub.amount, sub.currency)} / ${sub.interval ?? "month"}`}
+                  {/* The recurring amount IS the plan's advertised price, so it
+                      wears the same placeholder as the plan cards below when
+                      prices are hidden. With the flag off this is byte-for-byte
+                      what it always was. */}
+                  {sub.amount != null &&
+                    `${
+                      API_PRICES_HIDDEN && sub.plan
+                        ? planPrice(sub.plan)
+                        : maskMoney(money(sub.amount, sub.currency))
+                    } / ${sub.interval ?? "month"}`}
                 </div>
               </div>
               <span className={`bl-status ${status?.tone}`}>{status?.label}</span>
@@ -877,7 +887,7 @@ export default function BillingPage() {
                 <tr key={inv.id}>
                   <td>{shortDate(inv.created)}</td>
                   <td className="bl-mono">{inv.number ?? "—"}</td>
-                  <td>{money(invoiceAmount(inv), inv.currency)}</td>
+                  <td>{maskMoney(money(invoiceAmount(inv), inv.currency))}</td>
                   <td><span className={`bl-inv-status ${inv.status ?? ""}`}>{inv.status ?? "—"}</span></td>
                   <td className="bl-right bl-inv-actions">
                     {/* An unpaid invoice needs somewhere to pay it, not just a
@@ -907,6 +917,12 @@ export default function BillingPage() {
       </section>
 
       {/* ─── Proration quote modal ────────────────────────────────────── */}
+      {/* Deliberately NOT price-masked, even when API_PRICES_HIDDEN is on. This
+          is the confirmation step for a charge: the customer is authorising a
+          specific amount, and asking someone to press "Pay ••.••" is both
+          useless to them and indefensible once real money is switched on. It is
+          only reachable by an existing subscriber who clicked Switch, so it is
+          not a surface a demo audience sees. */}
       {quote && (
         <div className="bl-overlay" onClick={() => !applying && setQuote(null)}>
           <div className="bl-modal" onClick={(e) => e.stopPropagation()}>

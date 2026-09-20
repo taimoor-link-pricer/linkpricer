@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon, RatingBadge } from "@/lib/design-v1/icons";
-import { fmt } from "@/lib/design-v1/format";
+import { fmt, hydrateRates } from "@/lib/design-v1/format";
 import { Pill, btn, chip, priceLbl, priceVal } from "@/components/design-v1/primitives";
 import type { CatalogSearchResult, CatalogSearchOffer } from "@/lib/search/catalog-search";
 import { SignupModal, type SignupReason } from "./signup-modal";
@@ -280,6 +280,15 @@ export function AiSearchHome() {
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [thread, thinking]);
+
+  // The prices in this chat are real catalog prices, and fmt.withFee() prices
+  // them with the €25 minimum fee — which is only the right number once the
+  // admin EUR rate has been fetched. Without this, the homepage quoted a
+  // cheap placement a dollar or so under what checkout then charges for it.
+  const [, forceFeeFloorRerender] = useState(0);
+  useEffect(() => {
+    hydrateRates().then(() => forceFeeFloorRerender((n) => n + 1));
+  }, []);
 
   const requireSignup = (reason: SignupReason, domain?: string) => {
     setSignup(reason);

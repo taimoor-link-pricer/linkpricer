@@ -839,8 +839,14 @@ export default function RelatedSitesPage() {
     (countries.length > 0 ? 1 : 0) +
     (niches.length > 0 ? 1 : 0);
 
+  const [, forceRatesRerender] = useState(0);
+
   useEffect(() => {
-    hydrateRates();
+    // Re-render when the rates land: they set both the currency conversion and
+    // the €25 minimum fee inside withFee(), and results are often on screen
+    // before the fetch resolves. Without the state bump, a Buy price rendered
+    // first would keep the fallback figures until some unrelated re-render.
+    hydrateRates().then(() => forceRatesRerender((n) => n + 1));
     fetch("/api/related-sites").then((r) => (r.ok ? r.json() : null)).then((q) => q && setQuota(q)).catch(() => {});
     fetch("/api/favorites")
       .then((r) => (r.ok ? r.json() : null))

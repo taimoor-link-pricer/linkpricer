@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ACCEPTED_NICHE_VALUES,
   FEE_PERCENT,
+  MIN_FEE_EUR,
   NICHE_IDS,
   aggregatePricing,
   nicheOfferPrice,
@@ -9,8 +10,19 @@ import {
   resolveNiche,
   type RawOffer,
 } from "./pricing";
+import { minFeeCents } from "@/lib/pricing/fee";
 
 const RATES = { USD: 1, EUR: 1 / 0.92, GBP: 1 / 0.79 };
+
+// The €25 fee floor in USD cents, at this fixture's EUR rate — the same
+// derivation aggregatePricing does internally, so the two agree by
+// construction rather than by a copied number.
+const FLOOR = minFeeCents(RATES);
+
+/** ourPrice at the fixture floor, for the many assertions that don't vary it. */
+function lp(marketplacePrice: number): number {
+  return ourPrice(marketplacePrice, FLOOR);
+}
 
 /** Mirrors the rounding aggregatePricing applies to every money field. */
 function round2(n: number): number {
@@ -99,23 +111,46 @@ describe("nicheOfferPrice — exclusion, not fallback", () => {
 });
 
 describe("ourPrice", () => {
-  it("matches withFee() on the Analyze page", () => {
-    expect(ourPrice(150)).toBe(173);
-    expect(ourPrice(480)).toBe(552);
-    // 350 * 1.15 evaluates to 402.49999999999994 in IEEE-754, so this rounds
-    // to 402, not the 403 exact arithmetic would give. Asserted rather than
-    // corrected on purpose: the Analyze page's withFee() is the same
-    // expression and produces the same 402, and the only thing that actually
-    // matters is that the API and the dashboard never quote different prices
-    // for the same offer. (/developers/docs used to print 403 in its sample
-    // response — that sample was hand-computed and has been corrected.)
-    expect(ourPrice(350)).toBe(402);
+  it("charges the percentage once the placement is big enough to cover the minimum", () => {
+    // 480 * 1.15 = 552, and 15% of 480 ($72) is well clear of the €25 floor.
+    expect(lp(480)).toBe(552);
+    expect(lp(350)).toBe(403);
+  });
+
+  it("charges the minimum fee instead of the percentage on a cheap placement", () => {
+    // The regression this floor exists for: a $5 placement used to price at
+    // $6 — 15% is $0.75 — and one was really ordered for $5.75 total on
+    // 2026-09-15. It now carries the €25 minimum like every other order.
+    expect(lp(5)).toBe(Math.round(5 + FLOOR / 100));
+    expect(lp(5)).toBeGreaterThan(30);
+
+    // 15% of $150 is $22.50, still under the floor, so the floor applies.
+    expect(lp(150)).toBe(Math.round(150 + FLOOR / 100));
+  });
+
+  it("crosses over from the minimum to the percentage exactly where the two meet", () => {
+    const crossover = FLOOR / 100 / (FEE_PERCENT / 100);
+    // Just below, the fee is the floor; just above, it is the percentage.
+    expect(lp(crossover - 10)).toBe(Math.round(crossover - 10 + FLOOR / 100));
+    expect(lp(crossover + 10)).toBe(Math.round((crossover + 10) * (1 + FEE_PERCENT / 100)));
   });
 
   it("never returns less than the source price, even on cheap offers", () => {
-    // 1.21 * 1.15 = 1.39, which rounds to 1 — below what we'd pay.
-    expect(ourPrice(1.21)).toBe(2);
-    for (const p of [0.5, 1, 1.2, 2, 3.4]) expect(ourPrice(p)).toBeGreaterThan(p);
+    for (const p of [0.5, 1, 1.2, 2, 3.4, 1.21]) expect(lp(p)).toBeGreaterThan(p);
+  });
+
+  it("scales the minimum with the EUR rate rather than pinning a dollar figure", () => {
+    // Same €25, two different EUR rates: the USD floor — and so the price of
+    // a cheap placement — has to move with the rate, or "€25 minimum" slowly
+    // stops being true.
+    const weakEuro = minFeeCents({ USD: 1, EUR: 1.05 });
+    const strongEuro = minFeeCents({ USD: 1, EUR: 1.25 });
+    expect(weakEuro).toBe(Math.round(MIN_FEE_EUR * 1.05 * 100));
+    expect(strongEuro).toBe(Math.round(MIN_FEE_EUR * 1.25 * 100));
+    expect(ourPrice(10, strongEuro)).toBeGreaterThan(ourPrice(10, weakEuro));
+    // ...but a placement above the crossover is priced on the percentage and
+    // must not move with the rate at all.
+    expect(ourPrice(900, strongEuro)).toBe(ourPrice(900, weakEuro));
   });
 });
 
@@ -132,26 +167,29 @@ describe("aggregatePricing", () => {
       best_price: 100,
       average_price: 200,
       highest_price: 300,
-      // Fee-inclusive, in their published flat spelling.
-      our_price: 115,
+      // Fee-inclusive, in their published flat spelling. $100 is under the
+      // crossover, so it carries the €25 floor rather than 15%; $200 and
+      // $300 are over it and carry the percentage.
+      our_price: 127,
       recommended_price: null, // nothing trusted yet
       offer_count: 3,
       currency: "USD",
       // ...and the same fee-inclusive figures grouped, where the basis is
       // legible from the field names alone.
       lp_prices: {
-        lowest: 115,
-        average: 230,
+        lowest: 127,
+        average: 234,
         highest: 345,
         recommended: null,
       },
       lp_fee_percent: 15,
+      lp_fee_min: { eur: 25, usd: 27.17 },
     });
   });
 
   it("our_price is always the markup on best_price", () => {
     const out = aggregatePricing([offer({ min_price: 100 }), offer({ min_price: 900 })], RATES, null);
-    expect(out.standard.our_price).toBe(ourPrice(out.standard.best_price));
+    expect(out.standard.our_price).toBe(lp(out.standard.best_price));
   });
 
   it("recommended_price is the cheapest TRUSTED offer, not the cheapest overall", () => {
@@ -165,8 +203,8 @@ describe("aggregatePricing", () => {
       null
     );
     expect(out.standard.best_price).toBe(100);
-    expect(out.standard.our_price).toBe(ourPrice(100));
-    expect(out.standard.recommended_price).toBe(ourPrice(250));
+    expect(out.standard.our_price).toBe(lp(100));
+    expect(out.standard.recommended_price).toBe(lp(250));
   });
 
   it("recommended_price is null when no trusted marketplace carries the niche", () => {
@@ -179,7 +217,7 @@ describe("aggregatePricing", () => {
       null
     );
     expect(out.gambling.recommended_price).toBeNull();
-    expect(out.standard.recommended_price).toBe(ourPrice(120));
+    expect(out.standard.recommended_price).toBe(lp(120));
   });
 
   it("converts every currency to USD before comparing", () => {
@@ -200,7 +238,7 @@ describe("aggregatePricing", () => {
       RATES,
       null
     );
-    expect(out.cbd.recommended_price).toBe(ourPrice(500));
+    expect(out.cbd.recommended_price).toBe(lp(500));
     expect(out.cbd.best_price).toBe(500);
   });
 
@@ -280,29 +318,29 @@ describe("aggregatePricing", () => {
     );
     expect(out.standard.best_price).toBe(100);
     expect(out.standard.highest_price).toBe(400);
-    expect(out.standard.lp_prices.lowest).toBe(ourPrice(100));
-    expect(out.standard.lp_prices.highest).toBe(ourPrice(400));
+    expect(out.standard.lp_prices.lowest).toBe(lp(100));
+    expect(out.standard.lp_prices.highest).toBe(lp(400));
   });
 
   it("averages the fee-inclusive prices rather than marking up the average", () => {
-    // The whole reason lp_prices.average is computed per offer. ourPrice()
-    // floors at one whole dollar over the marketplace price, so a $2 offer
-    // costs $3 (a 50% effective markup) while a $500 one costs $575 (15%).
+    // The whole reason lp_prices.average is computed per offer: the fee is not
+    // linear in the price, so the two computations genuinely differ.
     //
-    //   per-offer:      (ourPrice(2) + ourPrice(500)) / 2 = (3 + 575) / 2 = 289
-    //   marked-up mean: ourPrice((2 + 500) / 2)           = ourPrice(251)  = 289
+    //   per offer:      (lp(1) + lp(1) + lp(1000)) / 3 = (28 + 28 + 1150) / 3 = 402
+    //   marked-up mean: lp((1 + 1 + 1000) / 3)         = lp(334)              = 384
     //
-    // ...which happen to agree here, so use an average that separates them.
+    // The cheap pair each carry a whole €25 minimum; averaging first hides
+    // both of them behind the one expensive placement and understates what
+    // the three actually cost.
     const out = aggregatePricing(
-      [offer({ min_price: 1 }), offer({ min_price: 1 }), offer({ min_price: 100 })],
+      [offer({ min_price: 1 }), offer({ min_price: 1 }), offer({ min_price: 1000 })],
       RATES,
       null
     );
-    // Each $1 offer prices at $2 (the floor, not $1.15), the $100 at $115.
-    expect(out.standard.lp_prices.average).toBe(round2((2 + 2 + 115) / 3));
+    expect(out.standard.lp_prices.average).toBe(round2((lp(1) + lp(1) + lp(1000)) / 3));
     // Marking up the market average would have produced a materially lower
     // number, which is the bug this guards against.
-    expect(out.standard.lp_prices.average).toBeGreaterThan(ourPrice(out.standard.average_price));
+    expect(out.standard.lp_prices.average).toBeGreaterThan(lp(out.standard.average_price));
   });
 
   it("publishes the fee percent alongside the prices it produced", () => {
@@ -313,9 +351,12 @@ describe("aggregatePricing", () => {
     expect(out.standard.lp_prices.lowest).toBe(Math.round(200 * (1 + FEE_PERCENT / 100)));
   });
 
-  it("leaves every published field untouched", () => {
-    // lp_prices is additive. Anything already integrated against this response
-    // must see the same keys and the same values it saw before.
+  it("adds lp_fee_min without disturbing any other published field", () => {
+    // The response shape is a published contract: lp_fee_min is additive, and
+    // every other key an integration already reads must still be there under
+    // the same name. (The fee-inclusive VALUES did change when the €25
+    // minimum came in — that is the point of the change — but only for
+    // placements under the crossover.)
     const out = aggregatePricing(
       [offer({ min_price: 100 }), offer({ min_price: 250 }, { trusted: true })],
       RATES,
@@ -326,6 +367,7 @@ describe("aggregatePricing", () => {
       "best_price",
       "currency",
       "highest_price",
+      "lp_fee_min",
       "lp_fee_percent",
       "lp_prices",
       "offer_count",
@@ -335,7 +377,9 @@ describe("aggregatePricing", () => {
     expect(out.standard.best_price).toBe(100);
     expect(out.standard.average_price).toBe(175);
     expect(out.standard.highest_price).toBe(250);
-    expect(out.standard.our_price).toBe(115);
+    // $100 is under the crossover and carries the €25 minimum; $250 is over
+    // it and carries the 15%.
+    expect(out.standard.our_price).toBe(127);
     expect(out.standard.recommended_price).toBe(288);
     expect(out.standard.offer_count).toBe(2);
     expect(out.standard.currency).toBe("USD");
@@ -356,7 +400,7 @@ describe("aggregatePricing", () => {
     for (const [name, v] of [["lowest", lowest], ["highest", highest], ["recommended", recommended]] as const) {
       expect(Number.isInteger(v), `lp_prices.${name} must be a whole dollar, got ${v}`).toBe(true);
     }
-    expect(average).toBe(round2((ourPrice(100.5) + ourPrice(200.25) + ourPrice(301)) / 3));
+    expect(average).toBe(round2((lp(100.5) + lp(200.25) + lp(301)) / 3));
   });
 
   it("never leaks a marketplace name or any identifying field", () => {
@@ -370,28 +414,47 @@ describe("aggregatePricing", () => {
 //
 // /developers and /developers/docs both print a sample response with real
 // numbers in it. Those numbers were computed by hand, and one of them was
-// wrong on the first pass (890 reads as 1023, not 1024 — the markup lands a
-// hair under .5 in floating point and rounds down). A customer who reproduces
-// our own example and gets a different answer has no way to tell which side
-// is broken, so the samples are pinned here: change the fee and this fails,
-// naming the pages that need updating with it.
+// wrong on the first pass. A customer who reproduces our own example and gets
+// a different answer has no way to tell which side is broken, so the samples
+// are pinned here: change the fee and this fails, naming the pages that need
+// updating with it.
 describe("the sample response published on /developers and /developers/docs", () => {
   const DOCUMENTED = [
-    { source: 150,   lp: 173 },
+    { source: 260,   lp: 299 },
+    { source: 300,   lp: 345 },
     { source: 420,   lp: 483 },
-    { source: 350,   lp: 402 },
-    { source: 890,   lp: 1023 },
+    { source: 360,   lp: 414 },
     { source: 512.4, lp: 589 },
+    { source: 900,   lp: 1035 },
     { source: 264.5, lp: 304 },
   ];
 
   it("prices every documented figure exactly as the code does", () => {
-    for (const { source, lp } of DOCUMENTED) {
-      expect(ourPrice(source), `the docs say $${source} prices at $${lp}`).toBe(lp);
+    for (const { source, lp: documented } of DOCUMENTED) {
+      expect(lp(source), `the docs say $${source} prices at $${documented}`).toBe(documented);
     }
   });
 
-  it("documents the fee percent the code actually applies", () => {
+  // The published sample can't contain a figure that moves when the admin
+  // changes the EUR rate — a hardcoded example that silently goes stale is
+  // worse than no example. Every documented source price is therefore kept
+  // above the crossover, where the percentage governs and the floor is
+  // irrelevant. This is the test that keeps the next person from adding a
+  // cheap domain to the sample without noticing.
+  it("publishes only figures that don't move with the exchange rate", () => {
+    const floors = [minFeeCents({ USD: 1, EUR: 1.0 }), minFeeCents({ USD: 1, EUR: 1.4 })];
+    for (const { source, lp: documented } of DOCUMENTED) {
+      for (const floor of floors) {
+        expect(
+          ourPrice(source, floor),
+          `$${source} is documented as $${documented} but moves with the EUR rate — use a source price above the crossover`
+        ).toBe(documented);
+      }
+    }
+  });
+
+  it("documents the fee percent and the minimum the code actually applies", () => {
     expect(FEE_PERCENT, "/developers/docs states 15% in prose and in lp_fee_percent").toBe(15);
+    expect(MIN_FEE_EUR, "/developers/docs states €25 in prose and in lp_fee_min.eur").toBe(25);
   });
 });

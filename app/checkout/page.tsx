@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckoutModal, OrderPlacedModal, type PlacedOrder } from "@/components/dashboard/checkout-flow";
 import { loadCart, persistCart } from "@/lib/cart-storage";
+import { hydrateRates } from "@/lib/design-v1/format";
 import { track, type AnalyticsItem } from "@/lib/analytics";
 
 // Used to be CheckoutModal rendered in-place by whichever page opened it
@@ -30,6 +31,17 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!orderPlaced && cart.items.length === 0) router.replace("/dashboard/search");
   }, [cart.items.length, orderPlaced, router]);
+
+  // The order total shown here includes the €25 minimum managed fee, which is
+  // converted from the admin EUR rate — so it has to be fetched before the
+  // total is a real number. This page is reached directly (its own URL, and a
+  // refresh lands straight on it) rather than through a dashboard page that
+  // already hydrated, so it cannot rely on anyone else having done it: without
+  // this, a cheap order quoted a dollar or so under what /api/orders charges.
+  const [, forceFeeFloorRerender] = useState(0);
+  useEffect(() => {
+    hydrateRates().then(() => forceFeeFloorRerender((n) => n + 1));
+  }, []);
 
   // Once per visit to a non-empty checkout. Cart prices are USD whatever the
   // display currency is (cart.currency only drives formatting).

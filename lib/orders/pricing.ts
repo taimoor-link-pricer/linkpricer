@@ -4,6 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PriceType } from "./types";
 import { contentPriceCents, DEFAULT_CONTENT_WORD_COUNT } from "./types";
 import { getUsdRates, toUsd } from "@/lib/currency";
+import { managedFeeCents } from "@/lib/pricing/fee";
 
 export type ResolvedOffer = {
   offerId: string;
@@ -232,6 +233,11 @@ export function computeOrderPricing(params: {
   orderType: "managed" | "direct";
   contentOption: "provided" | "uploaded" | "url";
   wordCount: number | null;
+  // The €25 fee floor, already converted to USD cents by the caller (which
+  // holds the rate map). Required rather than defaulted: this function decides
+  // what a customer is actually charged, and a default would let a caller that
+  // forgot to pass it quietly go back to charging the bare 15%.
+  feeFloorCents: number;
 }): OrderPricing {
   const rawPrice = params.offer.priceByType[params.priceType] ?? params.offer.priceByType.base;
   const selectedBasePrice = rawPrice ? parseFloat(rawPrice) : 0;
@@ -241,7 +247,10 @@ export function computeOrderPricing(params: {
     params.contentOption === "provided" ? contentPriceCents(params.wordCount ?? DEFAULT_CONTENT_WORD_COUNT) : 0;
 
   const subtotalCents = selectedBasePriceCents + contentCents;
-  const managementFeeCents = params.orderType === "managed" ? Math.round(subtotalCents * 0.15) : 0;
+  // Managed only. Direct orders carry no fee (the marketplace's affiliate
+  // commission stands in for it), so the floor must not be applied to them.
+  const managementFeeCents =
+    params.orderType === "managed" ? managedFeeCents(subtotalCents, params.feeFloorCents) : 0;
   const totalCents = subtotalCents + managementFeeCents;
 
   return { selectedBasePriceCents, contentPriceCents: contentCents, managementFeeCents, totalCents };
