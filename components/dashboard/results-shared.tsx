@@ -6,8 +6,10 @@
 // (v1-interactive/related-sites.jsx explicitly reuses window.V1Shared's
 // DomainRow/offer-card machinery for this reason — this file is that.)
 import { useState } from "react";
-import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
+import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates, FEE_FLOOR } from "@/lib/design-v1/format";
+import { withFeeUsd } from "@/lib/pricing/fee";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
+import { track } from "@/lib/analytics";
 import type { PriceType } from "@/lib/orders/types";
 
 export { hydrateRates };
@@ -73,7 +75,10 @@ export function BuyDirectModal({
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={onClose}
+            onClick={() => {
+              track("buy_direct_click", { marketplace: marketplaceName.slice(0, 100), domain });
+              onClose();
+            }}
             style={{ flex: 1, padding: "11px 0", borderRadius: 9, background: C.accent, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}
           >
             Continue ↗
@@ -100,7 +105,9 @@ export function priceFmt(usd: number | null, cur: Currency): string {
 }
 
 export function withFee(p: number): number {
-  return Math.max(Math.round(p * 1.15), Math.floor(p) + 1);
+  // Fee rule lives in lib/pricing/fee.ts — the same one /api/orders charges
+  // with, floor included, so this column can't drift from the real price.
+  return withFeeUsd(p, FEE_FLOOR.cents);
 }
 
 export function countryFlag(code: string): string {

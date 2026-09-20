@@ -1,12 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { verifySession } from "@/lib/auth/verify-session";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { syncAdminClaim } from "@/lib/admin-auth";
+import { notifyUserSignup } from "@/lib/notifications/users";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const cookieStore = await cookies();
   const session = cookieStore.get("session")?.value;
   if (!session) return NextResponse.json(null, { status: 401 });
@@ -39,6 +40,8 @@ export async function GET() {
       let hasCompletedOnboarding = false;
       let inheritedFirstName = firstName;
       let inheritedLastName = lastName;
+      // An old-app account moving onto its new Firebase uid is not a signup.
+      let mergedLegacyAccount = false;
 
       if (decoded.email) {
         const emailMatch = await db.select().from(users).where(eq(users.email, decoded.email)).limit(1);
@@ -56,6 +59,7 @@ export async function GET() {
             hasCompletedOnboarding = emailMatch[0].hasCompletedOnboarding ?? false;
             inheritedFirstName = emailMatch[0].firstName ?? firstName;
             inheritedLastName = emailMatch[0].lastName ?? lastName;
+            mergedLegacyAccount = true;
             // Free up the email on the old record so the new Firebase UID record can own it
             await db.update(users).set({ email: null }).where(eq(users.id, emailMatch[0].id));
           } else {
@@ -68,14 +72,26 @@ export async function GET() {
 
       if (decoded.email) {
         try {
-          await db.insert(users).values({
+          const inserted = await db.insert(users).values({
             id: decoded.uid,
             email: decoded.email,
             firstName: inheritedFirstName,
             lastName: inheritedLastName,
             role,
             hasCompletedOnboarding,
-          }).onConflictDoNothing();
+          }).onConflictDoNothing().returning({ id: users.id });
+
+          if (inserted.length > 0 && !mergedLegacyAccount) {
+            const signup = {
+              userId: decoded.uid,
+              email: decoded.email,
+              firstName: inheritedFirstName,
+              lastName: inheritedLastName,
+              provider: decoded.firebase?.sign_in_provider ?? null,
+              origin: req.nextUrl.origin,
+            };
+            after(() => notifyUserSignup(signup));
+          }
         } catch (e) {
           console.error("[/api/user/me] Failed to create user row", e);
         }

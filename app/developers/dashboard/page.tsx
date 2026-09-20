@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
+import { planPrice } from "@/lib/pricing/plan-display";
 import {
   signInWithEmail,
   signUpWithEmail,
@@ -37,9 +38,9 @@ interface MeData {
 }
 
 const PLAN_DETAILS = {
-  starter: { label: "Starter", price: "$10/mo", queries: "1,000 queries",  rate: "10 req/min",  planKey: "starter" as PlanKey },
-  growth:  { label: "Growth",  price: "$20/mo", queries: "2,500 queries",  rate: "20 req/min",  planKey: "growth" as PlanKey },
-  scale:   { label: "Scale",   price: "$50/mo", queries: "10,000 queries", rate: "60 req/min",  planKey: "scale" as PlanKey },
+  starter: { label: "Starter", price: planPrice("starter", { period: "/mo" }), queries: "1,000 queries",  rate: "10 req/min",  planKey: "starter" as PlanKey },
+  growth:  { label: "Growth",  price: planPrice("growth",  { period: "/mo" }), queries: "2,500 queries",  rate: "20 req/min",  planKey: "growth" as PlanKey },
+  scale:   { label: "Scale",   price: planPrice("scale",   { period: "/mo" }), queries: "10,000 queries", rate: "60 req/min",  planKey: "scale" as PlanKey },
 };
 
 
@@ -550,7 +551,7 @@ function DashboardContent() {
                   onClick={() => startCheckout("starter")}
                   disabled={!!checkoutLoading}
                 >
-                  {checkoutLoading ? "Opening…" : "Subscribe to Starter — $10/mo"}
+                  {checkoutLoading ? "Opening…" : `Subscribe to Starter — ${PLAN_DETAILS.starter.price}`}
                 </button>
               </div>
             )}

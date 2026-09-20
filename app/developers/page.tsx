@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { planPrice } from "@/lib/pricing/plan-display";
 
 const TIERS = [
   {
     name: "Starter",
-    price: "$10",
+    price: planPrice("starter"),
     period: "/mo",
     queries: "1,000 queries/mo",
     rateLimit: "10 req/min",
@@ -12,7 +13,7 @@ const TIERS = [
   },
   {
     name: "Growth",
-    price: "$20",
+    price: planPrice("growth"),
     period: "/mo",
     queries: "2,500 queries/mo",
     rateLimit: "20 req/min",
@@ -21,7 +22,7 @@ const TIERS = [
   },
   {
     name: "Scale",
-    price: "$50",
+    price: planPrice("scale"),
     period: "/mo",
     queries: "10,000 queries/mo",
     rateLimit: "60 req/min",
@@ -44,36 +45,38 @@ const EXAMPLE_RESPONSE = `{
   "found": true,
   "pricing": {
     "standard": {
-      "best_price":        150.00,
+      "best_price":        260.00,
       "average_price":     264.50,
       "highest_price":     420.00,
-      "our_price":         173,
-      "recommended_price": 219,
+      "our_price":         299,
+      "recommended_price": 345,
       "offer_count":       6,
       "currency":          "USD",
       "lp_prices": {
-        "lowest":      173,
+        "lowest":      299,
         "average":     304.17,
         "highest":     483,
-        "recommended": 219
+        "recommended": 345
       },
-      "lp_fee_percent": 15
+      "lp_fee_percent": 15,
+      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
     },
     "gambling": {
-      "best_price":        350.00,
+      "best_price":        360.00,
       "average_price":     512.40,
-      "highest_price":     890.00,
-      "our_price":         402,
+      "highest_price":     900.00,
+      "our_price":         414,
       "recommended_price": null,
       "offer_count":       3,
       "currency":          "USD",
       "lp_prices": {
-        "lowest":      402,
-        "average":     589.33,
-        "highest":     1023,
+        "lowest":      414,
+        "average":     589.26,
+        "highest":     1035,
         "recommended": null
       },
-      "lp_fee_percent": 15
+      "lp_fee_percent": 15,
+      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
     }
   },
   "metrics": {

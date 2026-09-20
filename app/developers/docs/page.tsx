@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { planPrice } from "@/lib/pricing/plan-display";
 
 const SECTIONS = [
   { id: "overview", label: "Overview" },
@@ -25,9 +26,9 @@ const ERROR_CODES = [
 ];
 
 const RATE_TIERS = [
-  { tier: "Starter", price: "$10/mo", monthly: "1,000",  perMin: "10" },
-  { tier: "Growth",  price: "$20/mo", monthly: "2,500",  perMin: "20" },
-  { tier: "Scale",   price: "$50/mo", monthly: "10,000", perMin: "60" },
+  { tier: "Starter", price: planPrice("starter", { period: "/mo" }), monthly: "1,000",  perMin: "10" },
+  { tier: "Growth",  price: planPrice("growth",  { period: "/mo" }), monthly: "2,500",  perMin: "20" },
+  { tier: "Scale",   price: planPrice("scale",   { period: "/mo" }), monthly: "10,000", perMin: "60" },
 ];
 
 const RESPONSE_EXAMPLE = `{
@@ -35,36 +36,38 @@ const RESPONSE_EXAMPLE = `{
   "found": true,
   "pricing": {
     "standard": {
-      "best_price":        150.00,
+      "best_price":        260.00,
       "average_price":     264.50,
       "highest_price":     420.00,
-      "our_price":         173,
-      "recommended_price": 219,
+      "our_price":         299,
+      "recommended_price": 345,
       "offer_count":       6,
       "currency":          "USD",
       "lp_prices": {
-        "lowest":      173,
+        "lowest":      299,
         "average":     304.17,
         "highest":     483,
-        "recommended": 219
+        "recommended": 345
       },
-      "lp_fee_percent": 15
+      "lp_fee_percent": 15,
+      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
     },
     "gambling": {
-      "best_price":        350.00,
+      "best_price":        360.00,
       "average_price":     512.40,
-      "highest_price":     890.00,
-      "our_price":         402,
+      "highest_price":     900.00,
+      "our_price":         414,
       "recommended_price": null,
       "offer_count":       3,
       "currency":          "USD",
       "lp_prices": {
-        "lowest":      402,
-        "average":     589.33,
-        "highest":     1023,
+        "lowest":      414,
+        "average":     589.26,
+        "highest":     1035,
         "recommended": null
       },
-      "lp_fee_percent": 15
+      "lp_fee_percent": 15,
+      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
     }
   },
   "metrics": {
@@ -91,7 +94,7 @@ const JS_EXAMPLE = `const res = await fetch(
   { headers: { "x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx" } }
 );
 const data = await res.json();
-console.log(data.pricing.standard.best_price); // 150`;
+console.log(data.pricing.standard.best_price); // 260`;
 
 const PYTHON_EXAMPLE = `import requests
 
@@ -349,9 +352,21 @@ export default function DocsPage() {
               place the link, fee included.
             </p>
             <p className="docs-p">
-              The fee is <code className="docs-inline-code">lp_fee_percent</code> (currently 15%), rounded to whole dollars and
-              never less than $1 over the source price. That minimum means the effective markup on a very cheap placement is
-              higher than 15% — a $4 source price becomes $5.
+              The fee is the larger of two things: <code className="docs-inline-code">lp_fee_percent</code> (currently 15%) of
+              the source price, or the minimum fee in <code className="docs-inline-code">lp_fee_min</code> (currently €25).
+              Handling a placement costs us the same whether it sells for $5 or $500, so below roughly $190 of source price the
+              minimum is what applies and the effective markup is higher than 15% — a $20 source price becomes $49, not $23.
+              Above that, the percentage is the larger number and nothing else enters into it. Prices are rounded to whole
+              dollars.
+            </p>
+            <p className="docs-p">
+              The minimum is set in euros, so <code className="docs-inline-code">lp_fee_min.usd</code> moves with the exchange
+              rate and the crossover point moves slightly with it. Read the fee from the response rather than hardcoding
+              either figure: every number under <code className="docs-inline-code">lp_prices</code> is computed as{" "}
+              <code className="docs-inline-code">
+                price + max(price × lp_fee_percent ÷ 100, lp_fee_min.usd)
+              </code>
+              , so you can always reproduce it exactly.
             </p>
             <p className="docs-p">
               <code className="docs-inline-code">lp_prices.lowest</code> and{" "}
@@ -378,10 +393,13 @@ export default function DocsPage() {
                   ["pricing.<niche>.recommended_price", "number | null", "WITH fee. What Linkpricer charges via the cheapest source our team has vetted. Identical to lp_prices.recommended. null when no vetted source prices this niche for this domain — the placement is still available at our_price."],
                   ["pricing.<niche>.lp_prices", "object", "Every figure Linkpricer charges, WITH fee, in one place. Use these when you want what a customer pays; use best_price / average_price / highest_price when you want what the market charges."],
                   ["pricing.<niche>.lp_prices.lowest", "number", "WITH fee. Your price at the cheapest source. Always identical to our_price."],
-                  ["pricing.<niche>.lp_prices.average", "number", "WITH fee. The mean of your price at every source. This is NOT average_price plus the fee — each source is priced individually and then averaged, so the whole-dollar minimum on cheap placements is reflected honestly."],
+                  ["pricing.<niche>.lp_prices.average", "number", "WITH fee. The mean of your price at every source. This is NOT average_price plus the fee — each source is priced individually and then averaged, so the minimum fee on cheap placements is reflected honestly."],
                   ["pricing.<niche>.lp_prices.highest", "number", "WITH fee. Your price at the most expensive source."],
                   ["pricing.<niche>.lp_prices.recommended", "number | null", "WITH fee. Your price at the cheapest vetted source. Always identical to recommended_price, null included."],
-                  ["pricing.<niche>.lp_fee_percent", "number", "The Linkpricer fee applied to every lp_prices figure, as a percentage. Currently 15. Note that prices are rounded to whole dollars and always land at least $1 above the source price, so on a very cheap placement the effective markup is higher than this number."],
+                  ["pricing.<niche>.lp_fee_percent", "number", "The percentage part of the Linkpricer fee applied to every lp_prices figure. Currently 15. It is the larger of this percentage and lp_fee_min that is actually charged, so on a cheap placement the effective markup is higher than this number."],
+                  ["pricing.<niche>.lp_fee_min", "object", "The minimum fee, charged whenever it exceeds lp_fee_percent of the source price — the usual case below roughly $190. Set in euros by us, so lp_fee_min.usd tracks the exchange rate; both are given."],
+                  ["pricing.<niche>.lp_fee_min.eur", "number", "The minimum fee as set, in EUR. Currently 25."],
+                  ["pricing.<niche>.lp_fee_min.usd", "number", "The same minimum converted to USD at the rate used to price this response. Use this one to reproduce any lp_prices figure."],
                   ["pricing.<niche>.offer_count", "number", "How many independent sources back these figures."],
                   ["pricing.<niche>.currency", "string", "Always \"USD\". Source prices in other currencies are converted before any comparison."],
                   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],

@@ -23,11 +23,13 @@ const STATUS: Record<OrderStatus, { label: string; bg: string; fg: string; dot: 
   price_increase_requested: { label: "Price Increase Requested", bg: "#fce8c6", fg: "#8b5900", dot: "#d97706" },
   article_review: { label: "Article Review", bg: "#fce8c6", fg: "#8b5900", dot: "#d97706" },
   payment_pending: { label: "Payment Pending", bg: "#fce8c6", fg: "#8b5900", dot: "#d97706" },
+  information_required: { label: "Information Required", bg: "#fce8c6", fg: "#8b5900", dot: "#d97706" },
   waiting_for_publication: { label: "Waiting for Publication", bg: "#ede9fe", fg: "#5b21b6", dot: "#7c3aed" },
   approved: { label: "Approved", bg: "#dcfce7", fg: "#166534", dot: "#16a34a" },
   published: { label: "Published", bg: "#d1fae5", fg: "#065f46", dot: "#059669" },
   complete: { label: "Complete", bg: "#a7f3d0", fg: "#065f46", dot: "#047857" },
   cancelled: { label: "Cancelled", bg: "#fee2e2", fg: "#991b1b", dot: "#dc2626" },
+  refunded: { label: "Refunded", bg: "#fee2e2", fg: "#991b1b", dot: "#dc2626" },
 };
 
 const MONITOR: Record<MonitorStatus, { label: string; bg: string; fg: string }> = {

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { orders, linkMonitors } from "@/lib/db/schema";
@@ -7,6 +7,7 @@ import { getCurrentUser } from "@/lib/get-current-user";
 import { CLIENT_ORDER_ACTIONS, CLIENT_ACTION_TRANSITIONS, type OrderStatus } from "@/lib/orders/types";
 import { recordOrderEvent, getOrderEvents, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from "@/lib/orders/events";
 import { getOrderMetaExt, withOrderMetaExt } from "@/lib/orders/metadata";
+import { notifyOrderStatusChange } from "@/lib/notifications/orders";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +118,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       eventType: ORDER_EVENT_TYPES.statusChanged,
       metadata: eventMeta,
     });
+
+    // The client just told us something we have to act on today (approved,
+    // declined, accepted a price) — the team alert names the action.
+    // actorRole "client" suppresses the client email: nobody needs a receipt
+    // for their own click.
+    const origin = req.nextUrl.origin;
+    after(() =>
+      notifyOrderStatusChange({
+        order: updated,
+        fromStatus: order.status,
+        toStatus: transition.to,
+        actorRole: "client",
+        clientAction: parsed.data.action,
+        origin,
+      })
+    );
 
     return NextResponse.json({ order: updated });
   } catch (err) {

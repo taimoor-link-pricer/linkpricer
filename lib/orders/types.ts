@@ -4,11 +4,16 @@ export const ORDER_STATUSES = [
   "price_increase_requested",
   "article_review",
   "payment_pending",
+  // Added for the notification spec: the client owes us something (anchor text,
+  // target URL, article, a brief) before fulfilment can continue. Distinct from
+  // approval_required, where we owe them a decision.
+  "information_required",
   "waiting_for_publication",
   "approved",
   "published",
   "complete",
   "cancelled",
+  "refunded",
 ] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];

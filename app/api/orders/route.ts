@@ -11,6 +11,9 @@ import { recordOrderEvent, ORDER_EVENT_TYPES, type OrderStatusChangedMeta } from
 import { withOrderMetaExt } from "@/lib/orders/metadata";
 import { mirrorOrderToFirestore } from "@/lib/orders/firestore-mirror";
 import { notifyNewOrders } from "@/lib/orders/notify";
+import { notifyOrdersPlaced } from "@/lib/notifications/orders";
+import { getUsdRates } from "@/lib/currency";
+import { minFeeCents } from "@/lib/pricing/fee";
 
 export const dynamic = "force-dynamic";
 
@@ -147,6 +150,11 @@ export async function POST(req: NextRequest) {
       pricing: ReturnType<typeof computeOrderPricing>;
     }> = [];
 
+    // The €25 minimum managed fee, converted once for the whole batch so every
+    // item in one cart is priced off the same rate (getUsdRates caches for 5
+    // minutes, but a batch straddling an expiry could otherwise mix two rates).
+    const feeFloorCents = minFeeCents(await getUsdRates());
+
     for (let i = 0; i < parsed.data.items.length; i++) {
       const item = parsed.data.items[i];
 
@@ -214,6 +222,7 @@ export async function POST(req: NextRequest) {
         orderType: item.orderType,
         contentOption: item.contentOption,
         wordCount: item.wordCount ?? null,
+        feeFloorCents,
       });
 
       if (pricing.selectedBasePriceCents <= 0) {
@@ -336,6 +345,10 @@ export async function POST(req: NextRequest) {
     if (newlyInserted.length > 0) {
       const origin = req.nextUrl.origin;
       after(() => notifyNewOrders(newlyInserted, origin));
+      // Client receipt + the team's Telegram ping. Separate from the team email
+      // above, which predates the notification module and still owns the
+      // detailed internal breakdown.
+      after(() => notifyOrdersPlaced(newlyInserted, origin));
     }
 
     return NextResponse.json({ orders: createdOrders }, { status: 201 });

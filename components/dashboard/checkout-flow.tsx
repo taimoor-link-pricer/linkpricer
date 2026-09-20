@@ -13,7 +13,8 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import { urlProblem, urlProblemMessage } from "@/lib/validate-url";
 import { C, priceFmt, type Currency, type CartItem } from "@/components/dashboard/results-shared";
-import { RATES, SYMS } from "@/lib/design-v1/format";
+import { RATES, SYMS, FEE_FLOOR } from "@/lib/design-v1/format";
+import { managedFeeCents } from "@/lib/pricing/fee";
 import { persistCart } from "@/lib/cart-storage";
 import {
   contentPriceCents,
@@ -63,13 +64,17 @@ const PREMIUM_PRICE_TYPES: PriceType[] = ["gambling", "adult", "cbd", "loan", "d
 // managed fee is rounded PER ITEM server-side, not on the aggregate sum, so
 // summing already-rounded per-item totals (rather than rounding the sum once)
 // is required to avoid a client/server mismatch on multi-item managed carts.
+//
+// The €25 fee floor is per item for the same reason: each cart line becomes
+// its own order row, and computeOrderPricing applies the floor to each one, so
+// a cart of three cheap placements carries three floors here too.
 function cartCentsTotals(items: { price: number; contentPrice?: number; orderType: "managed" | "direct" }[]) {
   let subtotalCents = 0;
   let feeCents = 0;
   for (const i of items) {
     const itemSubtotalCents = Math.round(i.price * 100) + Math.round((i.contentPrice ?? 0) * 100);
     subtotalCents += itemSubtotalCents;
-    if (i.orderType === "managed") feeCents += Math.round(itemSubtotalCents * 0.15);
+    if (i.orderType === "managed") feeCents += managedFeeCents(itemSubtotalCents, FEE_FLOOR.cents);
   }
   return { subtotalCents, feeCents, totalCents: subtotalCents + feeCents };
 }

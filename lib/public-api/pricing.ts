@@ -1,4 +1,5 @@
 import { toUsd } from "@/lib/currency";
+import { FEE_PERCENT, MIN_FEE_EUR, minFeeCents, withFeeUsd } from "@/lib/pricing/fee";
 
 /**
  * The niche filter surface of the public API.
@@ -105,17 +106,23 @@ export function nicheOfferPrice(offer: RawOffer, niche: NicheId): number | null 
  * The headline markup, published as `lp_fee_percent` so a caller can see the
  * basis rather than reverse-engineering it from two numbers.
  *
- * It is the headline rate, not always the effective one: ourPrice() also
- * enforces a floor of one whole dollar over the marketplace price, which on a
- * cheap offer bites harder than the percentage (a $4 offer prices at $5, an
- * effective 25%). Documented on /developers/docs rather than modelled in the
- * response, because the floor is a property of the rounding, not a second fee.
+ * It is the headline rate, not always the effective one. The fee is the larger
+ * of this percentage and a €25 minimum (MIN_FEE_EUR), so on a cheap placement
+ * the minimum is what is actually charged — published alongside it as
+ * `lp_fee_min` rather than left for a caller to infer from two numbers that
+ * no longer divide into each other.
  */
-export const FEE_PERCENT = 15;
+export { FEE_PERCENT, MIN_FEE_EUR };
 
-/** LinkPricer's own price for a marketplace price. Identical to withFee() on the Analyze page. */
-export function ourPrice(marketplacePrice: number): number {
-  return Math.max(Math.round(marketplacePrice * (1 + FEE_PERCENT / 100)), Math.floor(marketplacePrice) + 1);
+/**
+ * LinkPricer's own price for a marketplace price, in USD. Identical to
+ * withFee() on the Analyze page — both call the one implementation.
+ *
+ * `feeFloorCents` is the €25 minimum converted to USD cents by the caller,
+ * which holds the rate map.
+ */
+export function ourPrice(marketplacePrice: number, feeFloorCents: number): number {
+  return withFeeUsd(marketplacePrice, feeFloorCents);
 }
 
 function round2(n: number): number {
@@ -166,6 +173,13 @@ export interface NichePricing {
   lp_prices: LpPrices;
   /** The headline markup behind lp_prices, as a percentage. See FEE_PERCENT. */
   lp_fee_percent: number;
+  /**
+   * The minimum fee, which applies when it exceeds lp_fee_percent of the
+   * placement — the usual case on cheap domains. Set in EUR by the business
+   * and reported here in both currencies, so a caller can reproduce any
+   * lp_prices figure exactly: fee = max(price * lp_fee_percent / 100, lp_fee_min.usd).
+   */
+  lp_fee_min: { eur: number; usd: number };
 }
 
 /**
@@ -181,6 +195,10 @@ export function aggregatePricing(
 ): Record<string, NichePricing> {
   const out: Record<string, NichePricing> = {};
   const wanted = only ? [only] : NICHE_IDS;
+  // Same conversion the orders API charges with, off the same rate map that
+  // converts the offers themselves just below — a published price a customer
+  // could not then buy at would be worse than no price at all.
+  const feeFloorCents = minFeeCents(rates);
 
   for (const niche of wanted) {
     const usdPrices: number[] = [];
@@ -216,24 +234,25 @@ export function aggregatePricing(
     // min and max need no such care — ourPrice() is monotonic, so the cheapest
     // offer is still the cheapest after the fee. They are computed through it
     // anyway so all four lp figures come from one expression.
-    const lpPrices = usdPrices.map(ourPrice);
+    const lpPrices = usdPrices.map((p) => ourPrice(p, feeFloorCents));
     const lpAverage = lpPrices.reduce((a, b) => a + b, 0) / lpPrices.length;
 
     out[niche] = {
       best_price: round2(best),
       average_price: round2(average),
       highest_price: round2(highest),
-      our_price: ourPrice(best),
-      recommended_price: cheapestTrusted == null ? null : ourPrice(cheapestTrusted),
+      our_price: ourPrice(best, feeFloorCents),
+      recommended_price: cheapestTrusted == null ? null : ourPrice(cheapestTrusted, feeFloorCents),
       offer_count: usdPrices.length,
       currency: "USD",
       lp_prices: {
-        lowest: ourPrice(best),
+        lowest: ourPrice(best, feeFloorCents),
         average: round2(lpAverage),
-        highest: ourPrice(highest),
-        recommended: cheapestTrusted == null ? null : ourPrice(cheapestTrusted),
+        highest: ourPrice(highest, feeFloorCents),
+        recommended: cheapestTrusted == null ? null : ourPrice(cheapestTrusted, feeFloorCents),
       },
       lp_fee_percent: FEE_PERCENT,
+      lp_fee_min: { eur: MIN_FEE_EUR, usd: round2(feeFloorCents / 100) },
     };
   }
 

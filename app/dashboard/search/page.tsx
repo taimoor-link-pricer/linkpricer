@@ -6,13 +6,15 @@ import { useAuthContext } from "@/lib/contexts/auth-context";
 import { ref as storageRef, uploadBytes } from "firebase/storage";
 import { storage } from "@/lib/firebase/client";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
-import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates } from "@/lib/design-v1/format";
+import { RATES as LIVE_RATES, SYMS as LIVE_SYMS, hydrateRates, FEE_FLOOR } from "@/lib/design-v1/format";
+import { withFeeUsd } from "@/lib/pricing/fee";
 import { normalizeDomain } from "@/lib/normalize-domain";
 import { prettyMarketplaceName } from "@/lib/marketplace-name";
 import type { PriceType } from "@/lib/orders/types";
 import { BuyDirectModal, RatingBadge, type CartItem } from "@/components/dashboard/results-shared";
 import { CartPopup } from "@/components/dashboard/checkout-flow";
 import { loadCart, persistCart } from "@/lib/cart-storage";
+import { track } from "@/lib/analytics";
 
 // ─── tokens ───────────────────────────────────────────────────────────────────
 const C = {
@@ -69,11 +71,9 @@ function drUpdatedText(updatedAt: string | null): string {
 }
 
 function withFee(p: number): number {
-  // Rounding to a whole currency unit can erase the 15% margin entirely on cheap
-  // prices (e.g. 1.21 * 1.15 = 1.39, which rounds down to 1 — below source price).
-  // Math.floor(p) + 1 guarantees at least one whole unit of real margin in that
-  // case, while leaving normal-priced offers unchanged.
-  return Math.max(Math.round(p * 1.15), Math.floor(p) + 1);
+  // Fee rule lives in lib/pricing/fee.ts — 15% of the price or the €25
+  // minimum, whichever is larger, exactly as /api/orders charges it.
+  return withFeeUsd(p, FEE_FLOOR.cents);
 }
 
 function countryFlag(code: string): string {
@@ -1759,6 +1759,7 @@ function SearchPageInner() {
       // started this request, so it stays correct even if the user changes
       // the dropdown while the request is still in flight.
       setResultsNiche(niche);
+      track("analyze_domains", { domain_count: Math.min(domains.length, MAX_DOMAINS), found_count: found.length, niche });
 
       // Only save real paste-box searches — a ?domain= auto-run arriving
       // from the homepage isn't something the user typed/pasted themselves.
