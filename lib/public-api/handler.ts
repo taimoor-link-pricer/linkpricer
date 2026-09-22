@@ -465,8 +465,26 @@ export async function handlePricingRequest(
           -- The docs sell offer_count as "how many independent sources back
           -- these figures", so counting one source twice makes that claim
           -- false. Cheapest quote per source wins, which keeps this consistent
-          -- with how best_price is chosen.
-          SELECT DISTINCT ON (lower(o.marketplace_name))
+          -- with how the headline price is chosen.
+          --
+          -- The same claim breaks a second way: three marketplaces are in the
+          -- catalogue under TWO names each, because they are scraped from both
+          -- their public site and their logged-in panel --
+          --
+          --   mistergoodlink.com / app.mistergoodlink.com   (38,174 shared domains)
+          --   unancor.com        / app.unancor.com
+          --   conexoo.com        / panel.conexoo.com
+          --
+          -- One company, counted as two independent sources on every domain
+          -- both names carry. MisterGoodLink alone inflates offer_count on
+          -- 38,174 domains, and they are an API trial partner who can
+          -- recognise their own listings. Stripping an app. or panel.
+          -- prefix collapses each pair to one source. It is deliberately a
+          -- narrow rule rather than "same registrable domain": no other
+          -- source in the catalogue of 57 carries either prefix alongside a
+          -- bare twin, so nothing else changes, and two genuinely different
+          -- marketplaces sharing a root domain cannot be merged by accident.
+          SELECT DISTINCT ON (regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''))
             o.currency,
             o.min_price, o.max_price,
             o.gambling_min_price, o.gambling_max_price,
@@ -483,7 +501,7 @@ export async function handlePricingRequest(
           JOIN d ON d.id = o.domain_id
           LEFT JOIN marketplaces m ON lower(m.name) = lower(o.marketplace_name)
           WHERE o.available = true
-          ORDER BY lower(o.marketplace_name), o.min_price::float ASC NULLS LAST
+          ORDER BY regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''), o.min_price::float ASC NULLS LAST
           ) mo
 
           UNION ALL
