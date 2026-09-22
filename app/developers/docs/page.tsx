@@ -34,42 +34,27 @@ const RATE_TIERS = [
 const RESPONSE_EXAMPLE = `{
   "domain": "techblog.com",
   "found": true,
+  "currency": "USD",
+  "fee": { "percent": 15, "minimum_usd": 28.50 },
   "pricing": {
     "standard": {
-      "best_price":        260.00,
-      "average_price":     264.50,
-      "highest_price":     420.00,
-      "our_price":         299,
-      "recommended_price": 345,
-      "offer_count":       6,
-      "currency":          "USD",
-      "lp_prices": {
-        "lowest":      299,
-        "average":     304.17,
-        "highest":     483,
-        "recommended": 345
-      },
-      "lp_fee_percent": 15,
-      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
+      "label":   "Standard / general",
+      "summary": "LinkPricer best price for Standard / general: $299 (6 sources).",
+      "marketplace": { "lowest": 260.00, "average": 264.50, "highest": 420.00 },
+      "linkpricer":  { "lowest": 299, "average": 304.17, "highest": 483, "recommended": 345 },
+      "offer_count":  6,
+      "last_updated": "2026-06-20"
     },
     "gambling": {
-      "best_price":        360.00,
-      "average_price":     512.40,
-      "highest_price":     900.00,
-      "our_price":         414,
-      "recommended_price": null,
-      "offer_count":       3,
-      "currency":          "USD",
-      "lp_prices": {
-        "lowest":      414,
-        "average":     589.26,
-        "highest":     1035,
-        "recommended": null
-      },
-      "lp_fee_percent": 15,
-      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
+      "label":   "Gambling / iGaming",
+      "summary": "LinkPricer best price for Gambling / iGaming: $414 (3 sources).",
+      "marketplace": { "lowest": 360.00, "average": 512.40, "highest": 900.00 },
+      "linkpricer":  { "lowest": 414, "average": 589.26, "highest": 1035, "recommended": null },
+      "offer_count":  3,
+      "last_updated": "2026-05-02"
     }
   },
+  "available_niches": ["standard", "gambling"],
   "metrics": {
     "domain_rating":   45,
     "organic_traffic": 12000,
@@ -94,7 +79,7 @@ const JS_EXAMPLE = `const res = await fetch(
   { headers: { "x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx" } }
 );
 const data = await res.json();
-console.log(data.pricing.standard.best_price); // 260`;
+console.log(data.pricing.standard.linkpricer.lowest); // 299 — what you pay us`;
 
 const PYTHON_EXAMPLE = `import requests
 
@@ -103,7 +88,7 @@ response = requests.get(
     headers={"x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"}
 )
 data = response.json()
-print(data["pricing"]["standard"]["best_price"])  # 150`;
+print(data["pricing"]["standard"]["linkpricer"]["lowest"])  # 299 — what you pay us`;
 
 type Lang = "curl" | "javascript" | "python";
 
@@ -193,7 +178,7 @@ export default function DocsPage() {
           <section className="docs-section" id="overview">
             <h2 className="docs-h2">Overview</h2>
             <p className="docs-p">
-              The Linkpricer API gives developers programmatic access to domain pricing data aggregated from 50+ link-building marketplaces. For every domain and every niche you get the full spread — best, average and highest price on the market — plus what Linkpricer charges to place it for you, without any marketplace names ever being exposed.
+              The Linkpricer API gives developers programmatic access to domain pricing data aggregated from 50+ link-building marketplaces. For every domain and every niche you get two sets of prices side by side: what the marketplaces charge (<code className="docs-inline-code">marketplace</code> — the low, the mean and the high of the real market) and what Linkpricer charges to place it for you (<code className="docs-inline-code">linkpricer</code> — the same spread, fee included). Marketplace names are never exposed.
             </p>
             <p className="docs-p">
               The API is a simple REST interface. All responses are JSON. Authentication uses an API key passed in a request header.
@@ -341,39 +326,57 @@ export default function DocsPage() {
               <pre>{RESPONSE_EXAMPLE}</pre>
             </div>
 
+            <div className="docs-callout">
+              <strong>Every price lives in one of two objects.</strong>
+              <table className="docs-table" style={{ marginTop: 12 }}>
+                <thead>
+                  <tr><th>Object</th><th>Fee</th><th>Means</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code className="docs-inline-code">marketplace</code></td>
+                    <td>excluded</td>
+                    <td>What the sources charge. The real market spread: <code className="docs-inline-code">lowest</code>, <code className="docs-inline-code">average</code>, <code className="docs-inline-code">highest</code>.</td>
+                  </tr>
+                  <tr>
+                    <td><code className="docs-inline-code">linkpricer</code></td>
+                    <td>included</td>
+                    <td>What you pay us. Same spread plus <code className="docs-inline-code">recommended</code> (our vetted source). <code className="docs-inline-code">linkpricer.lowest</code> is the headline price.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
             <h3 className="docs-h3">Marketplace prices vs. your price</h3>
             <p className="docs-p">
-              Every price in the response is one of two things, and the field name tells you which.{" "}
-              <code className="docs-inline-code">best_price</code>, <code className="docs-inline-code">average_price</code> and{" "}
-              <code className="docs-inline-code">highest_price</code> are <strong>marketplace prices</strong> — what the sources
-              themselves charge, with no Linkpricer fee. Everything under{" "}
-              <code className="docs-inline-code">lp_prices</code>, along with <code className="docs-inline-code">our_price</code>{" "}
-              and <code className="docs-inline-code">recommended_price</code>, is <strong>your price</strong> — what you pay us to
-              place the link, fee included.
+              Every price sits in one of two objects, and which object it is in tells you what it means.{" "}
+              <code className="docs-inline-code">marketplace</code> holds <strong>marketplace prices</strong> — what the sources
+              themselves charge, with no Linkpricer fee.{" "}
+              <code className="docs-inline-code">linkpricer</code> holds <strong>your price</strong> — what you pay us to place
+              the link, fee included. Nothing else in the response is money.
             </p>
             <p className="docs-p">
-              The fee is the larger of two things: <code className="docs-inline-code">lp_fee_percent</code> (currently 15%) of
-              the source price, or the minimum fee in <code className="docs-inline-code">lp_fee_min</code> (currently €25).
-              Handling a placement costs us the same whether it sells for $5 or $500, so below roughly $190 of source price the
-              minimum is what applies and the effective markup is higher than 15% — a $20 source price becomes $49, not $23.
-              Above that, the percentage is the larger number and nothing else enters into it. Prices are rounded to whole
-              dollars.
+              The fee is the larger of two things: <code className="docs-inline-code">fee.percent</code> (currently 15%) of the
+              source price, or <code className="docs-inline-code">fee.minimum_usd</code> (currently €25, converted). Handling a
+              placement costs us the same whether it sells for $5 or $500, so below roughly $190 of source price the minimum is
+              what applies and the effective markup is higher than 15% — a $20 source price becomes $49, not $23. Above that,
+              the percentage is the larger number and nothing else enters into it. Prices are rounded to whole dollars, except
+              the averages.
             </p>
             <p className="docs-p">
-              The minimum is set in euros, so <code className="docs-inline-code">lp_fee_min.usd</code> moves with the exchange
-              rate and the crossover point moves slightly with it. Read the fee from the response rather than hardcoding
-              either figure: every number under <code className="docs-inline-code">lp_prices</code> is computed as{" "}
+              The minimum is set in euros, so <code className="docs-inline-code">fee.minimum_usd</code> moves with the exchange
+              rate and the crossover point moves slightly with it. Read the fee from the response rather than hardcoding either
+              figure: every number under <code className="docs-inline-code">linkpricer</code> is computed as{" "}
               <code className="docs-inline-code">
-                price + max(price × lp_fee_percent ÷ 100, lp_fee_min.usd)
+                price + max(price × fee.percent ÷ 100, fee.minimum_usd)
               </code>
               , so you can always reproduce it exactly.
             </p>
             <p className="docs-p">
-              <code className="docs-inline-code">lp_prices.lowest</code> and{" "}
-              <code className="docs-inline-code">lp_prices.recommended</code> are the same numbers as{" "}
-              <code className="docs-inline-code">our_price</code> and <code className="docs-inline-code">recommended_price</code>.
-              Both spellings are supported and neither is going away; the grouped form exists so the fee boundary is visible
-              without consulting this table.
+              <code className="docs-inline-code">linkpricer.average</code> is the mean of your price at each source computed
+              individually, <em>not</em> <code className="docs-inline-code">marketplace.average</code> plus the fee. The two
+              differ whenever any source falls below the crossover, because the minimum fee is not proportional — averaging
+              first would understate what the placements actually cost.
             </p>
 
             <h3 className="docs-h3">Response fields</h3>
@@ -384,29 +387,31 @@ export default function DocsPage() {
               <tbody>
                 {[
                   ["domain", "string", "The normalized domain you queried."],
-                  ["found", "boolean", "false when nothing in this response is priced — either no source prices the domain at all, or the niche you filtered to has no offers. pricing is then {} and last_updated is null."],
+                  ["found", "boolean", "false when nothing in this response is priced — either no source prices the domain at all, or the niche you filtered to has no offers. pricing is then {} and last_updated is null. available_niches still tells you what the domain IS priced for."],
+                  ["currency", "string", "Always \"USD\". Source prices in other currencies are converted before any comparison."],
+                  ["fee", "object", "The Linkpricer fee applied to every figure under linkpricer. Identical for every niche, so it is stated once here rather than repeated."],
+                  ["fee.percent", "number", "The percentage part of the fee. Currently 15. It is the larger of this percentage and fee.minimum_usd that is actually charged, so on a cheap placement the effective markup is higher than this number."],
+                  ["fee.minimum_usd", "number", "The minimum fee, charged whenever it exceeds fee.percent of the source price — the usual case below roughly $190. Set in euros by us (currently €25), so this figure tracks the exchange rate. Use it to reproduce any linkpricer figure."],
                   ["pricing", "object", "One entry per niche that at least one source prices for this domain. A niche nobody prices is absent — never present with nulls."],
-                  ["pricing.<niche>.best_price", "number", "WITHOUT fee. Lowest price any source charges for this niche, in USD. This is the market low, anonymized — we never say which source it came from."],
-                  ["pricing.<niche>.average_price", "number", "WITHOUT fee. Mean price across every source that prices this niche, in USD."],
-                  ["pricing.<niche>.highest_price", "number", "WITHOUT fee. Highest price any source charges for this niche, in USD."],
-                  ["pricing.<niche>.our_price", "number", "WITH fee. What Linkpricer charges to place this for you at the best price. Identical to the price shown on the dashboard's Buy button, and to lp_prices.lowest."],
-                  ["pricing.<niche>.recommended_price", "number | null", "WITH fee. What Linkpricer charges via the cheapest source our team has vetted. Identical to lp_prices.recommended. null when no vetted source prices this niche for this domain — the placement is still available at our_price."],
-                  ["pricing.<niche>.lp_prices", "object", "Every figure Linkpricer charges, WITH fee, in one place. Use these when you want what a customer pays; use best_price / average_price / highest_price when you want what the market charges."],
-                  ["pricing.<niche>.lp_prices.lowest", "number", "WITH fee. Your price at the cheapest source. Always identical to our_price."],
-                  ["pricing.<niche>.lp_prices.average", "number", "WITH fee. The mean of your price at every source. This is NOT average_price plus the fee — each source is priced individually and then averaged, so the minimum fee on cheap placements is reflected honestly."],
-                  ["pricing.<niche>.lp_prices.highest", "number", "WITH fee. Your price at the most expensive source."],
-                  ["pricing.<niche>.lp_prices.recommended", "number | null", "WITH fee. Your price at the cheapest vetted source. Always identical to recommended_price, null included."],
-                  ["pricing.<niche>.lp_fee_percent", "number", "The percentage part of the Linkpricer fee applied to every lp_prices figure. Currently 15. It is the larger of this percentage and lp_fee_min that is actually charged, so on a cheap placement the effective markup is higher than this number."],
-                  ["pricing.<niche>.lp_fee_min", "object", "The minimum fee, charged whenever it exceeds lp_fee_percent of the source price — the usual case below roughly $190. Set in euros by us, so lp_fee_min.usd tracks the exchange rate; both are given."],
-                  ["pricing.<niche>.lp_fee_min.eur", "number", "The minimum fee as set, in EUR. Currently 25."],
-                  ["pricing.<niche>.lp_fee_min.usd", "number", "The same minimum converted to USD at the rate used to price this response. Use this one to reproduce any lp_prices figure."],
+                  ["pricing.<niche>.label", "string", "Human-readable niche name, e.g. \"Gambling / iGaming\"."],
+                  ["pricing.<niche>.summary", "string", "One sentence naming what this niche's headline price is for. For display only — every figure in it is also a number below, and the wording may change at any time, so do not parse it."],
+                  ["pricing.<niche>.marketplace", "object", "What the sources charge, WITHOUT the Linkpricer fee. Anonymized — we never say which source a price came from."],
+                  ["pricing.<niche>.marketplace.lowest", "number", "WITHOUT fee. Lowest price any source charges for this niche, in USD."],
+                  ["pricing.<niche>.marketplace.average", "number", "WITHOUT fee. Mean price across every source that prices this niche, in USD."],
+                  ["pricing.<niche>.marketplace.highest", "number", "WITHOUT fee. Highest price any source charges for this niche, in USD."],
+                  ["pricing.<niche>.linkpricer", "object", "What you pay Linkpricer, fee INCLUDED."],
+                  ["pricing.<niche>.linkpricer.lowest", "number", "WITH fee. What Linkpricer charges to place this for you at the best price. Identical to the price shown on the dashboard's Buy button."],
+                  ["pricing.<niche>.linkpricer.average", "number", "WITH fee. The mean of your price at every source. NOT marketplace.average plus the fee — each source is priced individually and then averaged, so the minimum fee on cheap placements is reflected honestly."],
+                  ["pricing.<niche>.linkpricer.highest", "number", "WITH fee. Your price at the most expensive source."],
+                  ["pricing.<niche>.linkpricer.recommended", "number | null", "WITH fee. What Linkpricer charges via the cheapest source our team has vetted. null when no vetted source prices this niche for this domain — the placement is still available at linkpricer.lowest."],
                   ["pricing.<niche>.offer_count", "number", "How many independent sources back these figures."],
-                  ["pricing.<niche>.currency", "string", "Always \"USD\". Source prices in other currencies are converted before any comparison."],
+                  ["pricing.<niche>.last_updated", "string | null", "Date the prices for THIS niche were last refreshed, from the sources that actually price it. null when no contributing source carries a timestamp."],
+                  ["available_niches", "string[]", "Every niche this domain is priced for, regardless of any niche filter. Use it to tell \"no source sells this niche here\" apart from \"you filtered it out\" — without spending a second request."],
                   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],
                   ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic."],
                   ["metrics.ref_domains", "number | null", "Number of referring domains."],
                   ["metrics.country", "string | null", "Primary traffic country, full name (e.g. \"United States\") — not an ISO code."],
-                  ["last_updated", "string | null", "Date the underlying prices were last refreshed. null when nothing is priced."],
+                  ["last_updated", "string | null", "The most recent of the per-niche dates in this response. null when nothing is priced."],
                 ].map(([field, type, desc]) => (
                   <tr key={field}>
                     <td><code className="docs-inline-code">{field}</code></td>

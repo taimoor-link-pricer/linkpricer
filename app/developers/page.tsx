@@ -43,42 +43,27 @@ const FEATURES = [
 const EXAMPLE_RESPONSE = `{
   "domain": "techblog.com",
   "found": true,
+  "currency": "USD",
+  "fee": { "percent": 15, "minimum_usd": 28.50 },
   "pricing": {
     "standard": {
-      "best_price":        260.00,
-      "average_price":     264.50,
-      "highest_price":     420.00,
-      "our_price":         299,
-      "recommended_price": 345,
-      "offer_count":       6,
-      "currency":          "USD",
-      "lp_prices": {
-        "lowest":      299,
-        "average":     304.17,
-        "highest":     483,
-        "recommended": 345
-      },
-      "lp_fee_percent": 15,
-      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
+      "label":   "Standard / general",
+      "summary": "LinkPricer best price for Standard / general: $299 (6 sources).",
+      "marketplace": { "lowest": 260.00, "average": 264.50, "highest": 420.00 },
+      "linkpricer":  { "lowest": 299, "average": 304.17, "highest": 483, "recommended": 345 },
+      "offer_count":  6,
+      "last_updated": "2026-06-20"
     },
     "gambling": {
-      "best_price":        360.00,
-      "average_price":     512.40,
-      "highest_price":     900.00,
-      "our_price":         414,
-      "recommended_price": null,
-      "offer_count":       3,
-      "currency":          "USD",
-      "lp_prices": {
-        "lowest":      414,
-        "average":     589.26,
-        "highest":     1035,
-        "recommended": null
-      },
-      "lp_fee_percent": 15,
-      "lp_fee_min":     { "eur": 25, "usd": 28.50 }
+      "label":   "Gambling / iGaming",
+      "summary": "LinkPricer best price for Gambling / iGaming: $414 (3 sources).",
+      "marketplace": { "lowest": 360.00, "average": 512.40, "highest": 900.00 },
+      "linkpricer":  { "lowest": 414, "average": 589.26, "highest": 1035, "recommended": null },
+      "offer_count":  3,
+      "last_updated": "2026-05-02"
     }
   },
+  "available_niches": ["standard", "gambling"],
   "metrics": {
     "domain_rating":   45,
     "organic_traffic": 12000,

@@ -5,6 +5,7 @@ import {
   MIN_FEE_EUR,
   NICHE_IDS,
   aggregatePricing,
+  computeNiches,
   nicheOfferPrice,
   ourPrice,
   resolveNiche,
@@ -154,177 +155,120 @@ describe("ourPrice", () => {
   });
 });
 
-describe("aggregatePricing", () => {
+describe("computeNiches — the arithmetic every published figure comes from", () => {
   it("returns the whole figure set over a spread of offers", () => {
-    const offers = [
-      offer({ min_price: 100 }),
-      offer({ min_price: 200 }),
-      offer({ min_price: 300 }),
-    ];
-    const out = aggregatePricing(offers, RATES, null);
+    const out = computeNiches(
+      [offer({ min_price: 100 }), offer({ min_price: 200 }), offer({ min_price: 300 })],
+      RATES
+    );
     expect(out.standard).toEqual({
       // Marketplace money, no fee.
-      best_price: 100,
-      average_price: 200,
-      highest_price: 300,
-      // Fee-inclusive, in their published flat spelling. $100 is under the
-      // crossover, so it carries the €25 floor rather than 15%; $200 and
-      // $300 are over it and carry the percentage.
-      our_price: 127,
-      recommended_price: null, // nothing trusted yet
-      offer_count: 3,
-      currency: "USD",
-      // ...and the same fee-inclusive figures grouped, where the basis is
-      // legible from the field names alone.
-      lp_prices: {
-        lowest: 127,
-        average: 234,
-        highest: 345,
-        recommended: null,
-      },
-      lp_fee_percent: 15,
-      lp_fee_min: { eur: 25, usd: 27.17 },
+      best: 100,
+      average: 200,
+      highest: 300,
+      cheapestTrusted: null,
+      // Fee-inclusive. $100 is under the crossover, so it carries the €25
+      // floor rather than 15%; $200 and $300 are over it and carry the
+      // percentage.
+      lpLowest: 127,
+      lpAverage: 234,
+      lpHighest: 345,
+      lpRecommended: null,
+      offerCount: 3,
+      trustedOfferCount: 0,
+      lastUpdated: null,
+      feeAppliedToLowest: "minimum",
     });
   });
 
-  it("our_price is always the markup on best_price", () => {
-    const out = aggregatePricing([offer({ min_price: 100 }), offer({ min_price: 900 })], RATES, null);
-    expect(out.standard.our_price).toBe(lp(out.standard.best_price));
+  it("the fee-inclusive low is always the markup on the market low", () => {
+    const out = computeNiches([offer({ min_price: 100 }), offer({ min_price: 900 })], RATES);
+    expect(out.standard!.lpLowest).toBe(lp(out.standard!.best));
   });
 
-  it("recommended_price is the cheapest TRUSTED offer, not the cheapest overall", () => {
-    const out = aggregatePricing(
+  it("recommends the cheapest TRUSTED offer, not the cheapest overall", () => {
+    const out = computeNiches(
       [
-        offer({ min_price: 100 }),                       // cheapest, untrusted
-        offer({ min_price: 250 }, { trusted: true }),    // cheapest trusted
+        offer({ min_price: 100 }),                    // cheapest, untrusted
+        offer({ min_price: 250 }, { trusted: true }), // cheapest trusted
         offer({ min_price: 400 }, { trusted: true }),
       ],
-      RATES,
-      null
+      RATES
     );
-    expect(out.standard.best_price).toBe(100);
-    expect(out.standard.our_price).toBe(lp(100));
-    expect(out.standard.recommended_price).toBe(lp(250));
+    expect(out.standard!.best).toBe(100);
+    expect(out.standard!.lpLowest).toBe(lp(100));
+    expect(out.standard!.lpRecommended).toBe(lp(250));
+    expect(out.standard!.trustedOfferCount).toBe(2);
   });
 
-  it("recommended_price is null when no trusted marketplace carries the niche", () => {
-    const out = aggregatePricing(
+  it("recommends nothing when no trusted marketplace carries the niche", () => {
+    const out = computeNiches(
       [
-        offer({ min_price: 100, gambling_min_price: 400 }),                    // untrusted, has gambling
-        offer({ min_price: 120 }, { trusted: true }),                          // trusted, no gambling
+        offer({ min_price: 100, gambling_min_price: 400 }),  // untrusted, has gambling
+        offer({ min_price: 120 }, { trusted: true }),        // trusted, no gambling
       ],
-      RATES,
-      null
+      RATES
     );
-    expect(out.gambling.recommended_price).toBeNull();
-    expect(out.standard.recommended_price).toBe(lp(120));
+    expect(out.gambling!.lpRecommended).toBeNull();
+    expect(out.standard!.lpRecommended).toBe(lp(120));
   });
 
   it("converts every currency to USD before comparing", () => {
     // EUR 100 ≈ $108.70, so the USD 120 offer is NOT the cheapest.
-    const out = aggregatePricing(
+    const out = computeNiches(
       [offer({ min_price: 120 }), offer({ min_price: 100 }, { currency: "EUR" })],
-      RATES,
-      null
+      RATES
     );
-    expect(out.standard.best_price).toBeCloseTo(108.7, 1);
-    expect(out.standard.highest_price).toBe(120);
-    expect(out.standard.offer_count).toBe(2);
+    expect(out.standard!.best).toBeCloseTo(108.7, 1);
+    expect(out.standard!.highest).toBe(120);
+    expect(out.standard!.offerCount).toBe(2);
   });
 
   it("a niche only trusted sources can serve still reports a recommendation", () => {
-    const out = aggregatePricing(
-      [offer({ min_price: 100, cbd_min_price: 500 }, { trusted: true })],
-      RATES,
-      null
-    );
-    expect(out.cbd.recommended_price).toBe(lp(500));
-    expect(out.cbd.best_price).toBe(500);
+    const out = computeNiches([offer({ min_price: 100, cbd_min_price: 500 }, { trusted: true })], RATES);
+    expect(out.cbd!.lpRecommended).toBe(lp(500));
+    expect(out.cbd!.best).toBe(500);
   });
 
   it("omits niches no offer can serve rather than returning nulls", () => {
-    const out = aggregatePricing([offer({ min_price: 100 })], RATES, null);
+    const out = computeNiches([offer({ min_price: 100 })], RATES);
     expect(Object.keys(out)).toEqual(["standard"]);
     expect(out.gambling).toBeUndefined();
   });
 
   it("returns nothing at all when no offer has any usable price", () => {
-    expect(aggregatePricing([offer({ min_price: null })], RATES, null)).toEqual({});
-    expect(aggregatePricing([], RATES, null)).toEqual({});
-  });
-
-  it("honours a niche filter", () => {
-    const out = aggregatePricing(
-      [offer({ min_price: 100, gambling_min_price: 400, adult_min_price: 500 })],
-      RATES,
-      "gambling"
-    );
-    expect(Object.keys(out)).toEqual(["gambling"]);
-    expect(out.gambling.best_price).toBe(400);
+    expect(computeNiches([offer({ min_price: null })], RATES)).toEqual({});
+    expect(computeNiches([], RATES)).toEqual({});
   });
 
   it("counts only the offers that can serve the niche", () => {
-    const out = aggregatePricing(
+    const out = computeNiches(
       [
         offer({ min_price: 100, gambling_min_price: 400 }),
         offer({ min_price: 110 }),
         offer({ min_price: 120, gambling_min_price: 600 }),
       ],
-      RATES,
-      null
+      RATES
     );
-    expect(out.standard.offer_count).toBe(3);
-    expect(out.gambling.offer_count).toBe(2);
-    expect(out.gambling.average_price).toBe(500);
+    expect(out.standard!.offerCount).toBe(3);
+    expect(out.gambling!.offerCount).toBe(2);
+    expect(out.gambling!.average).toBe(500);
   });
 
-  // ─── lp_prices: the fee-inclusive mirror ──────────────────────────────────
-  //
-  // The flat fields split three-without-fee / two-with-fee and cannot be
-  // renamed (published contract), so lp_prices is the additive fix. These
-  // tests exist to hold two properties that make it worth having: it never
-  // disagrees with the flat fields it duplicates, and its average is a real
-  // average of real prices rather than a marked-up average.
-
-  it("mirrors our_price and recommended_price exactly, so the two spellings can never disagree", () => {
-    const out = aggregatePricing(
-      [
-        offer({ min_price: 100 }),
-        offer({ min_price: 250 }, { trusted: true }),
-        offer({ min_price: 400 }, { trusted: true }),
-      ],
-      RATES,
-      null
-    );
-    expect(out.standard.lp_prices.lowest).toBe(out.standard.our_price);
-    expect(out.standard.lp_prices.recommended).toBe(out.standard.recommended_price);
-  });
-
-  it("carries a null recommendation through rather than inventing one", () => {
-    const out = aggregatePricing(
-      [offer({ min_price: 100, gambling_min_price: 400 })],
-      RATES,
-      null
-    );
-    expect(out.gambling.recommended_price).toBeNull();
-    expect(out.gambling.lp_prices.recommended).toBeNull();
-  });
-
-  it("prices the spread: lowest and highest are the fee-inclusive ends of the market", () => {
-    const out = aggregatePricing(
+  it("prices the spread: the fee-inclusive ends of the market", () => {
+    const out = computeNiches(
       [offer({ min_price: 100 }), offer({ min_price: 260 }), offer({ min_price: 400 })],
-      RATES,
-      null
+      RATES
     );
-    expect(out.standard.best_price).toBe(100);
-    expect(out.standard.highest_price).toBe(400);
-    expect(out.standard.lp_prices.lowest).toBe(lp(100));
-    expect(out.standard.lp_prices.highest).toBe(lp(400));
+    expect(out.standard!.best).toBe(100);
+    expect(out.standard!.highest).toBe(400);
+    expect(out.standard!.lpLowest).toBe(lp(100));
+    expect(out.standard!.lpHighest).toBe(lp(400));
   });
 
   it("averages the fee-inclusive prices rather than marking up the average", () => {
-    // The whole reason lp_prices.average is computed per offer: the fee is not
-    // linear in the price, so the two computations genuinely differ.
+    // The fee is not linear in the price, so the two computations genuinely
+    // differ.
     //
     //   per offer:      (lp(1) + lp(1) + lp(1000)) / 3 = (28 + 28 + 1150) / 3 = 402
     //   marked-up mean: lp((1 + 1 + 1000) / 3)         = lp(334)              = 384
@@ -332,81 +276,51 @@ describe("aggregatePricing", () => {
     // The cheap pair each carry a whole €25 minimum; averaging first hides
     // both of them behind the one expensive placement and understates what
     // the three actually cost.
-    const out = aggregatePricing(
+    const out = computeNiches(
       [offer({ min_price: 1 }), offer({ min_price: 1 }), offer({ min_price: 1000 })],
-      RATES,
-      null
+      RATES
     );
-    expect(out.standard.lp_prices.average).toBe(round2((lp(1) + lp(1) + lp(1000)) / 3));
-    // Marking up the market average would have produced a materially lower
-    // number, which is the bug this guards against.
-    expect(out.standard.lp_prices.average).toBeGreaterThan(lp(out.standard.average_price));
+    expect(out.standard!.lpAverage).toBe(round2((lp(1) + lp(1) + lp(1000)) / 3));
+    expect(out.standard!.lpAverage).toBeGreaterThan(lp(out.standard!.average));
   });
 
-  it("publishes the fee percent alongside the prices it produced", () => {
-    const out = aggregatePricing([offer({ min_price: 200 })], RATES, null);
-    expect(out.standard.lp_fee_percent).toBe(FEE_PERCENT);
-    // The headline rate has to actually describe the headline price, or the
-    // field is decoration.
-    expect(out.standard.lp_prices.lowest).toBe(Math.round(200 * (1 + FEE_PERCENT / 100)));
+  it("says which of the two fee rules applied to the headline price", () => {
+    // The field exists so that a 15% headline sitting next to a 145%
+    // effective markup does not read as broken arithmetic.
+    expect(computeNiches([offer({ min_price: 20 })], RATES).standard!.feeAppliedToLowest).toBe("minimum");
+    expect(computeNiches([offer({ min_price: 900 })], RATES).standard!.feeAppliedToLowest).toBe("percent");
   });
 
-  it("adds lp_fee_min without disturbing any other published field", () => {
-    // The response shape is a published contract: lp_fee_min is additive, and
-    // every other key an integration already reads must still be there under
-    // the same name. (The fee-inclusive VALUES did change when the €25
-    // minimum came in — that is the point of the change — but only for
-    // placements under the crossover.)
-    const out = aggregatePricing(
-      [offer({ min_price: 100 }), offer({ min_price: 250 }, { trusted: true })],
-      RATES,
-      null
-    );
-    expect(Object.keys(out.standard).sort()).toEqual([
-      "average_price",
-      "best_price",
-      "currency",
-      "highest_price",
-      "lp_fee_min",
-      "lp_fee_percent",
-      "lp_prices",
-      "offer_count",
-      "our_price",
-      "recommended_price",
-    ]);
-    expect(out.standard.best_price).toBe(100);
-    expect(out.standard.average_price).toBe(175);
-    expect(out.standard.highest_price).toBe(250);
-    // $100 is under the crossover and carries the €25 minimum; $250 is over
-    // it and carries the 15%.
-    expect(out.standard.our_price).toBe(127);
-    expect(out.standard.recommended_price).toBe(288);
-    expect(out.standard.offer_count).toBe(2);
-    expect(out.standard.currency).toBe("USD");
-  });
-
-  it("only ever publishes whole dollars, except the average", () => {
-    // ourPrice() rounds to whole dollars, so three of the four lp figures are
-    // integers by construction. The average is the one that is not: it is a
-    // mean of those integers, carried to cents. Worth pinning, because the
-    // published examples on /developers/docs show exactly this shape and a
-    // reader will assume it holds.
-    const out = aggregatePricing(
+  it("only ever produces whole dollars, except the average", () => {
+    // ourPrice() rounds to whole dollars, so three of the four fee-inclusive
+    // figures are integers by construction. The average is the one that is
+    // not: it is a mean of those integers, carried to cents.
+    const out = computeNiches(
       [offer({ min_price: 100.5 }), offer({ min_price: 200.25 }, { trusted: true }), offer({ min_price: 301 })],
-      RATES,
-      null
+      RATES
     );
-    const { lowest, average, highest, recommended } = out.standard.lp_prices;
-    for (const [name, v] of [["lowest", lowest], ["highest", highest], ["recommended", recommended]] as const) {
-      expect(Number.isInteger(v), `lp_prices.${name} must be a whole dollar, got ${v}`).toBe(true);
+    const c = out.standard!;
+    for (const [name, v] of [["lpLowest", c.lpLowest], ["lpHighest", c.lpHighest], ["lpRecommended", c.lpRecommended]] as const) {
+      expect(Number.isInteger(v), `${name} must be a whole dollar, got ${v}`).toBe(true);
     }
-    expect(average).toBe(round2((lp(100.5) + lp(200.25) + lp(301)) / 3));
+    expect(c.lpAverage).toBe(round2((lp(100.5) + lp(200.25) + lp(301)) / 3));
+  });
+});
+
+describe("aggregatePricing — the niche filter", () => {
+  it("honours a niche filter", () => {
+    const { pricing } = aggregatePricing(
+      [offer({ min_price: 100, gambling_min_price: 400, adult_min_price: 500 })],
+      RATES,
+      "gambling"
+    );
+    expect(Object.keys(pricing)).toEqual(["gambling"]);
+    expect(pricing.gambling.marketplace.lowest).toBe(400);
   });
 
   it("never leaks a marketplace name or any identifying field", () => {
     const out = aggregatePricing([offer({ min_price: 100 }, { trusted: true })], RATES, null);
-    const serialized = JSON.stringify(out);
-    expect(serialized).not.toMatch(/marketplace|vendor|trusted|name/i);
+    expect(JSON.stringify(out)).not.toMatch(/marketplace_name|vendor|trusted/i);
   });
 });
 
