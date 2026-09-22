@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { adminAuth } from "@/lib/firebase/admin";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
+import { and, eq, isNull } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { notifyUserSignup } from "@/lib/notifications/users";
 
@@ -47,6 +48,28 @@ export async function POST(req: NextRequest) {
           role: "client",
           hasCompletedOnboarding: false,
         }).onConflictDoNothing().returning({ id: users.id });
+
+        // The row already existed, so the insert above discarded whatever
+        // name came with this request. Fill it in if the stored row has none.
+        //
+        // This is not a hypothetical. Signing up races itself: creating the
+        // Firebase user fires an auth-state change, whose listener calls
+        // refreshSessionCookie() -> createSession(idToken) with NO name, and
+        // that request frequently lands before signUpWithEmail's own call
+        // carrying firstName/lastName. The nameless one inserts the row, the
+        // named one hits ON CONFLICT DO NOTHING, and the name the user typed
+        // is thrown away. 37 of 555 accounts have no name at all because of
+        // this, 12 of them created in the last 90 days.
+        //
+        // Scoped to rows where the name IS NULL, so a returning user can
+        // never be overwritten — which is what ON CONFLICT DO NOTHING was
+        // protecting against in the first place.
+        if (inserted.length === 0 && firstName) {
+          await db
+            .update(users)
+            .set({ firstName, lastName })
+            .where(and(eq(users.id, decoded.uid), isNull(users.firstName)));
+        }
 
         // A row only comes back when this sign-in created the account.
         if (inserted.length > 0) {

@@ -101,6 +101,13 @@ function DashboardContent() {
   // them on the client.
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
 
+  // The plan buttons live at the BOTTOM of this page; choosing one swaps the
+  // API-key card at the TOP into a payment form. Off a laptop screen that is
+  // entirely invisible: the button says "Opening…", then goes back to normal,
+  // and nothing else appears to happen. Testers clicked a plan, saw nothing,
+  // and clicked again. Bring the form to them.
+  const payRef = useRef<HTMLDivElement | null>(null);
+
   const applyIfLatest = useCallback((seq: number, d: MeData) => {
     // Capture the reveal before the staleness check — a response that loses
     // the ordering race still carries a key worth keeping, and dropping it
@@ -178,6 +185,16 @@ function DashboardContent() {
   // or re-checking Firebase. That's how "I signed out, then came back to the
   // dashboard and it still showed me logged in" happens. A real reload is the
   // only thing that discards the frozen heap and forces a fresh check.
+  // Scroll the payment form into view the moment a plan is chosen, and focus
+  // it for keyboard and screen-reader users. Without this the only feedback
+  // for picking a plan is a change far off the top of the page.
+  useEffect(() => {
+    if (!payPlan || !paySecret) return;
+    const el = payRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.focus({ preventScroll: true });
+  }, [payPlan, paySecret]);
   useEffect(() => {
     const onPageShow = (e: PageTransitionEvent) => {
       if (e.persisted) window.location.reload();
@@ -361,6 +378,8 @@ function DashboardContent() {
         .db-key-btn.success { background: #dcfce7; color: #166534; border-color: #86efac; }
         .db-key-warn { font-size: 12px; color: #9ca3af; margin-top: 10px; }
         .db-pay { padding: 4px 2px 2px; }
+        .db-pay-step { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: #0052cc; background: #eef4ff; border: 1px solid #d6e4ff; border-radius: 8px; padding: 9px 12px; margin-bottom: 14px; }
+        .db-pay:focus { outline: none; }
         .db-pay-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
         .db-pay-head strong { font-size: 15px; color: #111827; }
         .db-pay-head span { font-size: 12.5px; color: #6b7280; }
@@ -520,14 +539,17 @@ function DashboardContent() {
                     </button>
                   </div>
                   <div className="db-key-warn">
-                    This key was issued before we started keeping it visible here. Regenerate it to get a copyable key.
+                    For security your key is shown once, when it is created. If you no longer have it, regenerate to issue a new one — the current key stops working immediately.
                   </div>
                 </>
               )
             ) : payPlan && paySecret ? (
               /* Paying happens here, on our own page. The fields inside are a
                  Stripe iframe, so the card number never reaches this origin. */
-              <div className="db-pay">
+              <div className="db-pay" ref={payRef} tabIndex={-1}>
+                <div className="db-pay-step">
+                  Step 2 of 2 — enter your card to activate your API key
+                </div>
                 <div className="db-pay-head">
                   <strong>{PLAN_DETAILS[payPlan].label}</strong>
                   <span>{PLAN_DETAILS[payPlan].price} · {PLAN_DETAILS[payPlan].queries} · cancel anytime</span>
