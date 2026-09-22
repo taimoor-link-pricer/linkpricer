@@ -668,20 +668,36 @@ function CenteredSpinner() {
 
 function SignUpView({ onAuth }: { onAuth: (user: User) => void }) {
   const [mode, setMode] = useState<"signup" | "login">("signup");
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [company, setCompany] = useState("");
   const [password, setPassword] = useState("");
+  const [useCase, setUseCase] = useState("");
+  const [tosAccepted, setTosAccepted] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (mode === "signup" && !tosAccepted) {
+      setError("Please accept the Terms of Service and Privacy Policy.");
+      return;
+    }
     setError("");
     setLoading(true);
     try {
       let user;
       if (mode === "signup") {
-        const namePart = email.split("@")[0];
-        user = await signUpWithEmail(namePart, "", email, password);
+        // Split the same way the main signup form does (components/auth/
+        // signup-form.tsx), so a developer account and an app account produce
+        // the same displayName. This used to pass the email's local part as a
+        // first name, which is why developer accounts showed up as "j.smith"
+        // with no surname.
+        const parts = fullName.trim().split(/\s+/);
+        const firstName = parts[0] ?? "";
+        const lastName = parts.slice(1).join(" ");
+        user = await signUpWithEmail(firstName, lastName, email, password);
       } else {
         user = await signInWithEmail(email, password);
       }
@@ -726,6 +742,14 @@ function SignUpView({ onAuth }: { onAuth: (user: User) => void }) {
         .signup-input:focus { border-color: #0052cc; box-shadow: 0 0 0 3px rgba(0,82,204,0.1); }
         .signup-label { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; display: block; }
         .signup-field { margin-bottom: 16px; }
+        .signup-consent { display: flex; gap: 8px; margin-bottom: 20px; font-size: 13px; color: #6b7280; }
+        .signup-consent input { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; margin-top: 2px; }
+        .signup-consent label { cursor: pointer; line-height: 1.5; }
+        .signup-consent a { color: #0052cc; text-decoration: none; font-weight: 500; }
+        .signup-meta-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; font-size: 13px; color: #4b5563; }
+        .signup-meta-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .signup-meta-row input { width: 16px; height: 16px; cursor: pointer; }
+        .signup-meta-row a { color: #0052cc; text-decoration: none; }
         .signup-btn { width: 100%; padding: 12px; background: #0052cc; color: #fff; border: none; border-radius: 9px; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
         .signup-btn:hover { background: #003a99; }
         .signup-btn:disabled { opacity: 0.6; cursor: default; }
@@ -755,9 +779,15 @@ function SignUpView({ onAuth }: { onAuth: (user: User) => void }) {
       </div>
 
       <div className="signup-box">
-        <div className="signup-title">{mode === "signup" ? "Get your API key" : "Welcome back"}</div>
+        {/* The heading has to say which of the two things this form does.
+            It read "Get your API key" in both modes, which — with an email
+            field, a password field and a Google button — is indistinguishable
+            from a sign-in form, and testers reliably mistook it for one. */}
+        <div className="signup-title">{mode === "signup" ? "Create your developer account" : "Welcome back"}</div>
         <div className="signup-sub">
-          {mode === "signup" ? "Create a developer account to get started." : "Sign in to your developer account."}
+          {mode === "signup"
+            ? "Sign up to get your API key. Free to create — you pick a plan next."
+            : "Sign in to your developer account."}
         </div>
 
         <button className="signup-btn-google" onClick={handleGoogle} disabled={loading}>
@@ -779,28 +809,94 @@ function SignUpView({ onAuth }: { onAuth: (user: User) => void }) {
         {error && <div className="signup-error">{error}</div>}
 
         <form onSubmit={handleEmailSubmit}>
+          {mode === "signup" && (
+            <div className="signup-field">
+              <label className="signup-label">Full name</label>
+              <input
+                className="signup-input"
+                type="text"
+                placeholder="John Doe"
+                autoComplete="name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                required
+              />
+            </div>
+          )}
           <div className="signup-field">
             <label className="signup-label">Email address</label>
             <input
               className="signup-input"
               type="email"
-              placeholder="you@company.com"
+              placeholder="you@example.com"
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
             />
           </div>
+          {mode === "signup" && (
+            <div className="signup-field">
+              <label className="signup-label">Company <span style={{ fontWeight: 400, color: "#9ca3af" }}>(optional)</span></label>
+              <input
+                className="signup-input"
+                type="text"
+                placeholder="Acme Agency"
+                autoComplete="organization"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+              />
+            </div>
+          )}
           <div className="signup-field">
             <label className="signup-label">Password</label>
             <input
               className="signup-input"
               type="password"
-              placeholder="Min 6 characters"
+              placeholder="••••••••"
+              minLength={6}
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
             />
           </div>
+          {mode === "signup" ? (
+            <>
+              <div className="signup-field">
+                <label className="signup-label">What will you use Linkpricer for?</label>
+                <textarea
+                  className="signup-input"
+                  rows={3}
+                  placeholder="e.g., Building backlinks for my clients' sites..."
+                  value={useCase}
+                  onChange={(e) => setUseCase(e.target.value)}
+                  required
+                  style={{ resize: "vertical" }}
+                />
+              </div>
+              <div className="signup-consent">
+                <input
+                  type="checkbox"
+                  id="dev-terms"
+                  checked={tosAccepted}
+                  onChange={(e) => setTosAccepted(e.target.checked)}
+                />
+                <label htmlFor="dev-terms">
+                  I agree to the <Link href="/terms">Terms of Service</Link> and{" "}
+                  <Link href="/privacy">Privacy Policy</Link>
+                </label>
+              </div>
+            </>
+          ) : (
+            <div className="signup-meta-row">
+              <label>
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                Remember me
+              </label>
+              <Link href="/forgot-password">Forgot password?</Link>
+            </div>
+          )}
           <button className="signup-btn" type="submit" disabled={loading}>
             {loading ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
           </button>
