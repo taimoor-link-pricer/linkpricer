@@ -6,27 +6,27 @@ const TIERS = [
     name: "Starter",
     price: planPrice("starter"),
     period: "/mo",
-    queries: "1,000 queries/mo",
+    queries: "1,000 lookups/mo",
     rateLimit: "10 req/min",
-    features: ["Domain pricing endpoint", "Standard support", "API key dashboard"],
+    features: ["Single-domain & batch endpoints", "Standard support", "API key dashboard"],
     highlight: false,
   },
   {
     name: "Growth",
     price: planPrice("growth"),
     period: "/mo",
-    queries: "2,500 queries/mo",
+    queries: "2,500 lookups/mo",
     rateLimit: "20 req/min",
-    features: ["Domain pricing endpoint", "Priority support", "API key dashboard", "Usage analytics"],
+    features: ["Single-domain & batch endpoints", "Priority support", "API key dashboard", "Usage analytics"],
     highlight: true,
   },
   {
     name: "Scale",
     price: planPrice("scale"),
     period: "/mo",
-    queries: "10,000 queries/mo",
+    queries: "10,000 lookups/mo",
     rateLimit: "60 req/min",
-    features: ["Domain pricing endpoint", "Dedicated support", "API key dashboard", "Usage analytics", "SLA guarantee"],
+    features: ["Single-domain & batch endpoints", "Dedicated support", "API key dashboard", "Usage analytics", "SLA guarantee"],
     highlight: false,
   },
 ];
@@ -36,9 +36,23 @@ const FEATURES = [
   { icon: "📊", title: "Rich domain metrics", body: "Domain rating, organic traffic, referring domains, country, and niche data bundled in every response." },
   { icon: "⚡", title: "Fast & reliable", body: "Prices are read live from source on every call — no stale cache layer in front of them. Data refreshed daily from 50+ marketplaces and growing." },
   { icon: "🔒", title: "Secure by default", body: "API key auth on every request. Server-to-server only — no browser CORS. Keys scoped per account." },
-  { icon: "📈", title: "Rate limiting built in", body: "Every plan includes per-minute and per-month request limits. Overages return a clean 429 with retry headers." },
-  { icon: "🧩", title: "Simple REST API", body: "One endpoint, predictable JSON response, full error codes. Integrates in minutes with any language." },
+  { icon: "📈", title: "Rate limiting built in", body: "Every plan includes a monthly lookup quota and a per-minute request limit. Overages return a clean 429 with retry headers." },
+  { icon: "🧩", title: "Single or batch", body: "GET one domain, or POST up to 200 in a single request. The same JSON per domain and the same key either way, with full error codes." },
 ];
+
+const BATCH_EXAMPLE = `POST /api/v2/public/domains/pricing
+x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx
+
+{ "domains": ["techblog.com", "newsdaily.io", "…up to 200"], "niche": "gambling" }
+
+→ {
+  "summary": { "requested": 200, "ok": 187, "not_found": 13, "invalid": 0 },
+  "usage":   { "charged": 187, "monthly_remaining": 9813 },
+  "results": [
+    { "input": "techblog.com", "status": "ok", "data": { "pricing": { … } } },
+    …
+  ]
+}`;
 
 const EXAMPLE_RESPONSE = `{
   "domain": "techblog.com",
@@ -153,7 +167,7 @@ export default function DevelopersPage() {
           </h1>
           <p className="dev-sub">
             Query any domain and get the full price spread from across 50+ marketplaces,
-            for every niche. One endpoint, clean JSON, ready in minutes.
+            for every niche. One domain or 200 per request, clean JSON, ready in minutes.
           </p>
           <div className="dev-hero-cta">
             <Link href="/developers/dashboard" className="dev-btn-primary">Get your API key</Link>
@@ -174,7 +188,7 @@ export default function DevelopersPage() {
       <div style={{ background: "#f9fafb" }}>
         <div className="dev-section">
           <h2 className="dev-section-h2">Everything you need</h2>
-          <p className="dev-section-sub">One endpoint with all the data your integration needs.</p>
+          <p className="dev-section-sub">Two endpoints, one key, all the data your integration needs.</p>
           <div className="dev-feat-grid">
             {FEATURES.map((f) => (
               <div key={f.title} className="dev-feat">
@@ -185,6 +199,24 @@ export default function DevelopersPage() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Batch */}
+      <div className="dev-section">
+        <h2 className="dev-section-h2">Price a whole list in one request</h2>
+        <p className="dev-section-sub">
+          Send up to 200 domains to the batch endpoint and get every price back in about a second, in the order you sent them.
+          You&apos;re charged one lookup per domain we find — unknown domains and duplicates are free.
+        </p>
+        <div className="dev-code-preview" style={{ maxWidth: 820, margin: "0 auto" }}>
+          <div className="dev-code-label">Batch request — POST /api/v2/public/domains/pricing</div>
+          <pre>
+            <SyntaxHighlight code={BATCH_EXAMPLE} />
+          </pre>
+        </div>
+        <p style={{ textAlign: "center", marginTop: 20, fontSize: 14 }}>
+          <Link href="/developers/docs#batch" style={{ color: "#0052cc", textDecoration: "none", fontWeight: 600 }}>Batch documentation →</Link>
+        </p>
       </div>
 
       {/* Pricing */}

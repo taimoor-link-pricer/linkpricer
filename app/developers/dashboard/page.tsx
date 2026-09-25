@@ -37,10 +37,29 @@ interface MeData {
   usage: { used: number; limit: number };
 }
 
+const API_BASE = "https://www.linkpricer.ai/api";
+
+const ENDPOINTS = [
+  {
+    id: "v1",
+    verb: "GET",
+    path: "/v1/public/domains/{domain}/pricing",
+    desc: "Price one domain. Every niche's marketplace and LinkPricer prices, plus DR, traffic and country.",
+    curl: `curl "${API_BASE}/v1/public/domains/techblog.com/pricing" \\\n  -H "x-api-key: YOUR_API_KEY"`,
+  },
+  {
+    id: "v2",
+    verb: "POST",
+    path: "/v2/public/domains/pricing",
+    desc: "Batch: up to 200 domains per request, each with the same result as the single-domain call. Charged only for domains we find.",
+    curl: `curl -X POST "${API_BASE}/v2/public/domains/pricing" \\\n  -H "x-api-key: YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"domains": ["techblog.com", "newsdaily.io"]}'`,
+  },
+];
+
 const PLAN_DETAILS = {
-  starter: { label: "Starter", price: planPrice("starter", { period: "/mo" }), queries: "1,000 queries",  rate: "10 req/min",  planKey: "starter" as PlanKey },
-  growth:  { label: "Growth",  price: planPrice("growth",  { period: "/mo" }), queries: "2,500 queries",  rate: "20 req/min",  planKey: "growth" as PlanKey },
-  scale:   { label: "Scale",   price: planPrice("scale",   { period: "/mo" }), queries: "10,000 queries", rate: "60 req/min",  planKey: "scale" as PlanKey },
+  starter: { label: "Starter", price: planPrice("starter", { period: "/mo" }), queries: "1,000 lookups",  rate: "10 req/min",  planKey: "starter" as PlanKey },
+  growth:  { label: "Growth",  price: planPrice("growth",  { period: "/mo" }), queries: "2,500 lookups",  rate: "20 req/min",  planKey: "growth" as PlanKey },
+  scale:   { label: "Scale",   price: planPrice("scale",   { period: "/mo" }), queries: "10,000 lookups", rate: "60 req/min",  planKey: "scale" as PlanKey },
 };
 
 
@@ -63,6 +82,7 @@ function DashboardContent() {
   const [dataLoading, setDataLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanKey | null>(null);
   // Inline subscribe: the plan being bought and the SetupIntent secret that
   // lets Stripe Elements collect the card on this page. Both null = form closed.
@@ -354,6 +374,18 @@ function DashboardContent() {
 
   const usagePct = data ? Math.min(100, Math.round((data.usage.used / (data.usage.limit || 1)) * 100)) : 0;
   const currentPlanKey = data?.user.plan ?? null;
+
+  // The placeholder, not the key: a snippet is pasted into terminals and
+  // tickets, and the real key only ever leaves via the key card's own Copy.
+  async function copySnippet(id: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSnippet(id);
+      setTimeout(() => setCopiedSnippet((c) => (c === id ? null : c)), 2000);
+    } catch {
+      /* clipboard refused — the snippet is visible to select by hand */
+    }
+  }
   const maskedKey = "lp_live_" + "•".repeat(24);
 
   return (
@@ -429,6 +461,18 @@ function DashboardContent() {
         .db-plan-btn-disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
         .db-plan-btn:disabled { opacity: 0.6; cursor: default; }
 
+        .db-endpoints { display: grid; gap: 12px; }
+        .db-endpoint { border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px 18px; display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; align-items: start; }
+        .db-endpoint-path { display: flex; align-items: center; gap: 10px; font-family: "JetBrains Mono", monospace; font-size: 13px; color: #111827; overflow-wrap: anywhere; }
+        .db-endpoint-verb { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 5px; font-family: "JetBrains Mono", monospace; flex-shrink: 0; }
+        .db-endpoint-verb.get { background: #dcfce7; color: #166534; }
+        .db-endpoint-verb.post { background: #dbeafe; color: #1e40af; }
+        .db-endpoint-desc { grid-column: 1; font-size: 13px; color: #6b7280; line-height: 1.5; }
+        .db-endpoint .db-key-btn { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+        .db-endpoint-note { font-size: 12.5px; color: #6b7280; margin-top: 14px; line-height: 1.6; }
+        .db-endpoint-note a { color: #0052cc; font-weight: 600; text-decoration: none; }
+        .db-usage-hint { font-size: 12px; color: #9ca3af; margin-top: 12px; line-height: 1.5; }
+
         .db-logout { font-size: 13px; color: #9ca3af; cursor: pointer; background: none; border: none; font-family: inherit; }
         .db-logout:hover { color: #ef4444; }
 
@@ -437,6 +481,8 @@ function DashboardContent() {
           .db-plans-grid { grid-template-columns: 1fr; }
           .db-wrap { padding: 24px 16px 60px; }
           .db-card-full { grid-column: 1; }
+          .db-endpoint { grid-template-columns: 1fr; }
+          .db-endpoint .db-key-btn { grid-column: 1; grid-row: auto; justify-self: start; }
         }
 
         .db-modal-overlay { position: fixed; inset: 0; background: rgba(17,24,39,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
@@ -594,7 +640,7 @@ function DashboardContent() {
               <>
                 <div className="db-usage-nums">
                   <div className="db-usage-used">{data.usage.used.toLocaleString()}</div>
-                  <div className="db-usage-limit">/ {data.usage.limit.toLocaleString()} queries</div>
+                  <div className="db-usage-limit">/ {data.usage.limit.toLocaleString()} lookups</div>
                 </div>
                 <div className="db-bar-track">
                   <div className={`db-bar-fill${usagePct > 80 ? " warn" : ""}`} style={{ width: `${usagePct}%` }} />
@@ -603,6 +649,7 @@ function DashboardContent() {
                   <span style={{ fontWeight: 700, color: usagePct > 80 ? "#ef4444" : "#0052cc" }}>{usagePct}% used</span>
                   <span>Resets {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
                 </div>
+                <div className="db-usage-hint">One lookup per single-domain request, or per domain found in a batch.</div>
               </>
             ) : <div style={{ color: "#9ca3af", fontSize: 14 }}>No active plan</div>}
           </div>
@@ -634,6 +681,31 @@ function DashboardContent() {
                 Manage billing &amp; invoices
               </Link>
             )}
+          </div>
+
+          {/* Endpoints */}
+          <div className="db-card db-card-full">
+            <div className="db-card-label">Endpoints</div>
+            <div className="db-endpoints">
+              {ENDPOINTS.map((e) => (
+                <div key={e.id} className="db-endpoint">
+                  <div className="db-endpoint-path">
+                    <span className={`db-endpoint-verb ${e.verb.toLowerCase()}`}>{e.verb}</span>
+                    <span>{e.path}</span>
+                  </div>
+                  <div className="db-endpoint-desc">{e.desc}</div>
+                  <button
+                    className={`db-key-btn${copiedSnippet === e.id ? " success" : ""}`}
+                    onClick={() => copySnippet(e.id, e.curl)}
+                  >
+                    {copiedSnippet === e.id ? "Copied!" : "Copy cURL"}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="db-endpoint-note">
+              Both endpoints use the key above and share your monthly quota. <Link href="/developers/docs#batch">Batch docs</Link> · <Link href="/developers/docs">Full reference</Link>
+            </div>
           </div>
 
           {/* Plan */}

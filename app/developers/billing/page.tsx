@@ -12,9 +12,9 @@ type PlanKey = "starter" | "growth" | "scale";
 
 const PLAN_ORDER: PlanKey[] = ["starter", "growth", "scale"];
 const PLAN_META: Record<PlanKey, { label: string; price: string; queries: string; rate: string }> = {
-  starter: { label: "Starter", price: planPrice("starter", { period: "/mo" }), queries: "1,000 queries/mo", rate: "10 req/min" },
-  growth: { label: "Growth", price: planPrice("growth", { period: "/mo" }), queries: "2,500 queries/mo", rate: "20 req/min" },
-  scale: { label: "Scale", price: planPrice("scale", { period: "/mo" }), queries: "10,000 queries/mo", rate: "60 req/min" },
+  starter: { label: "Starter", price: planPrice("starter", { period: "/mo" }), queries: "1,000 lookups/mo", rate: "10 req/min" },
+  growth: { label: "Growth", price: planPrice("growth", { period: "/mo" }), queries: "2,500 lookups/mo", rate: "20 req/min" },
+  scale: { label: "Scale", price: planPrice("scale", { period: "/mo" }), queries: "10,000 lookups/mo", rate: "60 req/min" },
 };
 
 interface Card {
