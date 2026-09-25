@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthSync } from "@/components/auth/auth-sync";
 import { AnalyticsTracker } from "@/components/analytics/analytics-tracker";
+import { Clarity } from "@/components/analytics/clarity";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -56,6 +57,7 @@ export default function RootLayout({
         {/* useSearchParams needs a boundary, or every static page opts out of prerendering. */}
         <Suspense fallback={null}>
           <AnalyticsTracker />
+          <Clarity />
         </Suspense>
         {children}
       </body>

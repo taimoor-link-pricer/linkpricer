@@ -223,11 +223,22 @@ export function markInternalTraffic(): void {
 
 /** For the cookie banner, once one is designed. */
 export function setAnalyticsConsent(granted: boolean): void {
+  // Clarity (components/analytics/clarity.tsx) takes the same signal.
+  const clarity = typeof window !== "undefined" ? (window as { clarity?: (...args: unknown[]) => void }).clarity : undefined;
+  clarity?.("consentv2", {
+    ad_Storage: "denied",
+    analytics_Storage: granted ? "granted" : "denied",
+  });
   void loadAnalytics().then(async (analytics) => {
     if (!analytics) return;
     const { setConsent } = await import("firebase/analytics");
     setConsent({ analytics_storage: granted ? "granted" : "denied" });
   });
+}
+
+/** True in a browser tagged as admin/internal — see markInternalTraffic(). */
+export function isInternalTraffic(): boolean {
+  return typeof window !== "undefined" && readInternalFlag();
 }
 
 /** Starts loading gtag.js without sending anything. */
