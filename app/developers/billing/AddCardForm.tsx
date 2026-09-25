@@ -32,6 +32,15 @@ function getStripe() {
   return stripePromise;
 }
 
+const FIELDSET_LABEL: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: "#6b7280",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  marginBottom: 8,
+};
+
 function CardFields({
   onDone,
   onCancel,
@@ -131,10 +140,15 @@ function CardFields({
         // confirm, so an incomplete address blocks submission with an inline
         // error. The server then moves them onto the Customer, which is what
         // Stripe actually prints on invoices.
-        <div style={{ marginBottom: 14 }}>
+        <div style={{ marginBottom: 18 }}>
+          <div style={FIELDSET_LABEL}>Billing address · printed on your invoices</div>
           <AddressElement options={{ mode: "billing" }} />
         </div>
       )}
+      {/* Without headings the two Stripe blocks read as one form, and the
+          name field at the top of the address gets mistaken for the card
+          number — observed in testing. */}
+      {collectBillingAddress && <div style={FIELDSET_LABEL}>Card details</div>}
       <PaymentElement
         options={{ layout: "tabs" }}
         onReady={() => setReady(true)}
