@@ -1,172 +1,178 @@
 /**
- * The public pricing endpoint, shared by every published version of it.
+ * The single-domain public pricing endpoint (v1):
+ * GET /api/v1/public/domains/{domain}/pricing.
  *
- * v1 and v2 answer the same question and differ only in how the answer is
- * spelled, so they are one pipeline with two shapers at the end rather than
- * two routes. That is not tidiness: v1 is a published contract with a live
- * integrator on it, and the only durable way to promise it will not drift is
- * to make it impossible for it to drift independently. Every fix to auth,
- * quota, domain resolution or the catalog query lands in both by construction,
- * and the response shapes are the one thing that is deliberately different.
+ * v1 is a published contract with live integrators on it. The batch endpoint
+ * (v2, lib/public-api/batch-handler.ts) returns this exact per-domain body for
+ * every domain in a batch — both build it with buildPricingBody() in
+ * lib/public-api/shape.ts, and share the plumbing in lib/public-api/common.ts
+ * — so a v2 result and a v1 response for the same domain cannot disagree.
  *
  * See lib/public-api/pricing.ts for the arithmetic, which is shared the same
  * way.
  */
 
 import { NextRequest, NextResponse, after } from "next/server";
-import { createHash } from "crypto";
-import { domainToASCII, domainToUnicode } from "url";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { getUsdRates } from "@/lib/currency";
-import {
-  ACCEPTED_NICHE_VALUES,
-  resolveNiche,
-  type RawOffer,
-} from "@/lib/public-api/pricing";
+import { ACCEPTED_NICHE_VALUES, resolveNiche } from "@/lib/public-api/pricing";
 import { buildPricingBody } from "@/lib/public-api/shape";
 
-// ─── helpers ───────────────────────────────────────────────────────────────
-
-function normalizeDomain(raw: string): string {
-  return raw
-    .toLowerCase()
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/\/$/, "");
-}
+import {
+  domainForms,
+  hashKey,
+  isValidHostname,
+  jsonError,
+  jsonOk,
+  monthWindow,
+  normalizeCountry,
+  normalizeDomain,
+  rateLimitHeaders,
+  secondsUntilNextMonthUtc,
+  toOffer,
+} from "@/lib/public-api/common";
 
 /**
- * Every spelling of one host that the catalogue might have stored it under.
+ * Offers, metrics and price freshness for one domain in one round trip.
+ * Pulled out of the route unchanged so the v2 parity check
+ * (scripts/verify-public-api-v2.mts) can run the exact query v1 serves.
  *
- * An internationalized domain has two equally valid wire forms — the unicode
- * one a person types ("lübeck.nu") and the punycode one most HTTP clients
- * silently convert it to ("xn--lbeck-kva.nu") — and `domains` contains BOTH as
- * separate rows, with separate offers. 1,042 sites are stored twice this way,
- * 987 of them with live offers, and on a 200-site sample 167 (83%) carried a
- * DIFFERENT cheapest price under the two spellings.
- *
- * So the price a customer got depended on which form their HTTP library
- * happened to send — the same defect as the case-variant duplicates this route
- * already pools over, in a second dimension. Matching every form and pooling
- * the offers makes the answer the same either way.
- *
- * Returns a de-duplicated list; for a plain ASCII domain that is just the one
- * value, so the common path is unchanged.
+ * A bound JS array is NOT a Postgres array in a Drizzle sql template —
+ * `= ANY(${array})` fails at runtime with "op ANY/ALL (array) requires
+ * array on right side". An explicit IN list of individually-bound values
+ * is the form that works and stays parameterised.
  */
-function domainForms(domain: string): string[] {
-  const forms = new Set<string>([domain]);
-  try {
-    const ascii = domainToASCII(domain);
-    if (ascii) forms.add(ascii.toLowerCase());
-  } catch { /* not a convertible host — the literal is all we have */ }
-  try {
-    const unicode = domainToUnicode(domain);
-    if (unicode) forms.add(unicode.toLowerCase());
-  } catch { /* as above */ }
-  return [...forms];
-}
+export async function fetchDomainCatalog(domain: string): Promise<{
+  domain_row: Record<string, unknown> | null;
+  offers: Record<string, unknown>[] | null;
+} | undefined> {
+  const forms = domainForms(domain);
+  const domainList = sql.join(forms.map((f) => sql`${f}`), sql`, `);
+  const result = await db.execute(sql`
+    WITH d AS (
+      -- Every domains row for this host, not one of them.
+      --
+      -- domains_domain_unique is case-SENSITIVE, so the catalog carries
+      -- 6,951 groups of rows that are the same site spelled differently
+      -- ("huliq.com" and "Huliq.com" are two rows, with two separate sets
+      -- of offers and two different DR values). A LIMIT 1 here returned
+      -- whichever row Postgres happened to hand back first — for
+      -- huliq.com that is either 22 offers at DR 58 or 3 offers at DR 0,
+      -- with nothing in the query to decide which, so the same request
+      -- could legitimately return either. Pricing has to be deterministic,
+      -- so offers are pooled across every matching row below.
+      SELECT id, domain, domain_rating, org_traffic, ref_domains, country_main_traffic
+      FROM domains
+      WHERE lower(domain) IN (${domainList})
+    ),
+    best_domain AS (
+      -- The row the metrics are read from. Duplicates are rarely equally
+      -- populated (the canonical row has the real DR/traffic and the
+      -- stray one is usually zeroed), so prefer the row that actually
+      -- knows something, and order fully so the choice never depends on
+      -- storage order.
+      SELECT * FROM d
+      ORDER BY
+        (domain_rating IS NOT NULL AND domain_rating > 0) DESC,
+        COALESCE(org_traffic, 0) DESC,
+        COALESCE(ref_domains, 0) DESC,
+        domain ASC
+      LIMIT 1
+    ),
+    offers AS (
+      SELECT * FROM (
+      -- DISTINCT ON collapses a marketplace back to ONE offer.
+      --
+      -- Pooling across every matching domains row is what makes a duplicated host
+      -- complete, but marketplace_offers is unique on (domain_id,
+      -- marketplace_name) — per row, not per host — so when the SAME
+      -- marketplace has scraped two spellings of one site it contributes
+      -- two rows. Those were both counted, which inflated offer_count and
+      -- dragged average_price toward a single source's second quote.
+      -- 1,463 hosts are affected and their two quotes genuinely differ
+      -- (abbynews.com: one marketplace at both $780 and $889).
+      --
+      -- The docs sell offer_count as "how many independent sources back
+      -- these figures", so counting one source twice makes that claim
+      -- false. Cheapest quote per source wins, which keeps this consistent
+      -- with how the headline price is chosen.
+      --
+      -- The same claim breaks a second way: three marketplaces are in the
+      -- catalogue under TWO names each, because they are scraped from both
+      -- their public site and their logged-in panel --
+      --
+      --   mistergoodlink.com / app.mistergoodlink.com   (38,174 shared domains)
+      --   unancor.com        / app.unancor.com
+      --   conexoo.com        / panel.conexoo.com
+      --
+      -- One company, counted as two independent sources on every domain
+      -- both names carry. MisterGoodLink alone inflates offer_count on
+      -- 38,174 domains, and they are an API trial partner who can
+      -- recognise their own listings. Stripping an app. or panel.
+      -- prefix collapses each pair to one source. It is deliberately a
+      -- narrow rule rather than "same registrable domain": no other
+      -- source in the catalogue of 57 carries either prefix alongside a
+      -- bare twin, so nothing else changes, and two genuinely different
+      -- marketplaces sharing a root domain cannot be merged by accident.
+      SELECT DISTINCT ON (regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''))
+        o.currency,
+        o.min_price, o.max_price,
+        o.gambling_min_price, o.gambling_max_price,
+        o.adult_min_price, o.adult_max_price,
+        o.cbd_min_price, o.cbd_max_price,
+        o.loan_min_price, o.loan_max_price,
+        o.dating_min_price, o.dating_max_price,
+        o.crypto_min_price, o.crypto_max_price,
+        o.trading_forex_min_price, o.trading_forex_max_price,
+        o.link_insertion_min_price, o.link_insertion_max_price,
+        COALESCE(m.trusted, false) AS trusted,
+        GREATEST(o.updated_at::timestamp, o.last_fetched_at) AS freshness
+      FROM marketplace_offers o
+      JOIN d ON d.id = o.domain_id
+      LEFT JOIN marketplaces m ON lower(m.name) = lower(o.marketplace_name)
+      WHERE o.available = true
+      ORDER BY regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''), o.min_price::float ASC NULLS LAST
+      ) mo
 
-/** A country name, or null — never the scraper's "-"/""/"n/a" placeholders. */
-function normalizeCountry(raw: string | null | undefined): string | null {
-  if (raw == null) return null;
-  const v = raw.trim();
-  if (!v || v === "-" || v === "--" || v.toLowerCase() === "n/a" || v.toLowerCase() === "unknown") return null;
-  return v;
-}
+      UNION ALL
 
-function hashKey(key: string): string {
-  return createHash("sha256").update(key).digest("hex");
-}
-
-// Per-key, per-plan responses: never storable by a shared cache, and never
-// reusable across callers. Applied to success and error alike so a 429 can't
-// be replayed from a proxy after the limit has reset either.
-const NO_STORE = { "Cache-Control": "private, no-store" } as const;
-
-// Standard rate-limit headers. Without them a client has no way to pace itself
-// except by walking into a 429 — it cannot see how much of its monthly quota
-// is left until the moment the quota is gone. The counters are already read by
-// the auth statement, so surfacing them costs nothing.
-function rateLimitHeaders(
-  monthLimit: number,
-  monthUsed: number | null,
-  minuteLimit: number,
-  minuteUsed: number | null,
-  resetEpoch: number
-): Record<string, string> {
-  const h: Record<string, string> = {
-    "X-RateLimit-Limit": String(monthLimit),
-    "X-RateLimit-Reset": String(resetEpoch),
-    "X-RateLimit-Limit-Minute": String(minuteLimit),
-  };
-  if (monthUsed != null) h["X-RateLimit-Remaining"] = String(Math.max(0, monthLimit - monthUsed));
-  if (minuteUsed != null) h["X-RateLimit-Remaining-Minute"] = String(Math.max(0, minuteLimit - minuteUsed));
-  return h;
-}
-
-function jsonOk(body: unknown, extra?: Record<string, string>) {
-  return NextResponse.json(body, { headers: { ...NO_STORE, ...extra } });
-}
-
-function jsonError(code: string, message: string, status: number, extra?: Record<string, string>) {
-  return NextResponse.json(
-    { error: code, message, status },
-    { status, headers: { ...NO_STORE, ...extra } }
-  );
-}
-
-// The monthly quota resets on the 1st at 00:00 UTC, which is what
-// /developers/docs promises — so Retry-After has to be the time to *that*
-// instant, not a flat guess.
-function secondsUntilNextMonthUtc(now = new Date()): number {
-  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0);
-  return Math.max(1, Math.round((next - now.getTime()) / 1000));
-}
-
-function monthWindow(now = new Date()): string {
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-// Every price column either offer table can carry, read into RawOffer.prices.
-// Kept as one list so the SELECT, the row mapper and lib/public-api/pricing's
-// NICHES map cannot drift apart.
-const PRICE_COLUMNS = [
-  "min_price",
-  "max_price",
-  "gambling_min_price",
-  "gambling_max_price",
-  "adult_min_price",
-  "adult_max_price",
-  "cbd_min_price",
-  "cbd_max_price",
-  "loan_min_price",
-  "loan_max_price",
-  "dating_min_price",
-  "dating_max_price",
-  "crypto_min_price",
-  "crypto_max_price",
-  "trading_forex_min_price",
-  "trading_forex_max_price",
-  "link_insertion_min_price",
-  "link_insertion_max_price",
-] as const;
-
-function toOffer(row: Record<string, unknown>): RawOffer {
-  const prices: Record<string, number | null> = {};
-  for (const col of PRICE_COLUMNS) {
-    const v = row[col];
-    prices[col] = v == null ? null : Number(v);
-  }
-  return {
-    currency: (row.currency as string) ?? "USD",
-    prices,
-    trusted: row.trusted === true,
-    // Carried per offer so v2 can report freshness per niche. v1 ignores it
-    // and keeps using the domain-wide MAX computed in SQL.
-    freshness: (row.freshness as string | null) ?? null,
-  };
+      SELECT
+        s.currency,
+        s.min_price, s.max_price,
+        s.gambling_min_price, s.gambling_max_price,
+        s.adult_min_price, s.adult_max_price,
+        s.cbd_min_price, s.cbd_max_price,
+        s.loan_min_price, s.loan_max_price,
+        s.dating_min_price, s.dating_max_price,
+        s.crypto_min_price, s.crypto_max_price,
+        s.trading_forex_min_price, s.trading_forex_max_price,
+        s.link_insertion_min_price, s.link_insertion_max_price,
+        -- A vendor is not a marketplace, so there is no marketplaces row
+        -- to carry a trust decision. Vendor offers are therefore never
+        -- "recommended" until trust is modelled for them explicitly.
+        false AS trusted,
+        s.updated_at AS freshness
+      FROM supplier_offers s
+      -- Matched on the normalized host directly rather than joined to the
+      -- domain CTE: it can hold several rows for the same host (see its
+      -- comment above), and
+      -- joining would multiply every vendor offer by that row count,
+      -- double-counting it in the average and the offer count.
+      WHERE lower(s.domain) IN (${domainList})
+        AND s.status = 'active' AND s.is_active = true
+    )
+    SELECT
+      (SELECT row_to_json(best_domain) FROM best_domain)          AS domain_row,
+      -- Each offer carries its own freshness column; the response dates
+      -- every niche from the offers that actually priced it. There is
+      -- deliberately no domain-wide MAX here any more -- it overstated
+      -- freshness on 55% of priced niches, by up to 186 days.
+      (SELECT json_agg(offers) FROM offers)                       AS offers
+  `);
+  return result.rows[0] as
+    | { domain_row: Record<string, unknown> | null; offers: Record<string, unknown>[] | null }
+    | undefined;
 }
 
 // ─── route ─────────────────────────────────────────────────────────────────
@@ -360,9 +366,7 @@ export async function handlePricingRequest(
   // could burn a paid month on errors that were our fault, not theirs.
   // Letters (including non-ASCII, for internationalized domains), digits,
   // dot and hyphen are the whole legal alphabet here.
-  const HOSTNAME_SAFE = /^[\p{L}\p{N}.-]+$/u;
-
-  if (!domain || domain.length < 3 || domain.length > 253 || !domain.includes(".") || !HOSTNAME_SAFE.test(domain)) {
+  if (!isValidHostname(domain)) {
     httpStatus = 422;
     await refundQuota();
     return finish(jsonError("invalid_domain", "Domain parameter is missing or malformed.", 422));
@@ -409,144 +413,7 @@ export async function handlePricingRequest(
     //
     //    c) The trusted flag comes along per offer, so recommended_price can
     //       be computed without a second lookup.
-    // A bound JS array is NOT a Postgres array in a Drizzle sql template —
-    // `= ANY(${array})` fails at runtime with "op ANY/ALL (array) requires
-    // array on right side". An explicit IN list of individually-bound values
-    // is the form that works and stays parameterised.
-    const forms = domainForms(domain);
-    const domainList = sql.join(forms.map((f) => sql`${f}`), sql`, `);
-
-    const [rates, result] = await Promise.all([
-      getUsdRates(),
-      db.execute(sql`
-        WITH d AS (
-          -- Every domains row for this host, not one of them.
-          --
-          -- domains_domain_unique is case-SENSITIVE, so the catalog carries
-          -- 6,951 groups of rows that are the same site spelled differently
-          -- ("huliq.com" and "Huliq.com" are two rows, with two separate sets
-          -- of offers and two different DR values). A LIMIT 1 here returned
-          -- whichever row Postgres happened to hand back first — for
-          -- huliq.com that is either 22 offers at DR 58 or 3 offers at DR 0,
-          -- with nothing in the query to decide which, so the same request
-          -- could legitimately return either. Pricing has to be deterministic,
-          -- so offers are pooled across every matching row below.
-          SELECT id, domain, domain_rating, org_traffic, ref_domains, country_main_traffic
-          FROM domains
-          WHERE lower(domain) IN (${domainList})
-        ),
-        best_domain AS (
-          -- The row the metrics are read from. Duplicates are rarely equally
-          -- populated (the canonical row has the real DR/traffic and the
-          -- stray one is usually zeroed), so prefer the row that actually
-          -- knows something, and order fully so the choice never depends on
-          -- storage order.
-          SELECT * FROM d
-          ORDER BY
-            (domain_rating IS NOT NULL AND domain_rating > 0) DESC,
-            COALESCE(org_traffic, 0) DESC,
-            COALESCE(ref_domains, 0) DESC,
-            domain ASC
-          LIMIT 1
-        ),
-        offers AS (
-          SELECT * FROM (
-          -- DISTINCT ON collapses a marketplace back to ONE offer.
-          --
-          -- Pooling across every matching domains row is what makes a duplicated host
-          -- complete, but marketplace_offers is unique on (domain_id,
-          -- marketplace_name) — per row, not per host — so when the SAME
-          -- marketplace has scraped two spellings of one site it contributes
-          -- two rows. Those were both counted, which inflated offer_count and
-          -- dragged average_price toward a single source's second quote.
-          -- 1,463 hosts are affected and their two quotes genuinely differ
-          -- (abbynews.com: one marketplace at both $780 and $889).
-          --
-          -- The docs sell offer_count as "how many independent sources back
-          -- these figures", so counting one source twice makes that claim
-          -- false. Cheapest quote per source wins, which keeps this consistent
-          -- with how the headline price is chosen.
-          --
-          -- The same claim breaks a second way: three marketplaces are in the
-          -- catalogue under TWO names each, because they are scraped from both
-          -- their public site and their logged-in panel --
-          --
-          --   mistergoodlink.com / app.mistergoodlink.com   (38,174 shared domains)
-          --   unancor.com        / app.unancor.com
-          --   conexoo.com        / panel.conexoo.com
-          --
-          -- One company, counted as two independent sources on every domain
-          -- both names carry. MisterGoodLink alone inflates offer_count on
-          -- 38,174 domains, and they are an API trial partner who can
-          -- recognise their own listings. Stripping an app. or panel.
-          -- prefix collapses each pair to one source. It is deliberately a
-          -- narrow rule rather than "same registrable domain": no other
-          -- source in the catalogue of 57 carries either prefix alongside a
-          -- bare twin, so nothing else changes, and two genuinely different
-          -- marketplaces sharing a root domain cannot be merged by accident.
-          SELECT DISTINCT ON (regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''))
-            o.currency,
-            o.min_price, o.max_price,
-            o.gambling_min_price, o.gambling_max_price,
-            o.adult_min_price, o.adult_max_price,
-            o.cbd_min_price, o.cbd_max_price,
-            o.loan_min_price, o.loan_max_price,
-            o.dating_min_price, o.dating_max_price,
-            o.crypto_min_price, o.crypto_max_price,
-            o.trading_forex_min_price, o.trading_forex_max_price,
-            o.link_insertion_min_price, o.link_insertion_max_price,
-            COALESCE(m.trusted, false) AS trusted,
-            GREATEST(o.updated_at::timestamp, o.last_fetched_at) AS freshness
-          FROM marketplace_offers o
-          JOIN d ON d.id = o.domain_id
-          LEFT JOIN marketplaces m ON lower(m.name) = lower(o.marketplace_name)
-          WHERE o.available = true
-          ORDER BY regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''), o.min_price::float ASC NULLS LAST
-          ) mo
-
-          UNION ALL
-
-          SELECT
-            s.currency,
-            s.min_price, s.max_price,
-            s.gambling_min_price, s.gambling_max_price,
-            s.adult_min_price, s.adult_max_price,
-            s.cbd_min_price, s.cbd_max_price,
-            s.loan_min_price, s.loan_max_price,
-            s.dating_min_price, s.dating_max_price,
-            s.crypto_min_price, s.crypto_max_price,
-            s.trading_forex_min_price, s.trading_forex_max_price,
-            s.link_insertion_min_price, s.link_insertion_max_price,
-            -- A vendor is not a marketplace, so there is no marketplaces row
-            -- to carry a trust decision. Vendor offers are therefore never
-            -- "recommended" until trust is modelled for them explicitly.
-            false AS trusted,
-            s.updated_at AS freshness
-          FROM supplier_offers s
-          -- Matched on the normalized host directly rather than joined to the
-          -- domain CTE: it can hold several rows for the same host (see its
-          -- comment above), and
-          -- joining would multiply every vendor offer by that row count,
-          -- double-counting it in the average and the offer count.
-          WHERE lower(s.domain) IN (${domainList})
-            AND s.status = 'active' AND s.is_active = true
-        )
-        SELECT
-          (SELECT row_to_json(best_domain) FROM best_domain)          AS domain_row,
-          -- Each offer carries its own freshness column; the response dates
-          -- every niche from the offers that actually priced it. There is
-          -- deliberately no domain-wide MAX here any more -- it overstated
-          -- freshness on 55% of priced niches, by up to 186 days.
-          (SELECT json_agg(offers) FROM offers)                       AS offers
-      `),
-    ]);
-
-    const row = result.rows[0] as
-      | {
-          domain_row: Record<string, unknown> | null;
-          offers: Record<string, unknown>[] | null;
-        }
-      | undefined;
+    const [rates, row] = await Promise.all([getUsdRates(), fetchDomainCatalog(domain)]);
 
     const domainRow = row?.domain_row ?? null;
     const offers = (row?.offers ?? []).map(toOffer);

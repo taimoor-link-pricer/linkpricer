@@ -6,7 +6,8 @@ import { planPrice } from "@/lib/pricing/plan-display";
 const SECTIONS = [
   { id: "overview", label: "Overview" },
   { id: "authentication", label: "Authentication" },
-  { id: "endpoint", label: "Endpoint" },
+  { id: "endpoint", label: "Endpoints" },
+  { id: "batch", label: "Batch (v2)" },
   { id: "request", label: "Request" },
   { id: "response", label: "Response" },
   { id: "errors", label: "Errors" },
@@ -22,8 +23,103 @@ const ERROR_CODES = [
   { code: "422", name: "invalid_niche", desc: "The niche value is not one we price. Does not consume quota." },
   { code: "429", name: "rate_limit_exceeded", desc: "Per-minute burst limit hit. Retry-After is about 60 seconds." },
   { code: "429", name: "quota_exceeded", desc: "Monthly quota spent. Retry-After counts down to the 1st, 00:00 UTC." },
-  { code: "500", name: "internal_error", desc: "Error on our side. Retry with exponential backoff." },
+  { code: "500", name: "internal_error", desc: "Error on our side. Retry with exponential backoff. On the batch endpoint no lookups are charged." },
 ];
+
+const BATCH_ERROR_CODES = [
+  { code: "400", name: "invalid_request", desc: "The body is not an object with a domains array." },
+  { code: "400", name: "invalid_json", desc: "The body is not valid JSON." },
+  { code: "405", name: "method_not_allowed", desc: "Anything other than POST." },
+  { code: "413", name: "payload_too_large", desc: "The body is larger than 128 KB." },
+  { code: "422", name: "empty_batch", desc: "domains is an empty array." },
+  { code: "422", name: "too_many_domains", desc: "More than 200 entries. Split the list into several requests." },
+  { code: "422", name: "invalid_niche", desc: "The niche value is not one we price." },
+  { code: "422", name: "no_valid_domains", desc: "Every entry was malformed. The body carries a results array saying why for each one." },
+  { code: "429", name: "quota_exceeded", desc: "The batch needs more lookups than remain this month. The message names both numbers. Nothing is charged; send fewer distinct domains or wait for the reset." },
+];
+
+const BATCH_REQUEST_EXAMPLE = `POST /api/v2/public/domains/pricing
+x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx
+Content-Type: application/json
+
+{
+  "domains": ["techblog.com", "https://www.newsdaily.io/about", "nosuchsite.org", "not a domain"],
+  "niche": "gambling"
+}`;
+
+const BATCH_RESPONSE_EXAMPLE = `{
+  "api_version": "2",
+  "niche": "gambling",
+  "summary": { "requested": 4, "unique_domains": 3, "ok": 2, "not_found": 1, "invalid": 1 },
+  "usage": {
+    "charged": 2,
+    "monthly_limit": 10000,
+    "monthly_remaining": 9412,
+    "resets_at": "2026-10-01T00:00:00.000Z"
+  },
+  "results": [
+    {
+      "input": "techblog.com",
+      "domain": "techblog.com",
+      "status": "ok",
+      "error": null,
+      "data": { "domain": "techblog.com", "found": true, "currency": "USD", "pricing": { "gambling": { … } }, … }
+    },
+    {
+      "input": "https://www.newsdaily.io/about",
+      "domain": "newsdaily.io",
+      "status": "ok",
+      "error": null,
+      "data": { … }
+    },
+    {
+      "input": "nosuchsite.org",
+      "domain": "nosuchsite.org",
+      "status": "not_found",
+      "error": { "code": "domain_not_found", "message": "No data found for this domain." },
+      "data": null
+    },
+    {
+      "input": "not a domain",
+      "domain": null,
+      "status": "invalid",
+      "error": { "code": "invalid_domain", "message": "Not a valid domain. Send a bare host such as example.com." },
+      "data": null
+    }
+  ]
+}`;
+
+const BATCH_CURL_EXAMPLE = `curl -X POST "https://www.linkpricer.ai/api/v2/public/domains/pricing" \\
+  -H "x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"domains": ["techblog.com", "newsdaily.io"], "niche": "gambling"}'`;
+
+const BATCH_JS_EXAMPLE = `const res = await fetch("https://www.linkpricer.ai/api/v2/public/domains/pricing", {
+  method: "POST",
+  headers: {
+    "x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ domains: ["techblog.com", "newsdaily.io"], niche: "gambling" }),
+});
+const batch = await res.json();
+for (const r of batch.results) {
+  if (r.status === "ok") console.log(r.domain, r.data.pricing.gambling?.linkpricer.lowest);
+}`;
+
+const BATCH_PYTHON_EXAMPLE = `import requests
+
+domains = open("domains.txt").read().split()
+for i in range(0, len(domains), 200):          # 200 per request
+    res = requests.post(
+        "https://www.linkpricer.ai/api/v2/public/domains/pricing",
+        headers={"x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"},
+        json={"domains": domains[i:i + 200], "niche": "gambling"},
+    )
+    res.raise_for_status()
+    for r in res.json()["results"]:
+        if r["status"] == "ok":
+            print(r["domain"], r["data"]["pricing"].get("gambling", {}).get("linkpricer", {}).get("lowest"))`;
 
 const RATE_TIERS = [
   { tier: "Starter", price: planPrice("starter", { period: "/mo" }), monthly: "1,000",  perMin: "10" },
@@ -91,10 +187,12 @@ data = response.json()
 print(data["pricing"]["standard"]["linkpricer"]["lowest"])  # 299 — what you pay us`;
 
 type Lang = "curl" | "javascript" | "python";
+type Mode = "single" | "batch";
 
 export default function DocsPage() {
   const [activeSection, setActiveSection] = useState("overview");
   const [lang, setLang] = useState<Lang>("curl");
+  const [mode, setMode] = useState<Mode>("single");
   const [copied, setCopied] = useState<string | null>(null);
 
   function copy(text: string, key: string) {
@@ -103,10 +201,9 @@ export default function DocsPage() {
     setTimeout(() => setCopied(null), 2000);
   }
 
-  const codeMap: Record<Lang, string> = {
-    curl: CURL_EXAMPLE,
-    javascript: JS_EXAMPLE,
-    python: PYTHON_EXAMPLE,
+  const codeMap: Record<Mode, Record<Lang, string>> = {
+    single: { curl: CURL_EXAMPLE, javascript: JS_EXAMPLE, python: PYTHON_EXAMPLE },
+    batch: { curl: BATCH_CURL_EXAMPLE, javascript: BATCH_JS_EXAMPLE, python: BATCH_PYTHON_EXAMPLE },
   };
 
   return (
@@ -118,7 +215,7 @@ export default function DocsPage() {
         .docs-sidebar-link { display: block; padding: 8px 24px; font-size: 13.5px; color: #4b5563; text-decoration: none; transition: all 0.1s; cursor: pointer; border-left: 3px solid transparent; }
         .docs-sidebar-link:hover { color: #0052cc; background: #f0f7ff; }
         .docs-sidebar-link.active { color: #0052cc; font-weight: 600; border-left-color: #0052cc; background: #f0f7ff; }
-        .docs-content { padding: 48px 56px; max-width: 800px; }
+        .docs-content { padding: 48px 56px; max-width: 800px; min-width: 0; }
         .docs-section { margin-bottom: 72px; scroll-margin-top: 80px; }
         .docs-h2 { font-size: 28px; font-weight: 800; color: #111827; margin: 0 0 16px; letter-spacing: -0.5px; padding-bottom: 16px; border-bottom: 1px solid #e5e7eb; }
         .docs-p { font-size: 14.5px; color: #374151; line-height: 1.8; margin: 0 0 16px; }
@@ -135,6 +232,7 @@ export default function DocsPage() {
         .docs-table tr:hover td { background: #f9fafb; }
         .docs-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; font-family: monospace; }
         .docs-badge-get { background: #dcfce7; color: #166534; }
+        .docs-badge-post { background: #dbeafe; color: #1e40af; }
         .docs-badge-401 { background: #fef2f2; color: #991b1b; }
         .docs-badge-404 { background: #fef3c7; color: #92400e; }
         .docs-badge-429 { background: #fde68a; color: #92400e; }
@@ -148,6 +246,9 @@ export default function DocsPage() {
         .docs-callout strong { font-weight: 700; }
         @media (max-width: 900px) {
           .docs-wrap { grid-template-columns: 1fr; }
+          .docs-table { display: block; overflow-x: auto; }
+          .docs-endpoint-box { flex-wrap: wrap; font-size: 13px; overflow-wrap: anywhere; }
+          .docs-inline-code { overflow-wrap: anywhere; }
           .docs-sidebar { display: none; }
           .docs-content { padding: 32px 20px; }
         }
@@ -184,7 +285,11 @@ export default function DocsPage() {
               The API is a simple REST interface. All responses are JSON. Authentication uses an API key passed in a request header.
             </p>
             <div className="docs-callout">
-              <strong>Base URL:</strong> <code className="docs-inline-code">https://www.linkpricer.ai/api/v1/public</code>
+              <strong>Base URL:</strong> <code className="docs-inline-code">https://www.linkpricer.ai/api</code>
+              <br />
+              <strong>Single domain:</strong> <code className="docs-inline-code">GET /v1/public/domains/{"{domain}"}/pricing</code>
+              <br />
+              <strong>Batch, up to 200 domains:</strong> <code className="docs-inline-code">POST /v2/public/domains/pricing</code>
             </div>
           </section>
 
@@ -208,14 +313,129 @@ export default function DocsPage() {
           {/* Endpoint */}
           <section className="docs-section" id="endpoint">
             <h2 className="docs-h2">Endpoint</h2>
-            <p className="docs-p">There is currently one endpoint available:</p>
+            <p className="docs-p">There are two endpoints. Both return the same pricing body for a domain; the batch endpoint returns it for up to 200 domains at a time.</p>
             <div className="docs-endpoint-box">
               <span className="docs-badge docs-badge-get">GET</span>
               <span>/api/v1/public/domains/<strong>{"{domain}"}</strong>/pricing</span>
             </div>
             <p className="docs-p">
-              Returns the lowest available price and domain metrics for the given domain. The <code className="docs-inline-code">{"{domain}"}</code> parameter should be the bare domain without protocol — e.g. <code className="docs-inline-code">techblog.com</code>, not <code className="docs-inline-code">https://techblog.com</code>.
+              Returns pricing and domain metrics for one domain. The <code className="docs-inline-code">{"{domain}"}</code> parameter should be the bare domain without protocol — e.g. <code className="docs-inline-code">techblog.com</code>, not <code className="docs-inline-code">https://techblog.com</code>.
             </p>
+            <div className="docs-endpoint-box">
+              <span className="docs-badge docs-badge-post">POST</span>
+              <span>/api/v2/public/domains/pricing</span>
+            </div>
+            <p className="docs-p">Prices up to 200 domains in one request. See <a href="#batch" style={{ color: "#0052cc", fontWeight: 600, textDecoration: "none" }}>Batch (v2)</a>.</p>
+            <p className="docs-p">The Request, Response and Errors sections below describe the single-domain endpoint. Everything in Response applies to each batch result too.</p>
+          </section>
+
+          {/* Batch */}
+          <section className="docs-section" id="batch">
+            <h2 className="docs-h2">Batch (v2)</h2>
+            <p className="docs-p">
+              Price up to <strong>200 domains in one request</strong> — the same limit as the Linkpricer dashboard&apos;s Analyze page. Each domain comes back with exactly the body the single-domain endpoint returns for it, so code that already reads a v1 response reads a batch result unchanged.
+            </p>
+            <div className="docs-endpoint-box">
+              <span className="docs-badge docs-badge-post">POST</span>
+              <span>/api/v2/public/domains/pricing</span>
+            </div>
+
+            <h3 className="docs-h3">Request body</h3>
+            <table className="docs-table">
+              <thead>
+                <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code className="docs-inline-code">domains</code></td>
+                  <td>string[]</td>
+                  <td>Yes</td>
+                  <td>
+                    1 to 200 entries. Pasted URLs are fine: the protocol, a leading <code className="docs-inline-code">www.</code> and any path, query or fragment are stripped, so <code className="docs-inline-code">https://www.example.com/blog?x=1</code> is looked up as <code className="docs-inline-code">example.com</code>. Duplicates are allowed; each gets its own result but is looked up and charged once. The 200 limit counts entries as sent, before duplicates are removed.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code className="docs-inline-code">niche</code></td>
+                  <td>string</td>
+                  <td>No</td>
+                  <td>Applies to every domain in the batch. Same values and synonyms as the single-domain <code className="docs-inline-code">niche</code> parameter; omitted, null or blank means every niche.</td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="docs-code-block">
+              <button className={`docs-copy-btn${copied === "batch-req" ? " copied" : ""}`} onClick={() => copy(BATCH_REQUEST_EXAMPLE, "batch-req")}>
+                {copied === "batch-req" ? "Copied!" : "Copy"}
+              </button>
+              <pre>{BATCH_REQUEST_EXAMPLE}</pre>
+            </div>
+
+            <h3 className="docs-h3">Response</h3>
+            <p className="docs-p">
+              HTTP <code className="docs-inline-code">200</code> whenever at least one entry was a valid domain — even if some were not found or malformed. <code className="docs-inline-code">results[i]</code> always answers <code className="docs-inline-code">domains[i]</code>, in the order you sent them.
+            </p>
+            <div className="docs-code-block">
+              <button className={`docs-copy-btn${copied === "batch-resp" ? " copied" : ""}`} onClick={() => copy(BATCH_RESPONSE_EXAMPLE, "batch-resp")}>
+                {copied === "batch-resp" ? "Copied!" : "Copy"}
+              </button>
+              <pre>{BATCH_RESPONSE_EXAMPLE}</pre>
+            </div>
+            <table className="docs-table">
+              <thead>
+                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                {[
+                  ["api_version", "string", "Always \"2\"."],
+                  ["niche", "string | null", "The niche every result was filtered to, as its canonical id (a synonym you sent is resolved). null for all niches."],
+                  ["summary.requested", "number", "Entries you sent."],
+                  ["summary.unique_domains", "number", "Distinct valid domains looked up."],
+                  ["summary.ok / not_found / invalid", "number", "Results per status, counted per entry (duplicates included)."],
+                  ["usage.charged", "number", "Lookups this request took from your monthly quota — one per distinct domain found."],
+                  ["usage.monthly_limit", "number", "Your monthly lookup quota."],
+                  ["usage.monthly_remaining", "number", "Lookups left this month after this request."],
+                  ["usage.resets_at", "string", "When the quota resets (the 1st, 00:00 UTC), ISO 8601."],
+                  ["results[].input", "string | null", "The entry exactly as you sent it. null if it was not a string."],
+                  ["results[].domain", "string | null", "The normalized domain that was looked up. null when the entry was invalid."],
+                  ["results[].status", "string", "\"ok\", \"not_found\" (not in our catalog) or \"invalid\" (malformed entry)."],
+                  ["results[].error", "object | null", "{ code, message } when status is not ok, otherwise null."],
+                  ["results[].data", "object | null", "When status is ok: the single-domain response body — every field in Response above. Otherwise null. As with v1, data.found is false when the domain is catalogued but nothing is priced for the niche you asked for."],
+                ].map(([field, type, desc]) => (
+                  <tr key={field}>
+                    <td><code className="docs-inline-code">{field}</code></td>
+                    <td style={{ color: "#6b7280", fontFamily: "monospace", fontSize: 12 }}>{type}</td>
+                    <td>{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <h3 className="docs-h3">How a batch is metered</h3>
+            <div className="docs-callout">
+              <strong>One lookup per distinct domain found.</strong> Domains not in our catalog, malformed entries and duplicates cost nothing, and a request rejected outright (400, 413, 422) costs nothing. On a <code className="docs-inline-code">500</code> nothing is charged.
+            </div>
+            <p className="docs-p">
+              A batch must fit your remaining monthly quota as a whole: its distinct valid domains are reserved when the request arrives, and the ones we do not have are handed back when it completes. If they do not all fit, the request is refused with <code className="docs-inline-code">429 quota_exceeded</code>, the message says how many lookups remain, and nothing is charged — you never get a half-priced list. The per-minute limit counts requests, so one batch is one request against it however many domains it holds.
+            </p>
+            <p className="docs-p">
+              Responses carry the same <code className="docs-inline-code">X-RateLimit-*</code> headers as v1, reflecting the quota after this request, plus <code className="docs-inline-code">X-Lookups-Charged</code>.
+            </p>
+
+            <h3 className="docs-h3">Batch errors</h3>
+            <p className="docs-p">Request-level errors use the same <code className="docs-inline-code">{"{ error, message, status }"}</code> envelope. In addition to <code className="docs-inline-code">missing_api_key</code>, <code className="docs-inline-code">invalid_api_key</code>, <code className="docs-inline-code">rate_limit_exceeded</code> and <code className="docs-inline-code">internal_error</code>:</p>
+            <table className="docs-table">
+              <thead>
+                <tr><th>Status</th><th>Error</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                {BATCH_ERROR_CODES.map((e) => (
+                  <tr key={e.name}>
+                    <td><span className={`docs-badge docs-badge-${e.code === "429" ? "429" : "404"}`}>{e.code}</span></td>
+                    <td><code className="docs-inline-code">{e.name}</code></td>
+                    <td>{e.desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </section>
 
           {/* Request */}
@@ -465,14 +685,14 @@ export default function DocsPage() {
                   <tr key={r.tier}>
                     <td style={{ fontWeight: 600 }}>{r.tier}</td>
                     <td>{r.price}</td>
-                    <td>{r.monthly} queries</td>
+                    <td>{r.monthly} lookups</td>
                     <td>{r.perMin} req/min</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div className="docs-callout">
-              Monthly quotas reset on the 1st of each calendar month (UTC). Requests beyond your monthly quota return a <code className="docs-inline-code">429</code> until the next reset.
+              Monthly quotas reset on the 1st of each calendar month (UTC). A lookup is one single-domain request, or one distinct domain found in a batch. Requests beyond your monthly quota return a <code className="docs-inline-code">429</code> until the next reset.
             </div>
           </section>
 
@@ -480,6 +700,18 @@ export default function DocsPage() {
           <section className="docs-section" id="examples">
             <h2 className="docs-h2">Code Examples</h2>
             <p className="docs-p">A complete request in your language of choice:</p>
+            <div className="docs-lang-tabs" style={{ marginBottom: 12 }}>
+              {(["single", "batch"] as Mode[]).map((m) => (
+                <div
+                  key={m}
+                  className={`docs-lang-tab${mode === m ? " active" : ""}`}
+                  style={{ borderRadius: 6, borderBottom: "1px solid #e5e7eb" }}
+                  onClick={() => setMode(m)}
+                >
+                  {m === "single" ? "Single domain (v1)" : "Batch (v2)"}
+                </div>
+              ))}
+            </div>
             <div className="docs-lang-tabs">
               {(["curl", "javascript", "python"] as Lang[]).map((l) => (
                 <div key={l} className={`docs-lang-tab${lang === l ? " active" : ""}`} onClick={() => setLang(l)}>
@@ -488,10 +720,10 @@ export default function DocsPage() {
               ))}
             </div>
             <div className="docs-code-block" style={{ borderRadius: "0 10px 10px 10px" }}>
-              <button className={`docs-copy-btn${copied === "example" ? " copied" : ""}`} onClick={() => copy(codeMap[lang], "example")}>
+              <button className={`docs-copy-btn${copied === "example" ? " copied" : ""}`} onClick={() => copy(codeMap[mode][lang], "example")}>
                 {copied === "example" ? "Copied!" : "Copy"}
               </button>
-              <pre>{codeMap[lang]}</pre>
+              <pre>{codeMap[mode][lang]}</pre>
             </div>
           </section>
 
