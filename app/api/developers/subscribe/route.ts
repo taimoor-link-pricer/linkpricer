@@ -7,6 +7,7 @@ import { stripe, PLANS, type PlanKey } from "@/lib/stripe";
 import { planLimits, priceIdForPlan, isEntitled } from "@/lib/billing";
 import { issueOrResizeKey } from "@/lib/api-keys";
 import { BillingError, billingContextWithCustomer, handle, NO_STORE } from "@/lib/billing-session";
+import { assertOwnedCard } from "@/lib/billing-cards";
 
 /**
  * Starts a subscription without leaving the site.
@@ -56,9 +57,35 @@ export async function POST(req: NextRequest) {
     // and every renewal after it — is charged against. It is already attached
     // to the customer by the SetupIntent; this makes it the default so the
     // renewal invoice has something to charge without asking again.
+    //
+    // The same update also moves the billing name and address the customer
+    // just typed (collected by the Address Element next to the card, so they
+    // arrive on the payment method's billing_details) onto the Customer.
+    // Stripe prints the CUSTOMER's address on invoices, never the card's, so
+    // without this every customer who subscribed here got address-less
+    // invoices -- and it has to happen before the subscription is created,
+    // because the first invoice is finalized during subscriptions.create.
     if (paymentMethodId) {
+      const pm = await assertOwnedCard(paymentMethodId, ctx.customerId);
+      const billing = pm.billing_details;
+      const hasAddress = !!(billing?.address?.line1 && billing.address.country);
       await stripe.customers.update(ctx.customerId, {
         invoice_settings: { default_payment_method: paymentMethodId },
+        ...(hasAddress
+          ? {
+              // Empty strings, not undefined: Stripe merges address fields, and
+              // undefined would keep a stale line2/state from an older address.
+              name: billing.name ?? "",
+              address: {
+                line1: billing.address!.line1 ?? "",
+                line2: billing.address!.line2 ?? "",
+                city: billing.address!.city ?? "",
+                state: billing.address!.state ?? "",
+                postal_code: billing.address!.postal_code ?? "",
+                country: billing.address!.country ?? "",
+              },
+            }
+          : {}),
       });
     }
 

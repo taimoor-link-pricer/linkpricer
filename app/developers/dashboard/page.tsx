@@ -608,6 +608,7 @@ function DashboardContent() {
                     setPaySecret(null);
                   }}
                   submitLabel={{ idle: "Subscribe", busy: "Processing…" }}
+                  collectBillingAddress
                 />
               </div>
             ) : (

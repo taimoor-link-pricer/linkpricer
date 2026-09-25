@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
+import { AddressElement, Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
 
 // The instance type handed to onDone — distinct from the module's own `Stripe`
@@ -36,6 +36,7 @@ function CardFields({
   onDone,
   onCancel,
   submitLabel,
+  collectBillingAddress,
 }: {
   // The live Stripe instance is handed back alongside the payment method
   // because it is only obtainable inside this Elements provider. A caller that
@@ -46,6 +47,7 @@ function CardFields({
   onDone: (paymentMethodId: string | null, stripe: StripeJs) => Promise<void | string> | void | string;
   onCancel: () => void;
   submitLabel?: { idle: string; busy: string };
+  collectBillingAddress?: boolean;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -122,6 +124,17 @@ function CardFields({
 
   return (
     <form onSubmit={submit}>
+      {collectBillingAddress && (
+        // Billing mode, alongside the Payment Element: Stripe copies the name
+        // and address onto the payment method's billing_details when the
+        // setup is confirmed, and validates the fields as part of that same
+        // confirm, so an incomplete address blocks submission with an inline
+        // error. The server then moves them onto the Customer, which is what
+        // Stripe actually prints on invoices.
+        <div style={{ marginBottom: 14 }}>
+          <AddressElement options={{ mode: "billing" }} />
+        </div>
+      )}
       <PaymentElement
         options={{ layout: "tabs" }}
         onReady={() => setReady(true)}
@@ -165,11 +178,14 @@ export default function AddCardForm({
   onDone,
   onCancel,
   submitLabel,
+  collectBillingAddress,
 }: {
   clientSecret: string;
   onDone: (paymentMethodId: string | null, stripe: StripeJs) => Promise<void | string> | void | string;
   onCancel: () => void;
   submitLabel?: { idle: string; busy: string };
+  /** Also collect the name and address printed on invoices (used when subscribing). */
+  collectBillingAddress?: boolean;
 }) {
   return (
     <Elements
@@ -193,7 +209,12 @@ export default function AddCardForm({
         },
       }}
     >
-      <CardFields onDone={onDone} onCancel={onCancel} submitLabel={submitLabel} />
+      <CardFields
+        onDone={onDone}
+        onCancel={onCancel}
+        submitLabel={submitLabel}
+        collectBillingAddress={collectBillingAddress}
+      />
     </Elements>
   );
 }
