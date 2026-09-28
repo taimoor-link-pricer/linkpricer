@@ -106,6 +106,9 @@ const CONTENT_OPTION_LABEL: Record<string, string> = {
   provided: "We Write",
   uploaded: "Client Upload",
   url: "Client Link",
+  // Order API orders where the site (marketplace) writes the article —
+  // nothing for LinkPricer to write. See lib/order-api/orders.ts.
+  site_writes: "Site Writes",
 };
 
 function fmtDate(iso: string | null): string | null {

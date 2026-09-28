@@ -297,8 +297,10 @@ export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origi
       // The price the robot saw is the whole charge — listing price, fee
       // included, nothing added for content — so it matches the pricing API
       // to the cent. The article is either the buyer's own document or
-      // written by the site, never by LinkPricer.
-      contentOption: body.article.mode === "buyer_doc" ? "url" : "provided",
+      // written by the site, never by LinkPricer. "site_writes" is its own
+      // value (not "provided", which admin shows as "We Write") so the team
+      // is never told to write an article nobody paid for.
+      contentOption: body.article.mode === "buyer_doc" ? "url" : "site_writes",
       wordCount: null,
       contentPrice: "0.00",
       articleUrl: body.article.mode === "buyer_doc" ? body.article.url : undefined,
