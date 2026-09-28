@@ -1,0 +1,288 @@
+openapi: 3.0.3
+info:
+  title: LinkPricer Order API
+  version: "1"
+  description: |
+    Look up listings, place orders and track them. Built for lp-outreach.
+
+    **Auth**: `Authorization: Bearer <key>` on every call. Keys are issued by LinkPricer
+    and scoped to one buyer account. Two keys can be valid at once during a rotation.
+
+    **Test mode**: a test key (`lp_order_test_...`), or a live key sent with `X-Test-Mode: true`,
+    runs every endpoint for real (real listings, real price checks, real idempotency) but
+    orders are stored in a sandbox and never reach LinkPricer's order desk.
+
+    **Prices**: the price LinkPricer charges, fee included, before VAT — always identical to
+    `pricing.<niche>.linkpricer.*` in the public pricing API for the same domain. Money is a
+    decimal string with a currency code; currency is always USD.
+
+    **Errors**: `{"error": {"code": "<stable_code>", "message": "..."}}`.
+    Codes: not_found, invalid_request, duplicate_reference, price_changed, listing_unavailable,
+    rate_limited, unauthorized, server_error. 4xx = do not retry as-is. 5xx and 429 are safe to
+    retry; an order retried with the same client_reference is never placed twice.
+
+    **Rate limits**: 60/min on reads, 10/min on order placement. 429 carries Retry-After.
+
+    **Niche codes**: general, igaming, crypto, cbd, adult, finance, dating, other.
+    `other` is priced as general. Guest posts only for now.
+servers:
+  - url: https://linkpricer.com/api/v1
+  - url: http://localhost:3000/api/v1
+    description: local development
+security:
+  - bearer: []
+paths:
+  /listings:
+    get:
+      summary: Every buyable listing on one domain
+      parameters:
+        - { name: domain, in: query, required: true, schema: { type: string }, example: example.com }
+        - name: niche
+          in: query
+          required: false
+          description: One niche code. Absent = one entry per niche each listing sells.
+          schema: { $ref: "#/components/schemas/Niche" }
+      responses:
+        "200":
+          description: Listings, cheapest first. An unlisted domain is an empty array, not a 404.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domain, listings]
+                properties:
+                  domain: { type: string }
+                  listings: { type: array, items: { $ref: "#/components/schemas/Listing" } }
+              example:
+                domain: betcoinrakeback.com
+                listings:
+                  - listing_id: M-08068b82-af55-4fd8-a749-4c782c121523
+                    vendor_id: guestpostlinks.net
+                    vendor_type: unknown
+                    product: guest_post
+                    niche: igaming
+                    price: "63.00"
+                    currency: USD
+                    link_type: unknown
+                    duration: unknown
+                    sponsored_tag: null
+                    article_by: either
+                    turnaround_days: null
+                    available: true
+                    updated_at: "2026-07-30T06:20:42.152Z"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /orders:
+    post:
+      summary: Place one order for one listing
+      description: |
+        Idempotent on client_reference: sending the same reference again returns the existing
+        order with 200 and never creates a second one — even if the price has moved since.
+        If expected_price is not the listing's current price, nothing is ordered (409 price_changed,
+        current price in the body). The API never substitutes another listing or domain.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlaceOrder" }
+            example:
+              client_reference: ORD-0231-1
+              listing_id: M-08068b82-af55-4fd8-a749-4c782c121523
+              niche: igaming
+              expected_price: "63.00"
+              currency: USD
+              target_url: https://client.com/page
+              anchor: best crypto casinos
+              article: { mode: buyer_doc, url: "https://docs.google.com/document/d/abc" }
+      responses:
+        "201":
+          description: Order placed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+              example:
+                order_id: 487cfc94-496c-58ec-bb58-4704ba41097e
+                client_reference: ORD-0231-1
+                status: placed
+                linkpricer_status: confirming_with_marketplace
+                domain: betcoinrakeback.com
+                listing_id: M-08068b82-af55-4fd8-a749-4c782c121523
+                niche: igaming
+                published_url: null
+                published_at: null
+                price: "63.00"
+                currency: USD
+                failure_reason: null
+                created_at: "2026-09-28T07:26:45.421Z"
+                updated_at: "2026-09-28T07:26:45.421Z"
+                test: false
+        "200":
+          description: This client_reference was already placed — the existing order, unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409":
+          description: price_changed (current_price in the body) or listing_unavailable. Nothing was ordered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example:
+                error: { code: price_changed, message: The price has changed since you looked it up. Nothing was ordered., current_price: "63.00", currency: USD }
+        "429": { $ref: "#/components/responses/Error" }
+    get:
+      summary: Find an order by your reference (crash recovery)
+      parameters:
+        - { name: client_reference, in: query, required: true, schema: { type: string }, example: ORD-0231-1 }
+      responses:
+        "200":
+          description: The order, or an empty list if this reference was never placed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders: { type: array, maxItems: 1, items: { $ref: "#/components/schemas/Order" } }
+              examples:
+                placed:
+                  value:
+                    orders:
+                      - order_id: 487cfc94-496c-58ec-bb58-4704ba41097e
+                        client_reference: ORD-0231-1
+                        status: in_progress
+                        linkpricer_status: waiting_for_publication
+                        domain: betcoinrakeback.com
+                        listing_id: M-08068b82-af55-4fd8-a749-4c782c121523
+                        niche: igaming
+                        published_url: null
+                        published_at: null
+                        price: "63.00"
+                        currency: USD
+                        failure_reason: null
+                        created_at: "2026-09-28T07:26:45.421Z"
+                        updated_at: "2026-09-29T11:02:10.000Z"
+                        test: false
+                never_placed:
+                  value: { orders: [] }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /orders/{order_id}:
+    get:
+      summary: One order's status
+      parameters:
+        - { name: order_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+              example:
+                order_id: 487cfc94-496c-58ec-bb58-4704ba41097e
+                client_reference: ORD-0231-1
+                status: published
+                linkpricer_status: published
+                domain: betcoinrakeback.com
+                listing_id: M-08068b82-af55-4fd8-a749-4c782c121523
+                niche: igaming
+                published_url: https://betcoinrakeback.com/blog/best-crypto-casinos
+                published_at: "2026-10-03T09:14:02.000Z"
+                price: "63.00"
+                currency: USD
+                failure_reason: null
+                created_at: "2026-09-28T07:26:45.421Z"
+                updated_at: "2026-10-03T09:14:02.000Z"
+                test: false
+        "404": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Niche:
+      type: string
+      enum: [general, igaming, crypto, cbd, adult, finance, dating, other]
+    Money:
+      type: string
+      pattern: '^\d+(\.\d{1,2})?$'
+      example: "63.00"
+    Listing:
+      type: object
+      properties:
+        listing_id: { type: string, description: "Send this back when ordering." }
+        vendor_id: { type: string, description: "The marketplace selling it, or 'vendor'." }
+        vendor_type: { type: string, enum: [owner, reseller, unknown], description: "Always unknown for now." }
+        product: { type: string, enum: [guest_post] }
+        niche: { $ref: "#/components/schemas/Niche" }
+        price: { $ref: "#/components/schemas/Money" }
+        currency: { type: string, enum: [USD] }
+        link_type: { type: string, enum: [dofollow, nofollow, unknown] }
+        duration: { type: string, enum: [lifetime, 12_months, 6_months, unknown] }
+        sponsored_tag: { type: boolean, nullable: true, description: "null = unknown" }
+        article_by: { type: string, enum: [buyer, vendor, either] }
+        turnaround_days: { type: integer, nullable: true }
+        available: { type: boolean }
+        updated_at: { type: string, format: date-time, nullable: true }
+    PlaceOrder:
+      type: object
+      required: [client_reference, listing_id, niche, expected_price, currency, target_url, anchor, article]
+      properties:
+        client_reference: { type: string, pattern: '^[A-Za-z0-9._:-]{1,100}$', description: "Yours, unique per order attempt." }
+        listing_id: { type: string }
+        niche: { $ref: "#/components/schemas/Niche" }
+        expected_price: { $ref: "#/components/schemas/Money" }
+        currency: { type: string, enum: [USD] }
+        target_url: { type: string, format: uri }
+        anchor: { type: string }
+        article:
+          oneOf:
+            - type: object
+              required: [mode, url]
+              properties:
+                mode: { type: string, enum: [buyer_doc] }
+                url: { type: string, format: uri }
+            - type: object
+              required: [mode, brief]
+              properties:
+                mode: { type: string, enum: [vendor_writes] }
+                brief: { type: string }
+    Order:
+      type: object
+      properties:
+        order_id: { type: string }
+        client_reference: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [placed, in_progress, published, completed, cancelled, refunded, failed]
+          description: Fixed vocabulary; never renamed without a new API version.
+        linkpricer_status: { type: string, description: "Internal status, for debugging only. Do not branch on it." }
+        domain: { type: string }
+        listing_id: { type: string, nullable: true }
+        niche: { type: string, nullable: true }
+        published_url: { type: string, nullable: true, description: "Final live article URL, from published on." }
+        published_at: { type: string, format: date-time, nullable: true }
+        price: { $ref: "#/components/schemas/Money" }
+        currency: { type: string }
+        failure_reason: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        test: { type: boolean, description: "true = sandbox order, never fulfilled." }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [not_found, invalid_request, duplicate_reference, price_changed, listing_unavailable, rate_limited, unauthorized, server_error]
+            message: { type: string }

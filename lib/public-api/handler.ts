@@ -116,6 +116,12 @@ export async function fetchDomainCatalog(domain: string): Promise<{
       -- bare twin, so nothing else changes, and two genuinely different
       -- marketplaces sharing a root domain cannot be merged by accident.
       SELECT DISTINCT ON (regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''))
+        -- Identity + listing conditions. Ignored by toOffer() and so by every
+        -- pricing response; read only by the order API's listing lookup
+        -- (lib/order-api/listings.ts), which prices from this same pool so a
+        -- listing price can never differ from what this endpoint quotes.
+        'M-' || o.id AS listing_id, o.marketplace_name AS source_name,
+        o.delivery_time_days, o.link_type, o.sponsored_tag, o.duration,
         o.currency,
         o.min_price, o.max_price,
         o.gambling_min_price, o.gambling_max_price,
@@ -138,6 +144,8 @@ export async function fetchDomainCatalog(domain: string): Promise<{
       UNION ALL
 
       SELECT
+        'V-' || s.id AS listing_id, 'vendor' AS source_name,
+        s.delivery_time_days, NULL AS link_type, NULL AS sponsored_tag, NULL AS duration,
         s.currency,
         s.min_price, s.max_price,
         s.gambling_min_price, s.gambling_max_price,
