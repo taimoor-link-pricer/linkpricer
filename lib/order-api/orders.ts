@@ -30,7 +30,7 @@ import { notifyNewOrders } from "@/lib/orders/notify";
 import { notifyOrdersPlaced } from "@/lib/notifications/orders";
 import type { PriceType } from "@/lib/orders/types";
 import type { NicheId } from "@/lib/public-api/pricing";
-import { apiError, apiOk, type OrderApiCaller } from "./http";
+import { apiError, apiOk, type LogFields, type OrderApiCaller } from "./http";
 import { findListing, parseRobotNiche, ROBOT_NICHES, ROBOT_NICHE_CODES } from "./listings";
 
 type OrderRow = typeof orders.$inferSelect;
@@ -111,6 +111,8 @@ interface OrderApiMeta {
   niche: string;
   keyName: string;
   articleMode: "buyer_doc" | "vendor_writes";
+  /** requestFingerprint() of the request that placed the order. */
+  fingerprint: string;
 }
 
 function orderApiMeta(order: OrderRow): Partial<OrderApiMeta> {
@@ -148,7 +150,7 @@ async function toApiOrder(order: OrderRow): Promise<ApiOrder> {
 
 // ─── placement ──────────────────────────────────────────────────────────────
 
-const url = z.string().superRefine((value, ctx) => {
+const url = z.string().max(2048).superRefine((value, ctx) => {
   const problem = urlProblem(value);
   if (problem) ctx.addIssue({ code: "custom", message: `This ${urlProblemMessage(problem)}` });
 });
@@ -157,7 +159,7 @@ const money = z.string().regex(/^\d{1,7}(\.\d{1,2})?$/, "must be a decimal strin
 
 export const placeOrderSchema = z.object({
   client_reference: z.string().regex(CLIENT_REFERENCE, "1-100 characters: letters, digits, . _ : -"),
-  listing_id: z.string().min(1),
+  listing_id: z.string().regex(/^[MV]-[0-9a-fA-F-]{36}$/, "must be a listing_id from GET /listings"),
   niche: z.string(),
   expected_price: money,
   currency: z.literal("USD"),
@@ -171,49 +173,95 @@ export const placeOrderSchema = z.object({
 
 export type PlaceOrderBody = z.infer<typeof placeOrderSchema>;
 
+/**
+ * What the order IS, for telling a retry from a clash. A retry of the same
+ * order returns it; the same client_reference reused for a DIFFERENT order is
+ * refused (409 duplicate_reference), because handing back the old order as if
+ * the new one had been placed would lose the new one silently.
+ *
+ * expected_price is deliberately left out: a retry after the price moved is
+ * still a retry of the order that was placed, at the price it was placed at.
+ */
+export function requestFingerprint(body: PlaceOrderBody): string {
+  const article = body.article.mode === "buyer_doc" ? body.article.url : body.article.brief;
+  return createHash("sha256")
+    .update(JSON.stringify([body.listing_id.toUpperCase(), body.niche.trim().toLowerCase(), body.target_url.trim(), body.anchor.trim(), body.article.mode, article.trim()]))
+    .digest("hex");
+}
+
 /** Our priceType for a niche id — the two lists name standard/base differently. */
 function priceTypeFor(niche: NicheId): PriceType {
   return niche === "standard" ? "base" : (niche as PriceType);
 }
 
-async function findExisting(caller: OrderApiCaller, orderId: string): Promise<ApiOrder | null> {
+type SandboxDoc = ApiOrder & { key_name?: string; fingerprint?: string };
+
+async function findExisting(
+  caller: OrderApiCaller,
+  orderId: string
+): Promise<{ order: ApiOrder; fingerprint: string | null } | null> {
   if (caller.test) {
     const snap = await adminDb.collection(SANDBOX).doc(orderId).get();
     if (!snap.exists) return null;
-    const order = snap.data() as ApiOrder & { key_name?: string };
-    delete order.key_name;
-    return order;
+    const { key_name: _k, fingerprint, ...order } = snap.data() as SandboxDoc;
+    void _k;
+    return { order, fingerprint: fingerprint ?? null };
   }
   const [row] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
   if (!row || row.userId !== caller.key.userId) return null;
-  return toApiOrder(row);
+  return { order: await toApiOrder(row), fingerprint: orderApiMeta(row).fingerprint ?? null };
 }
 
-export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origin: string) {
+/** The response for a client_reference that already has an order. */
+function existingResponse(
+  existing: { order: ApiOrder; fingerprint: string | null },
+  fingerprint: string,
+  log: LogFields
+) {
+  log.order_id = existing.order.order_id;
+  if (existing.fingerprint && existing.fingerprint !== fingerprint) {
+    log.outcome = "reference_clash";
+    return apiError(
+      "duplicate_reference",
+      "This client_reference was already used for a different order. Nothing new was placed.",
+      409,
+      { details: { order_id: existing.order.order_id } }
+    );
+  }
+  log.outcome = "replayed";
+  return apiOk(existing.order, 200);
+}
+
+export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origin: string, log: LogFields = {}) {
   const parsed = placeOrderSchema.safeParse(rawBody);
   if (!parsed.success) {
+    log.invalid_fields = parsed.error.issues.map((i) => i.path.join(".")).join(",");
     return apiError("invalid_request", "The request body is not valid.", 400, {
       details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })) },
     });
   }
   const body = parsed.data;
+  log.client_reference = body.client_reference;
+  log.listing_id = body.listing_id;
   const niche = parseRobotNiche(body.niche);
   if (!niche) {
     return apiError("invalid_request", `niche must be one of: ${ROBOT_NICHE_CODES.join(", ")}`, 400);
   }
 
   const orderId = orderIdFor(caller.key.userId, body.client_reference, caller.test);
+  const fingerprint = requestFingerprint(body);
 
   // A reference we have already seen returns that order as it stands, before
   // any price or availability check: the robot is retrying something that
   // already succeeded, and must get the same answer even if the price has
   // moved since.
   const existing = await findExisting(caller, orderId);
-  if (existing) return apiOk(existing, 200);
+  if (existing) return existingResponse(existing, fingerprint, log);
 
   const rates = await getUsdRates();
   const found = await findListing(body.listing_id, niche, rates);
   if (!found) {
+    log.outcome = "listing_unavailable";
     return apiError(
       "listing_unavailable",
       "This listing is gone, paused, or has no price for that niche. Look the domain up again.",
@@ -222,7 +270,11 @@ export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origi
   }
   const { listing, marketplacePriceUsd, domain } = found;
 
+  log.domain = domain;
   if (Number(body.expected_price).toFixed(2) !== listing.price) {
+    log.outcome = "price_changed";
+    log.expected_price = body.expected_price;
+    log.current_price = listing.price;
     return apiError("price_changed", "The price has changed since you looked it up. Nothing was ordered.", 409, {
       details: { current_price: listing.price, currency: listing.currency },
     });
@@ -249,15 +301,17 @@ export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origi
       test: true,
     };
     try {
-      await adminDb.collection(SANDBOX).doc(orderId).create({ ...order, key_name: caller.key.name });
+      await adminDb.collection(SANDBOX).doc(orderId).create({ ...order, key_name: caller.key.name, fingerprint });
     } catch (err) {
       // ALREADY_EXISTS: a concurrent retry of the same reference won the race.
       if ((err as { code?: number }).code === 6) {
         const again = await findExisting(caller, orderId);
-        if (again) return apiOk(again, 200);
+        if (again) return existingResponse(again, fingerprint, log);
       }
       throw err;
     }
+    log.order_id = orderId;
+    log.outcome = "placed";
     return apiOk(order, 201);
   }
 
@@ -274,6 +328,7 @@ export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origi
     niche,
     keyName: caller.key.name,
     articleMode: body.article.mode,
+    fingerprint,
   };
 
   const [inserted] = await db
@@ -320,24 +375,36 @@ export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origi
   if (!inserted) {
     // A concurrent retry of the same reference inserted first.
     const again = await findExisting(caller, orderId);
-    if (again) return apiOk(again, 200);
+    if (again) return existingResponse(again, fingerprint, log);
     return apiError("duplicate_reference", "This client_reference is already in use.", 409, {
       details: { order_id: orderId },
     });
   }
+  log.order_id = inserted.id;
+  log.outcome = "placed";
+  log.price = listing.price;
 
-  await recordOrderEvent(db, {
-    orderOwnerUserId: user.id,
-    eventType: ORDER_EVENT_TYPES.statusChanged,
-    metadata: {
-      orderId: inserted.id,
-      fromStatus: null,
-      toStatus: "confirming_with_marketplace",
-      actorId: user.id,
-      actorRole: "system",
-      note: `Order created via order API (${caller.key.name}, ref ${body.client_reference})`,
-    } satisfies OrderStatusChangedMeta,
-  });
+  // The order row is the commitment; everything after it is follow-up. A
+  // failure here must not turn a placed order into a 500 — the robot would
+  // retry, get the order back, and the follow-up would simply never happen.
+  // So each step is caught and logged for us to repair by hand instead.
+  try {
+    await recordOrderEvent(db, {
+      orderOwnerUserId: user.id,
+      eventType: ORDER_EVENT_TYPES.statusChanged,
+      metadata: {
+        orderId: inserted.id,
+        fromStatus: null,
+        toStatus: "confirming_with_marketplace",
+        actorId: user.id,
+        actorRole: "system",
+        note: `Order created via order API (${caller.key.name}, ref ${body.client_reference})`,
+      } satisfies OrderStatusChangedMeta,
+    });
+  } catch (err) {
+    log.followup_failed = "status_event";
+    console.error(`[order-api] order ${inserted.id} placed but its status event was not recorded`, err);
+  }
 
   mirrorOrderToFirestore(inserted.id, {
     userId: inserted.userId,
@@ -350,22 +417,45 @@ export async function placeOrder(caller: OrderApiCaller, rawBody: unknown, origi
   after(() => notifyNewOrders([inserted], origin));
   after(() => notifyOrdersPlaced([inserted], origin));
 
-  return apiOk(await toApiOrder(inserted), 201);
+  return apiOk(await toApiOrder(inserted).catch(() => fallbackApiOrder(inserted)), 201);
+}
+
+/** The placed order without its event history, if reading that history fails. */
+function fallbackApiOrder(order: OrderRow): ApiOrder {
+  const meta = orderApiMeta(order);
+  return {
+    order_id: order.id,
+    client_reference: meta.clientReference ?? null,
+    status: apiStatus(order.status),
+    linkpricer_status: order.status,
+    domain: order.snapshotDomain,
+    listing_id: meta.listingId ?? null,
+    niche: meta.niche ?? null,
+    published_url: null,
+    published_at: null,
+    price: Number(order.totalAmount).toFixed(2),
+    currency: order.snapshotCurrency ?? "USD",
+    failure_reason: null,
+    created_at: iso(order.createdAt),
+    updated_at: iso(order.createdAt),
+    test: false,
+  };
 }
 
 // ─── status lookup ──────────────────────────────────────────────────────────
 
 export async function getOrder(caller: OrderApiCaller, orderId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(orderId)) return apiError("not_found", "No such order.", 404);
-  const order = await findExisting(caller, orderId.toLowerCase());
-  return order ? apiOk(order) : apiError("not_found", "No such order.", 404);
+  const found = await findExisting(caller, orderId.toLowerCase());
+  return found ? apiOk(found.order) : apiError("not_found", "No such order.", 404);
 }
 
 export async function getOrderByReference(caller: OrderApiCaller, clientReference: string) {
   if (!CLIENT_REFERENCE.test(clientReference)) {
     return apiError("invalid_request", "client_reference is not valid.", 400);
   }
-  const order = await findExisting(caller, orderIdFor(caller.key.userId, clientReference, caller.test));
+  const found = await findExisting(caller, orderIdFor(caller.key.userId, clientReference, caller.test));
+  const order = found?.order;
   // A list, so the call answers "have I placed this yet?" without a 404 to
   // tell apart from a wrong URL.
   return apiOk({ orders: order ? [order] : [] });

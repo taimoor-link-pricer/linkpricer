@@ -17,6 +17,7 @@
  * Rotation = add the new entry, deploy, retire the old entry a day later.
  */
 
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { hashKey } from "@/lib/public-api/common";
 
@@ -60,7 +61,9 @@ export function apiError(
 ) {
   return NextResponse.json(
     { error: { code, message, ...(opts?.details ?? {}) } },
-    { status, headers: { ...NO_STORE, "X-API-Version": "1", ...(opts?.headers ?? {}) } }
+    // X-Error-Code lets the request log (and anyone reading a proxy log)
+    // record which stable code went out without parsing the body.
+    { status, headers: { ...NO_STORE, "X-API-Version": "1", "X-Error-Code": code, ...(opts?.headers ?? {}) } }
   );
 }
 
@@ -135,4 +138,60 @@ export function rateLimit(caller: OrderApiCaller, kind: keyof typeof LIMITS): Ne
   }
   w.count++;
   return null;
+}
+
+// ─── request wrapper ────────────────────────────────────────────────────────
+
+/** Facts a handler adds to its request's log line (order id, reference, ...). */
+export type LogFields = Record<string, string | number | boolean | null | undefined>;
+
+/**
+ * Every order API route runs through this: authenticate, rate-limit, run the
+ * handler, turn any throw into a retryable 500, stamp an X-Request-Id, and
+ * write ONE structured log line per request. The line never carries the key
+ * itself — only the key's name — and never request bodies, which can hold a
+ * client's article brief.
+ *
+ * Search Vercel logs for `"event":"order_api"` to see everything the robot did.
+ */
+export async function handleOrderApi(
+  req: NextRequest,
+  kind: keyof typeof LIMITS,
+  handler: (caller: OrderApiCaller, log: LogFields) => Promise<NextResponse>
+): Promise<NextResponse> {
+  const started = Date.now();
+  const requestId = randomUUID();
+  const log: LogFields = {};
+  let caller: OrderApiCaller | null = null;
+  let res: NextResponse;
+
+  try {
+    const auth = authenticate(req);
+    if (auth instanceof NextResponse) {
+      res = auth;
+    } else {
+      caller = auth;
+      res = rateLimit(caller, kind) ?? (await handler(caller, log));
+    }
+  } catch (err) {
+    log.exception = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error(`[order-api] ${requestId} unhandled`, err);
+    res = apiError("server_error", "Something went wrong on our side. Safe to retry; an order retried with the same client_reference is never placed twice.", 500);
+  }
+
+  res.headers.set("X-Request-Id", requestId);
+  const line = {
+    event: "order_api",
+    request_id: requestId,
+    method: req.method,
+    path: req.nextUrl.pathname,
+    key: caller?.key.name ?? null,
+    mode: caller ? (caller.test ? "test" : "live") : null,
+    status: res.status,
+    error_code: res.headers.get("X-Error-Code"),
+    ms: Date.now() - started,
+    ...log,
+  };
+  (res.status >= 500 ? console.error : console.log)(JSON.stringify(line));
+  return res;
 }
