@@ -26,7 +26,7 @@ info:
     **Niche codes**: general, igaming, crypto, cbd, adult, finance, dating, other.
     `other` is priced as general. Guest posts only for now.
 servers:
-  - url: https://linkpricer.com/api/v1
+  - url: https://www.linkpricer.ai/api/v1
   - url: http://localhost:3000/api/v1
     description: local development
 security:
