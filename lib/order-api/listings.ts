@@ -103,7 +103,7 @@ function isoTimestamp(raw: unknown): string | null {
   const s = String(raw);
   // Postgres hands back "2026-09-20T10:11:12.123" with no zone for a
   // timestamp-without-time-zone column; those values are UTC.
-  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`);
+  const d = new Date(/[zZ]|[+-]\d\d(:?\d\d)?$/.test(s) ? s : `${s}Z`);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 

@@ -101,7 +101,7 @@ export interface ApiOrder {
 function iso(raw: unknown): string | null {
   if (!raw) return null;
   const s = String(raw);
-  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s.replace(" ", "T")}Z`);
+  const d = new Date(/[zZ]|[+-]\d\d(:?\d\d)?$/.test(s) ? s : `${s.replace(" ", "T")}Z`);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
