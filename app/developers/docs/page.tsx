@@ -399,7 +399,7 @@ export default function DocsPage() {
                   ["summary.requested", "number", "Entries you sent."],
                   ["summary.unique_domains", "number", "Distinct valid domains looked up."],
                   ["summary.ok / not_found / invalid", "number", "Results per status, counted per entry (duplicates included)."],
-                  ["usage.charged", "number", "Lookups this request took from your monthly quota — one per distinct domain found."],
+                  ["usage.charged", "number", "Lookups this request took from your monthly quota — one per distinct domain in our catalog (every status \"ok\" domain, even when data.found is false for the niche you filtered to)."],
                   ["usage.monthly_limit", "number", "Your monthly lookup quota."],
                   ["usage.monthly_remaining", "number", "Lookups left this month after this request."],
                   ["usage.resets_at", "string", "When the quota resets (the 1st, 00:00 UTC), ISO 8601."],
@@ -533,13 +533,13 @@ export default function DocsPage() {
           <section className="docs-section" id="metering">
             <h2 className="docs-h2">Metering</h2>
             <div className="docs-callout">
-              <strong>One lookup per distinct domain found.</strong> Domains not in our catalog, malformed entries and duplicates cost nothing, and a request rejected outright (400, 413, 422) costs nothing. On a <code className="docs-inline-code">500</code> nothing is charged.
+              <strong>One lookup per distinct domain in our catalog.</strong> That includes a domain that has no offers for the niche you filtered to: it comes back with status <code className="docs-inline-code">ok</code> and <code className="docs-inline-code">data.found: false</code>, and its <code className="docs-inline-code">available_niches</code> is still worth having. Domains not in our catalog, malformed entries and duplicates cost nothing, and a request rejected outright (400, 413, 422) costs nothing. On a <code className="docs-inline-code">500</code> nothing is charged.
             </div>
             <p className="docs-p">
               A request must fit your remaining monthly quota as a whole: its distinct valid domains are reserved when the request arrives, and the ones we do not have are handed back when it completes. If they do not all fit, the request is refused with <code className="docs-inline-code">429 quota_exceeded</code>, the message says how many lookups remain, and nothing is charged — you never get a half-priced list. The per-minute limit counts requests, so one request is one against it however many domains it holds.
             </p>
             <p className="docs-p">
-              Responses carry <code className="docs-inline-code">X-RateLimit-Limit</code>, <code className="docs-inline-code">X-RateLimit-Remaining</code> and <code className="docs-inline-code">X-RateLimit-Reset</code> (the monthly quota, after this request), their <code className="docs-inline-code">-Minute</code> variants for the burst limit, and <code className="docs-inline-code">X-Lookups-Charged</code>.
+              Responses carry <code className="docs-inline-code">X-RateLimit-Limit</code>, <code className="docs-inline-code">X-RateLimit-Remaining</code> and <code className="docs-inline-code">X-RateLimit-Reset</code> (the monthly quota, after this request), <code className="docs-inline-code">X-RateLimit-Limit-Minute</code> and <code className="docs-inline-code">X-RateLimit-Remaining-Minute</code> for the burst limit, and <code className="docs-inline-code">X-Lookups-Charged</code>.
             </p>
           </section>
 
@@ -607,7 +607,7 @@ export default function DocsPage() {
               </tbody>
             </table>
             <div className="docs-callout">
-              Monthly quotas reset on the 1st of each calendar month (UTC). A lookup is one distinct domain found in a request. Requests beyond your monthly quota return a <code className="docs-inline-code">429</code> until the next reset.
+              Monthly quotas reset on the 1st of each calendar month (UTC). A lookup is one distinct domain in a request that is in our catalog. Requests beyond your monthly quota return a <code className="docs-inline-code">429</code> until the next reset.
             </div>
           </section>
 
