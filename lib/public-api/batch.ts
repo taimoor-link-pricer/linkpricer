@@ -1,12 +1,11 @@
 /**
- * The v2 batch endpoint's request parsing and response shape, as pure
+ * The public pricing endpoint's request parsing and response shape, as pure
  * functions.
  *
- * POST /api/v2/public/domains/pricing takes up to MAX_BATCH_DOMAINS domains in
+ * POST /api/v1/public/domains/pricing takes up to MAX_BATCH_DOMAINS domains in
  * one call — the same ceiling the Analyze page applies — and answers with one
  * result per submitted entry, in the order they were sent. Each successful
- * result carries the exact body v1 returns for that domain (buildPricingBody),
- * so an integrator already parsing v1 parses a v2 result with the same code.
+ * result carries the per-domain pricing body (buildPricingBody, shape.ts).
  *
  * Kept free of the database, the request and the quota claim for the same
  * reason shape.ts is: the shape is the product, and it has to be assertable
@@ -66,7 +65,7 @@ export interface BatchResult {
   domain: string | null;
   status: BatchResultStatus;
   error: { code: string; message: string } | null;
-  /** The v1 per-domain body when status is "ok", otherwise null. */
+  /** The per-domain pricing body when status is "ok", otherwise null. */
   data: PricingBody | null;
 }
 
@@ -80,7 +79,7 @@ export interface BatchUsage {
 }
 
 export interface BatchBody {
-  api_version: "2";
+  api_version: "1";
   niche: NicheId | null;
   summary: {
     requested: number;
@@ -98,7 +97,7 @@ export interface BatchBody {
  * bare hosts ("https://www.example.com/blog/post?x=1"). Reduce every entry to
  * its host the way the Analyze page does — scheme, a leading www., and
  * anything from the first path, query or fragment separator onwards are
- * dropped — then validate it with the exact rule v1 uses.
+ * dropped — then validate it with isValidHostname().
  */
 export function normalizeBatchDomain(raw: string): string {
   return raw
@@ -159,7 +158,7 @@ export function parseBatchRequest(body: unknown): ParsedBatch | BatchRequestErro
     };
   }
 
-  // Blank means "no filter", exactly as in v1, where ?niche= and an omitted
+  // Blank means "no filter": an empty niche and an omitted
   // parameter are the same request.
   let niche: NicheId | null = null;
   if (rawNiche != null) {
@@ -224,7 +223,7 @@ function invalidNiche(): BatchRequestError {
 
 /**
  * The response body. `found` maps each looked-up domain that exists in the
- * catalogue to its v1 body; a looked-up domain missing from it is not_found.
+ * catalogue to its pricing body; a looked-up domain missing from it is not_found.
  * Duplicate entries each get their own result (so results[i] always answers
  * domains[i]) but were looked up — and charged — once.
  */
@@ -260,7 +259,7 @@ export function buildBatchBody(
   }
 
   return {
-    api_version: "2",
+    api_version: "1",
     niche: parsed.niche,
     summary: {
       requested: parsed.entries.length,

@@ -1,10 +1,11 @@
-// Parity check: does the v2 batch endpoint answer every domain exactly as v1?
+// Parity check: does the batch endpoint answer every domain exactly as the
+// single-domain catalogue query does?
 //
-// Runs the two real catalogue queries side by side — v1's single-domain
-// fetchDomainCatalog() once per domain, v2's set-based fetchCatalog() once per
+// Runs the two real catalogue queries side by side — the single-domain
+// fetchDomainCatalog() once per domain, the set-based fetchCatalog() once per
 // 200-domain batch — and builds each domain's body with the shared
 // buildPricingBody(), for no niche and for every niche. Any difference is a
-// v2 bug by definition: v2's promise is "the v1 body, many at a time".
+// batch bug by definition: batch promises "the single-domain body, many at a time".
 //
 // Read-only. Touches no API key, counter or log row.
 //
@@ -13,7 +14,7 @@
 // exists to handle — case-variant duplicate hosts, internationalized domains —
 // and with hosts that do not exist, so not_found is exercised too.
 //
-//   npx tsx --env-file=.env.local scripts/verify-public-api-v2.mts [sampleSize]
+//   npx tsx --env-file=.env.local scripts/verify-public-api-batch.mts [sampleSize]
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";

@@ -1,5 +1,5 @@
 // Reads the x-api-key header and a request body on every call, so this is
-// request-time work by construction — declared explicitly, matching v1.
+// request-time work by construction — declared explicitly.
 export const dynamic = "force-dynamic";
 // A 200-domain batch is one catalogue query, normally well under a second,
 // but it is the heaviest thing a key can ask for; give it room rather than
@@ -10,9 +10,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { handleBatchPricingRequest } from "@/lib/public-api/batch-handler";
 
 /**
- * The batch pricing endpoint: up to 200 domains per call, each answered with
- * the same per-domain body GET /api/v1/public/domains/{domain}/pricing
- * returns. Quota is metered per domain found. See lib/public-api/batch.ts for
+ * The public pricing endpoint: up to 200 domains per call (a single domain is
+ * a batch of one), each answered with the per-domain body built in
+ * lib/public-api/shape.ts. Quota is metered per domain found. See lib/public-api/batch.ts for
  * the request and response shape, pinned by lib/public-api/batch.test.ts.
  */
 export async function POST(req: NextRequest) {

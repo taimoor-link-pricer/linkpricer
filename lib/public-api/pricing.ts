@@ -28,7 +28,7 @@ export interface NicheDef {
   /** Alternate spellings accepted on the `niche` query param. */
   aliases: readonly string[];
   /**
-   * Human-readable name, published by v2 and used verbatim in its summary
+   * Human-readable name, published by the API and used verbatim in its summary
    * lines. One definition, so the label a caller reads in `pricing.<id>.label`
    * is the same one the summary sentence and the invalid_niche error use.
    */

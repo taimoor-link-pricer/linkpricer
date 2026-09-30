@@ -41,18 +41,11 @@ const API_BASE = "https://www.linkpricer.ai/api";
 
 const ENDPOINTS = [
   {
-    id: "v1",
-    verb: "GET",
-    path: "/v1/public/domains/{domain}/pricing",
-    desc: "Price one domain. Every niche's marketplace and LinkPricer prices, plus DR, traffic and country.",
-    curl: `curl "${API_BASE}/v1/public/domains/techblog.com/pricing" \\\n  -H "x-api-key: YOUR_API_KEY"`,
-  },
-  {
-    id: "v2",
+    id: "pricing",
     verb: "POST",
-    path: "/v2/public/domains/pricing",
-    desc: "Batch: up to 200 domains per request, each with the same result as the single-domain call. Charged only for domains we find.",
-    curl: `curl -X POST "${API_BASE}/v2/public/domains/pricing" \\\n  -H "x-api-key: YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"domains": ["techblog.com", "newsdaily.io"]}'`,
+    path: "/v1/public/domains/pricing",
+    desc: "Price 1 to 200 domains per request: every niche's marketplace and LinkPricer prices, plus DR, traffic and country. Charged only for domains we find.",
+    curl: `curl -X POST "${API_BASE}/v1/public/domains/pricing" \\\n  -H "x-api-key: YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"domains": ["techblog.com", "newsdaily.io"]}'`,
   },
 ];
 
@@ -650,7 +643,7 @@ function DashboardContent() {
                   <span style={{ fontWeight: 700, color: usagePct > 80 ? "#ef4444" : "#0052cc" }}>{usagePct}% used</span>
                   <span>Resets {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
                 </div>
-                <div className="db-usage-hint">One lookup per single-domain request, or per domain found in a batch.</div>
+                <div className="db-usage-hint">One lookup per distinct domain found. Unknown domains and duplicates are free.</div>
               </>
             ) : <div style={{ color: "#9ca3af", fontSize: 14 }}>No active plan</div>}
           </div>
@@ -686,7 +679,7 @@ function DashboardContent() {
 
           {/* Endpoints */}
           <div className="db-card db-card-full">
-            <div className="db-card-label">Endpoints</div>
+            <div className="db-card-label">Endpoint</div>
             <div className="db-endpoints">
               {ENDPOINTS.map((e) => (
                 <div key={e.id} className="db-endpoint">
@@ -705,7 +698,7 @@ function DashboardContent() {
               ))}
             </div>
             <div className="db-endpoint-note">
-              Both endpoints use the key above and share your monthly quota. <Link href="/developers/docs#batch">Batch docs</Link> · <Link href="/developers/docs">Full reference</Link>
+              Uses the key above. <Link href="/developers/docs">Full reference</Link>
             </div>
           </div>
 

@@ -10,8 +10,8 @@ import { NextResponse } from "next/server";
  *
  * It is easier to hit than it looks. A path segment of "." or ".." is collapsed
  * by the client or the CDN before it ever reaches us, so
- * /api/v1/public/domains/../pricing arrives as /api/v1/public/domains/pricing,
- * which is one segment short of the real route and matches nothing. Someone
+ * /api/v1/public/domains/x/../../pricing arrives as /api/v1/public/pricing,
+ * which matches no real route. Someone
  * building a URL by string concatenation with an empty or relative variable in
  * it lands here, and the whole point of this endpoint's error contract is that
  * a caller never has to special-case the transport.

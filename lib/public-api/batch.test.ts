@@ -1,5 +1,5 @@
 /**
- * The v2 batch contract, pinned — the batch counterpart of contract.test.ts.
+ * The batch contract, pinned — the batch counterpart of contract.test.ts.
  *
  * Asserts the exact key set of the envelope and of every result, that each
  * result's `data` is byte-for-byte the v1 body for that domain, and the
@@ -138,7 +138,7 @@ describe("buildBatchBody — the published shape", () => {
 
   it("has exactly the documented top-level keys", () => {
     expect(Object.keys(body).sort()).toEqual(["api_version", "niche", "results", "summary", "usage"]);
-    expect(body.api_version).toBe("2");
+    expect(body.api_version).toBe("1");
     expect(body.niche).toBe("gambling");
     expect(Object.keys(body.summary).sort()).toEqual(["invalid", "not_found", "ok", "requested", "unique_domains"]);
     expect(Object.keys(body.usage).sort()).toEqual(["charged", "monthly_limit", "monthly_remaining", "resets_at"]);

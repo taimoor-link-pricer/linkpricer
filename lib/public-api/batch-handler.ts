@@ -1,13 +1,14 @@
 /**
- * The batch pricing endpoint (v2): POST /api/v2/public/domains/pricing.
+ * The public pricing endpoint (v1): POST /api/v1/public/domains/pricing.
  *
- * Up to 200 domains per call, each answered with the exact per-domain body v1
- * returns (buildPricingBody). v1 is untouched by this endpoint and stays the
- * single-domain contract existing integrators already use.
+ * Up to 200 domains per call, each answered with the per-domain body built by
+ * buildPricingBody(). This started life as a separate v2 batch endpoint next
+ * to a single-domain GET; with no integrator on either, the batch endpoint
+ * became v1 and the GET was retired (a single domain is a batch of one).
  *
  * Quota is metered per domain, not per call: a batch of N distinct valid
  * domains claims N lookups from the monthly quota up front — atomically, in
- * the statement that authenticates the key, like v1 — and hands back one for
+ * the statement that authenticates the key — and hands back one for
  * every domain the catalogue does not contain. Counting a 200-domain batch as
  * one request would make a 10,000/month plan worth 2,000,000 lookups. The
  * per-minute limit counts calls, since it exists to protect the database from
@@ -39,7 +40,7 @@ import {
 } from "@/lib/public-api/batch";
 import { buildPricingBody, type PricingBody } from "@/lib/public-api/shape";
 
-const TAG = "[/api/v2/public/domains/pricing]";
+const TAG = "[/api/v1/public/domains/pricing]";
 
 interface ClaimRow {
   id: string;
@@ -87,7 +88,7 @@ async function keyIsActive(keyHash: string): Promise<boolean> {
 /**
  * Offers, metrics and freshness for every requested domain in ONE round trip.
  *
- * This is v1's catalogue query (lib/public-api/handler.ts) made set-based,
+ * This is the single-domain catalogue query (lib/public-api/handler.ts) made set-based,
  * with every rule it carries preserved per requested domain:
  *   - every spelling of a host is matched (case variants and unicode/punycode
  *     forms are separate `domains` rows) and their offers pooled;
@@ -96,7 +97,7 @@ async function keyIsActive(keyHash: string): Promise<boolean> {
  *   - one offer per marketplace, cheapest quote winning, with app./panel.
  *     twins of the same marketplace collapsed to one source;
  *   - active vendor (supplier_offers) rows included, never trusted.
- * scripts/verify-public-api-v2.mts checks the result matches v1 domain by
+ * scripts/verify-public-api-batch.mts checks the result matches it domain by
  * domain against the live catalogue.
  */
 export function catalogQuery(domains: string[]): SQL {
@@ -166,7 +167,7 @@ export function catalogQuery(domains: string[]): SQL {
         false AS trusted,
         s.updated_at AS freshness
       FROM supplier_offers s
-      -- Joined on the requested forms, not on d, for the reason v1 gives:
+      -- Joined on the requested forms, not on d, for the reason handler.ts gives:
       -- d can hold several rows for one host, and joining through it would
       -- multiply every vendor offer by that row count.
       JOIN req ON lower(s.domain) = req.form
@@ -248,7 +249,7 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
   const units = parsed.unique.length;
 
   // 3. Authenticate and claim `units` lookups in one statement — the batch
-  //    form of v1's claim. `k` snapshots the key before the update so that a
+  //    form of the old single-domain claim. `k` snapshots the key before the update so that a
   //    refusal can say which limit refused it. A batch is admitted only when
   //    ALL of it fits the remaining monthly quota: a partial answer would
   //    leave the caller to work out which half of their list was priced.
@@ -368,7 +369,7 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
     const latencyMs = Date.now() - startMs;
     // History, not enforcement — the counters on api_keys are the limit — so
     // it is written after the response, one row per domain looked up, the
-    // same granularity v1 logs at.
+    // same granularity the old single-domain endpoint logged at.
     after(async () => {
       if (statuses.length === 0) return;
       try {
@@ -395,15 +396,15 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
     [rates, catalog] = await Promise.all([getUsdRates(), fetchCatalog(parsed.unique)]);
   } catch (err) {
     console.error(TAG, err);
-    // Our failure, not the caller's: every claimed lookup goes back. v1
-    // charges its single unit on a 500; at up to 200 units a call that would
+    // Our failure, not the caller's: every claimed lookup goes back. The old
+    // single-domain GET charged its unit on a 500; at up to 200 units that would
     // let one bad deploy drain a customer's month.
     await refund(units);
     log(parsed.unique.map((domain) => ({ domain, status: 500 })));
     return jsonError("internal_error", "An internal error occurred. No lookups were charged. Please retry.", 500);
   }
 
-  // 5. Build each domain's v1 body.
+  // 5. Build each domain's pricing body.
   const found = new Map<string, PricingBody>();
   try {
     for (const domain of parsed.unique) {
@@ -442,7 +443,7 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
 
   return jsonOk(body, {
     ...rateLimitHeaders(monthLimit, monthUsed, minuteLimit, minuteUsed, monthResetEpoch),
-    "X-API-Version": "2",
+    "X-API-Version": "1",
     "X-Lookups-Charged": String(found.size),
   });
 }
