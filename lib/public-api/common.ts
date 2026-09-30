@@ -1,11 +1,12 @@
 /**
- * Plumbing shared by every published version of the public pricing API:
+ * Plumbing for the public pricing API:
  * domain normalisation, key hashing, the response envelope, rate-limit
  * headers and the offer-row mapper.
  *
- * Moved here verbatim from handler.ts when the batch endpoint (v2) was added,
- * so the two cannot drift: a fix to how a domain is normalised or how an
- * offer row is read lands in both by construction.
+ * Moved here verbatim from handler.ts when the batch endpoint was added, so
+ * the batch query and the single-domain query (still used by the order API)
+ * cannot drift: a fix to how a domain is normalised or how an offer row is
+ * read lands in both by construction.
  */
 
 import { NextResponse } from "next/server";
@@ -150,8 +151,7 @@ export function toOffer(row: Record<string, unknown>): RawOffer {
     currency: (row.currency as string) ?? "USD",
     prices,
     trusted: row.trusted === true,
-    // Carried per offer so v2 can report freshness per niche. v1 ignores it
-    // and keeps using the domain-wide MAX computed in SQL.
+    // Carried per offer so the response can report freshness per niche.
     freshness: (row.freshness as string | null) ?? null,
   };
 }
