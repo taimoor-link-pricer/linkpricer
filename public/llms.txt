@@ -9,6 +9,11 @@ Linkpricer solves a specific problem: buyers of backlinks (SEO agencies, freelan
 - [Homepage](/): Explains the product and includes a live, interactive demo — paste up to 200 domains (or a topic, for the Related Sites mode) and see price/authority comparisons run against a sample dataset. Signed-out visitors get 2 free demo searches before being asked to create a free account (no credit card required).
 - [Onboarding](/onboarding): A required 5-step questionnaire shown once, immediately after a new user's first login (role, monthly link-building budget, biggest challenge, priorities, current workflow). Cannot be skipped. Personalizes the dashboard experience that follows.
 
+## Developer API
+
+- [API reference (markdown)](https://www.linkpricer.ai/developers/docs.md): The complete reference for the pricing API as plain text — one endpoint, `POST /api/v1/public/domains/pricing`, 1 to 200 domains per request, authenticated with an `x-api-key` header. Read this to integrate.
+- [API reference (web page)](https://www.linkpricer.ai/developers/docs): The same content for humans.
+
 ## Company
 
 - [About](/about): Founder's story and company values. Copy on this page is a placeholder pending real content from the founder — do not treat prose on this page as final/authoritative marketing claims.

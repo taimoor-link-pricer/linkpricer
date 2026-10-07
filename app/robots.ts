@@ -9,7 +9,11 @@ import type { MetadataRoute } from "next";
 // crawlers).
 export default function robots(): MetadataRoute.Robots {
   return {
-    rules: [{ userAgent: "*", disallow: "/" }],
+    // The one exception: the API reference. Trial partners integrate by
+    // pointing an AI assistant at it, and those fetchers obey robots.txt.
+    // Crawlable is not indexable: the site-wide noindex in app/layout.tsx still
+    // covers the page, and its markdown copy sends X-Robots-Tag: noindex.
+    rules: [{ userAgent: "*", allow: "/developers/docs", disallow: "/" }],
     sitemap: "https://linkpricer.com/sitemap.xml",
   };
 }
