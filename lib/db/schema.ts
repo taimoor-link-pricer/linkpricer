@@ -458,6 +458,13 @@ export const apiKeys = pgTable("api_keys", {
 	monthlyLimit: integer("monthly_limit"),
 	monthCount: integer("month_count").default(0).notNull(),
 	monthWindow: varchar("month_window"),
+	// Admin-managed keys (migration 0007, /admin/api-keys). expiresAt NULL =
+	// never expires. blockedAt is the admin block — separate from isActive,
+	// which the Stripe webhook owns and would flip back on. grantedBy is the
+	// admin's users.id for a key issued without a subscription.
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }),
+	blockedAt: timestamp("blocked_at", { withTimezone: true, mode: 'string' }),
+	grantedBy: varchar("granted_by"),
 }, (table) => [
 	index("api_keys_key_hash_idx").using("btree", table.keyHash.asc().nullsLast().op("text_ops")),
 	index("api_keys_user_id_idx").using("btree", table.userId.asc().nullsLast().op("text_ops")),

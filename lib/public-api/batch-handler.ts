@@ -15,7 +15,7 @@
  * bursts, and one batch is one round of queries.
  */
 
-import { NextRequest, NextResponse, after } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sql, type SQL } from "drizzle-orm";
 import { getUsdRates } from "@/lib/currency";
@@ -24,65 +24,35 @@ import {
   hashKey,
   jsonError,
   jsonOk,
-  monthWindow,
-  NO_STORE,
   normalizeCountry,
   rateLimitHeaders,
-  secondsUntilNextMonthUtc,
   toOffer,
 } from "@/lib/public-api/common";
+import {
+  claimDenial,
+  claimLookups,
+  claimWindow,
+  logLookups,
+  readJsonBody,
+  refundLookups,
+  refusalFor,
+  rejectRequest,
+} from "@/lib/public-api/access";
 import {
   buildBatchBody,
   MAX_BODY_BYTES,
   parseBatchRequest,
-  type BatchRequestError,
   type ParsedBatch,
 } from "@/lib/public-api/batch";
+import type { NicheId } from "@/lib/public-api/pricing";
 import { buildPricingBody, type PricingBody } from "@/lib/public-api/shape";
 
 const TAG = "[/api/v1/public/domains/pricing]";
 
-interface ClaimRow {
-  id: string;
-  user_id: string;
-  is_active: boolean;
-  month_limit: number;
-  per_minute_limit: number;
-  month_used_before: number;
-  month_used: number | null;
-  minute_used: number | null;
-  allowed: boolean;
-  minute_blocked: boolean;
-  month_blocked: boolean;
-}
-
-interface CatalogRow {
+export interface CatalogRow {
   req_domain: string;
   domain_row: Record<string, unknown> | null;
   offers: Record<string, unknown>[] | null;
-}
-
-type RequestRejection =
-  | BatchRequestError
-  | { status: 400 | 413; code: string; message: string; results?: undefined };
-
-function errorWith(err: RequestRejection): NextResponse {
-  const body: Record<string, unknown> = { error: err.code, message: err.message, status: err.status };
-  if (err.results) body.results = err.results;
-  return NextResponse.json(body, { status: err.status, headers: NO_STORE });
-}
-
-/**
- * Is this key usable? Read-only, and only used on the request-rejection
- * paths, so that a malformed request with a bad key still gets the 401 an
- * integrator expects to see first — without touching any counter.
- */
-async function keyIsActive(keyHash: string): Promise<boolean> {
-  const r = await db.execute(sql`
-    SELECT is_active FROM api_keys WHERE key_hash = ${keyHash} LIMIT 1
-  `);
-  const row = r.rows[0] as { is_active: boolean } | undefined;
-  return !!row?.is_active;
 }
 
 /**
@@ -188,6 +158,29 @@ export async function fetchCatalog(domains: string[]): Promise<Map<string, Catal
   return out;
 }
 
+/**
+ * One catalogue row as the published pricing body, or null when the catalogue
+ * does not hold the domain. Shared with the search endpoint, whose results
+ * are these same bodies.
+ */
+export function pricingBodyFor(
+  domain: string,
+  row: CatalogRow | undefined,
+  rates: Record<string, number>,
+  niche: NicheId | null
+): PricingBody | null {
+  const domainRow = row?.domain_row ?? null;
+  if (!domainRow) return null;
+  const offers = (row?.offers ?? []).map(toOffer);
+  const metrics = {
+    domain_rating: domainRow.domain_rating != null ? Number(domainRow.domain_rating) : null,
+    organic_traffic: domainRow.org_traffic != null ? Number(domainRow.org_traffic) : null,
+    ref_domains: domainRow.ref_domains != null ? Number(domainRow.ref_domains) : null,
+    country: normalizeCountry(domainRow.country_main_traffic as string | null),
+  };
+  return buildPricingBody(domain, offers, rates, niche, metrics);
+}
+
 export async function handleBatchPricingRequest(req: NextRequest): Promise<NextResponse> {
   const startMs = Date.now();
 
@@ -202,192 +195,47 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
   //    know how many lookups this call is, and a request we reject without
   //    looking anything up must cost nothing. A rejected request still checks
   //    the key (read-only), so a bad key is reported as 401, not 4xx-body.
-  const reject = async (err: RequestRejection) => {
-    let active = true;
-    try {
-      active = await keyIsActive(keyHash);
-    } catch (e) {
-      // The request is being rejected either way; if the key check itself
-      // fails, report the request's own error rather than turning it into a 500.
-      console.error(`${TAG} key check failed`, e);
-    }
-    if (!active) {
-      return jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
-    }
-    return errorWith(err);
-  };
-
-  const declaredLength = Number(req.headers.get("content-length") ?? "0");
-  if (declaredLength > MAX_BODY_BYTES) {
-    return reject({ status: 413, code: "payload_too_large", message: `Request body exceeds ${MAX_BODY_BYTES} bytes.` });
-  }
-  let text: string;
-  try {
-    text = await req.text();
-  } catch {
-    return reject({ status: 400, code: "invalid_json", message: "Could not read the request body." });
-  }
-  // Content-Length can be absent (chunked) or wrong, so the actual size is
-  // what is enforced; the header check above only saves reading a body that
-  // announces itself as too big.
-  if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
-    return reject({ status: 413, code: "payload_too_large", message: `Request body exceeds ${MAX_BODY_BYTES} bytes.` });
-  }
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    return reject({
-      status: 400,
-      code: "invalid_json",
-      message: 'Request body is not valid JSON. Send Content-Type: application/json with { "domains": [...] }.',
-    });
-  }
-  const parsed = parseBatchRequest(json);
-  if (!parsed.ok) return reject(parsed);
+  const read = await readJsonBody(req, MAX_BODY_BYTES, '{ "domains": [...] }');
+  if (!read.ok) return rejectRequest(keyHash, read.error, TAG);
+  const parsed = parseBatchRequest(read.json);
+  if (!parsed.ok) return rejectRequest(keyHash, parsed, TAG);
 
   const units = parsed.unique.length;
 
-  // 3. Authenticate and claim `units` lookups in one statement — the batch
-  //    form of the old single-domain claim. `k` snapshots the key before the update so that a
-  //    refusal can say which limit refused it. A batch is admitted only when
-  //    ALL of it fits the remaining monthly quota: a partial answer would
-  //    leave the caller to work out which half of their list was priced.
-  const now = new Date();
-  const minuteBucket = Math.floor(now.getTime() / 60000);
-  const month = monthWindow(now);
-  const monthResetEpoch = Math.floor(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0) / 1000
-  );
-
-  let auth;
+  // 3. Authenticate and claim `units` lookups in one statement (access.ts).
+  const w = claimWindow();
+  let k;
   try {
-    auth = await db.execute(sql`
-    WITH k AS (
-      SELECT id, user_id, is_active, per_minute_limit,
-             COALESCE(monthly_limit, daily_limit * 30) AS month_limit,
-             minute_window, minute_count, month_window, month_count
-      FROM api_keys
-      WHERE key_hash = ${keyHash}
-      LIMIT 1
-    ),
-    bumped AS (
-      UPDATE api_keys a
-      SET minute_count  = CASE WHEN a.minute_window = ${minuteBucket} THEN a.minute_count + 1 ELSE 1 END,
-          minute_window = ${minuteBucket},
-          month_count   = CASE WHEN a.month_window = ${month} THEN a.month_count ELSE 0 END + ${units}::int,
-          month_window  = ${month},
-          last_used_at  = NOW()
-      FROM k
-      WHERE a.id = k.id
-        AND k.is_active
-        AND (a.minute_window IS DISTINCT FROM ${minuteBucket} OR a.minute_count < a.per_minute_limit)
-        AND (CASE WHEN a.month_window = ${month} THEN a.month_count ELSE 0 END) + ${units}::int
-            <= COALESCE(a.monthly_limit, a.daily_limit * 30)
-      RETURNING a.id, a.month_count, a.minute_count
-    )
-    SELECT
-      k.id,
-      k.user_id,
-      k.is_active,
-      k.month_limit,
-      k.per_minute_limit,
-      (CASE WHEN k.month_window = ${month} THEN k.month_count ELSE 0 END)          AS month_used_before,
-      (SELECT month_count FROM bumped)                                              AS month_used,
-      (SELECT minute_count FROM bumped)                                             AS minute_used,
-      (SELECT COUNT(*) FROM bumped) > 0                                             AS allowed,
-      (k.minute_window = ${minuteBucket} AND k.minute_count >= k.per_minute_limit)  AS minute_blocked,
-      ((CASE WHEN k.month_window = ${month} THEN k.month_count ELSE 0 END) + ${units}::int > k.month_limit) AS month_blocked
-    FROM k
-  `);
+    k = await claimLookups(keyHash, units, w);
   } catch (err) {
-    // Nothing was claimed: the claim and the key check are one statement, and
-    // it failed as a whole.
     console.error(`${TAG} auth/claim failed`, err);
     return jsonError("internal_error", "An internal error occurred. No lookups were charged. Please retry.", 500);
   }
 
-  const k = auth.rows[0] as unknown as ClaimRow | undefined;
-
-  if (!k || !k.is_active) {
-    return jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
-  }
+  const refusal = refusalFor(k);
+  if (refusal || !k) return refusal ?? jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
 
   const monthLimit = Number(k.month_limit);
   const minuteLimit = Number(k.per_minute_limit);
 
   if (!k.allowed) {
-    if (k.minute_blocked) {
-      return jsonError(
-        "rate_limit_exceeded",
-        "Per-minute rate limit exceeded. See Retry-After header.",
-        429,
-        { "Retry-After": "60", ...rateLimitHeaders(monthLimit, Number(k.month_used_before), minuteLimit, minuteLimit, monthResetEpoch) }
-      );
-    }
-    if (k.month_blocked) {
-      const remaining = Math.max(0, monthLimit - Number(k.month_used_before));
-      const message =
-        remaining === 0
-          ? `Monthly quota of ${monthLimit} lookups reached. Resets on the 1st at 00:00 UTC.`
-          : `This batch needs ${units} lookups but only ${remaining} of your ${monthLimit} monthly lookups remain. Send ${remaining} or fewer distinct domains, or wait for the reset on the 1st at 00:00 UTC.`;
-      return jsonError(
-        "quota_exceeded",
-        message,
-        429,
-        { "Retry-After": String(secondsUntilNextMonthUtc(now)), ...rateLimitHeaders(monthLimit, Number(k.month_used_before), minuteLimit, null, monthResetEpoch) }
-      );
-    }
-    return jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
+    return claimDenial(
+      k,
+      w,
+      (remaining) =>
+        `This batch needs ${units} lookups but only ${remaining} of your ${monthLimit} monthly lookups remain. Send ${remaining} or fewer distinct domains, or wait for the reset on the 1st at 00:00 UTC.`
+    );
   }
 
   let monthUsed = Number(k.month_used);
   const minuteUsed = k.minute_used == null ? null : Number(k.minute_used);
+  const key = k;
 
-  // Hands back `n` of the lookups claimed above. Scoped to this month's
-  // window so a refund can never land in the next month's counter if the
-  // call straddled midnight on the 1st. Returns the counter after the
-  // refund, so the headers report what the caller actually has left.
-  const refund = async (n: number): Promise<number | null> => {
-    if (n <= 0) return null;
-    try {
-      const r = await db.execute(sql`
-        UPDATE api_keys
-        SET month_count = GREATEST(month_count - ${n}::int, 0)
-        WHERE id = ${k.id} AND month_window = ${month}
-        RETURNING month_count
-      `);
-      const row = r.rows[0] as { month_count: number } | undefined;
-      return row ? Number(row.month_count) : null;
-    } catch (err) {
-      console.error(`${TAG} quota refund of ${n} failed`, err);
-      return null;
-    }
-  };
-
-  const log = (statuses: { domain: string; status: number }[]) => {
-    const latencyMs = Date.now() - startMs;
-    // History, not enforcement — the counters on api_keys are the limit — so
-    // it is written after the response, one row per domain looked up, the
-    // same granularity the old single-domain endpoint logged at.
-    after(async () => {
-      if (statuses.length === 0) return;
-      try {
-        const rows = sql.join(
-          statuses.map(
-            (s) => sql`(${k.id}, ${k.user_id}, ${s.domain}, ${s.status}, ${latencyMs})`
-          ),
-          sql`, `
-        );
-        await db.execute(sql`
-          INSERT INTO api_request_logs (api_key_id, user_id, domain, http_status, latency_ms)
-          VALUES ${rows}
-        `);
-      } catch (err) {
-        console.error(`${TAG} log write failed`, err);
-      }
-    });
-  };
+  const refund = (n: number) => refundLookups(key.id, w.month, n, TAG);
+  // One row per domain looked up, the same granularity the old single-domain
+  // endpoint logged at.
+  const log = (statuses: { domain: string; status: number }[]) =>
+    logLookups(key, statuses, Date.now() - startMs, TAG);
 
   // 4. Look everything up in one round trip, alongside the currency rates.
   let catalog: Map<string, CatalogRow>;
@@ -408,17 +256,8 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
   const found = new Map<string, PricingBody>();
   try {
     for (const domain of parsed.unique) {
-      const row = catalog.get(domain);
-      const domainRow = row?.domain_row ?? null;
-      if (!domainRow) continue;
-      const offers = (row?.offers ?? []).map(toOffer);
-      const metrics = {
-        domain_rating: domainRow.domain_rating != null ? Number(domainRow.domain_rating) : null,
-        organic_traffic: domainRow.org_traffic != null ? Number(domainRow.org_traffic) : null,
-        ref_domains: domainRow.ref_domains != null ? Number(domainRow.ref_domains) : null,
-        country: normalizeCountry(domainRow.country_main_traffic as string | null),
-      };
-      found.set(domain, buildPricingBody(domain, offers, rates, parsed.niche, metrics));
+      const body = pricingBodyFor(domain, catalog.get(domain), rates, parsed.niche);
+      if (body) found.set(domain, body);
     }
   } catch (err) {
     console.error(TAG, err);
@@ -438,11 +277,11 @@ export async function handleBatchPricingRequest(req: NextRequest): Promise<NextR
     charged: found.size,
     monthly_limit: monthLimit,
     monthly_remaining: Math.max(0, monthLimit - monthUsed),
-    resets_at: new Date(monthResetEpoch * 1000).toISOString(),
+    resets_at: new Date(w.monthResetEpoch * 1000).toISOString(),
   });
 
   return jsonOk(body, {
-    ...rateLimitHeaders(monthLimit, monthUsed, minuteLimit, minuteUsed, monthResetEpoch),
+    ...rateLimitHeaders(monthLimit, monthUsed, minuteLimit, minuteUsed, w.monthResetEpoch),
     "X-API-Version": "1",
     "X-Lookups-Charged": String(found.size),
   });

@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const userId = decoded.uid;
 
     const existingRows = await db.execute(sql`
-      SELECT id, name, monthly_limit, daily_limit, per_minute_limit
+      SELECT id, name, monthly_limit, daily_limit, per_minute_limit, blocked_at
       FROM api_keys
       WHERE user_id = ${userId} AND is_active = true
       ORDER BY created_at DESC
@@ -26,6 +26,11 @@ export async function POST(req: NextRequest) {
     const existing = (existingRows.rows ?? existingRows)[0] as any;
     if (!existing) {
       return NextResponse.json({ error: "No active API key to regenerate." }, { status: 404 });
+    }
+
+    // Rotating a blocked key must not be a way out of the block.
+    if (existing.blocked_at) {
+      return NextResponse.json({ error: "This API key has been blocked. Contact Linkpricer support." }, { status: 403 });
     }
 
     const { plain, hash } = generateApiKey();
@@ -51,14 +56,17 @@ export async function POST(req: NextRequest) {
         WITH deactivated AS (
           UPDATE api_keys SET is_active = false
           WHERE id = ${existing.id} AND is_active = true
-          RETURNING id, request_count, usage_date, minute_count, minute_window, month_count, month_window
+          RETURNING id, request_count, usage_date, minute_count, minute_window, month_count, month_window,
+                    expires_at, blocked_at, granted_by
         )
         INSERT INTO api_keys (
           user_id, key_hash, name, monthly_limit, daily_limit, per_minute_limit, is_active, plain_key_temp,
-          request_count, usage_date, minute_count, minute_window, month_count, month_window
+          request_count, usage_date, minute_count, minute_window, month_count, month_window,
+          expires_at, blocked_at, granted_by
         )
         SELECT ${userId}, ${hash}, ${existing.name}, ${existing.monthly_limit}, ${existing.daily_limit}, ${existing.per_minute_limit}, true, ${plain},
-          request_count, usage_date, minute_count, minute_window, month_count, month_window
+          request_count, usage_date, minute_count, minute_window, month_count, month_window,
+          expires_at, blocked_at, granted_by
         FROM deactivated
         RETURNING id
       `);
