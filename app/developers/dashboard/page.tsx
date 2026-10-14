@@ -33,6 +33,8 @@ interface MeData {
     monthlyLimit: number | null;
     perMinuteLimit: number;
     lastUsedAt: string | null;
+    expiresAt?: string | null;
+    blocked?: boolean;
   } | null;
   usage: { used: number; limit: number };
 }
@@ -46,6 +48,13 @@ const ENDPOINTS = [
     path: "/v1/public/domains/pricing",
     desc: "Price 1 to 200 domains per request: every niche's marketplace and LinkPricer prices, plus DR, traffic and country. Charged only for domains we find.",
     curl: `curl -X POST "${API_BASE}/v1/public/domains/pricing" \\\n  -H "x-api-key: YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"domains": ["techblog.com", "newsdaily.io"]}'`,
+  },
+  {
+    id: "search",
+    verb: "POST",
+    path: "/v1/public/domains/search",
+    desc: "No list of domains? Send filters instead (DR, traffic, country, language, price) and get up to 50 matching domains with the same prices. Charged per domain returned.",
+    curl: `curl -X POST "${API_BASE}/v1/public/domains/search" \\\n  -H "x-api-key: YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"filters": {"min_dr": 40, "country": ["US"], "max_price": 250}}'`,
   },
 ];
 
@@ -544,6 +553,16 @@ function DashboardContent() {
           {/* API Key */}
           <div className="db-card db-card-full">
             <div className="db-card-label">Your API Key</div>
+            {data?.apiKey?.blocked ? (
+              <div className="db-key-warn" style={{ color: "#b91c1c", margin: "0 0 10px" }}>
+                This key has been blocked and requests with it are refused. Contact Linkpricer support.
+              </div>
+            ) : data?.apiKey?.expiresAt ? (
+              <div className="db-key-warn" style={{ color: new Date(data.apiKey.expiresAt) <= new Date() ? "#b91c1c" : undefined, margin: "0 0 10px" }}>
+                {new Date(data.apiKey.expiresAt) <= new Date() ? "This key expired on " : "This key expires on "}
+                {new Date(data.apiKey.expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}.
+              </div>
+            ) : null}
             {data?.apiKey ? (
               revealedKey ?? data.apiKey.plainKeyTemp ? (
                 <>
@@ -679,7 +698,7 @@ function DashboardContent() {
 
           {/* Endpoints */}
           <div className="db-card db-card-full">
-            <div className="db-card-label">Endpoint</div>
+            <div className="db-card-label">Endpoints</div>
             <div className="db-endpoints">
               {ENDPOINTS.map((e) => (
                 <div key={e.id} className="db-endpoint">
