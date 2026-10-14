@@ -107,6 +107,20 @@ async function recordError(targetDomain: string, message: string): Promise<void>
 }
 
 /**
+ * Cache-only read of the same exclusion list: whatever is stored for the
+ * site, never an Ahrefs call. For follow-up requests of a search that has
+ * already been through getExcludedDomains (and been metered for it) — they
+ * must filter the same way without being a second, unmetered way to spend
+ * Ahrefs units. Returns an empty set when nothing is stored, and rejects if
+ * the read itself fails: an error must not be mistaken for "nothing to hide".
+ */
+export async function getCachedExcludedDomains(ownSiteRaw: string): Promise<Set<string>> {
+  const targetDomain = normalizeDomain(ownSiteRaw);
+  if (!targetDomain) return new Set();
+  return readCache(targetDomain);
+}
+
+/**
  * Returns the set of domains that already link to `ownSiteRaw` (per Ahrefs,
  * filtered to >= 100 org traffic), for excluding from Related Sites results.
  * Never throws — Ahrefs/DB failures degrade to an empty or stale-cache

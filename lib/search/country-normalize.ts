@@ -258,3 +258,55 @@ export function countryMatchPrefixes(isoCode: string): string[] | null {
   if (!canonical) return null;
   return [normalize(canonical), ...(ALIASES[code] ?? []).map(normalize)].filter(Boolean);
 }
+
+/**
+ * Whether a normalized value starts with `prefix` as whole words: equal to
+ * it, or followed by a space. A bare string prefix let "uk" match "ukraine"
+ * (5,501 Ukrainian sites in every UK search), "niger" match "nigeria" and
+ * "dominica" match "dominican republic".
+ */
+function startsWithWords(value: string, prefix: string): boolean {
+  return value === prefix || value.startsWith(prefix + " ");
+}
+
+/**
+ * Stored names that start with one country's name as whole words but belong
+ * to another country, and are not in CODE_TO_NAME/ALIASES to be derived.
+ */
+const EXTRA_EXCLUDES: Record<string, string[]> = {
+  US: ["united states virgin islands", "united states minor outlying islands"],
+  GB: ["united kingdom overseas territories"],
+  KR: ["korea democratic"],
+};
+
+/**
+ * How a stored country value is matched against an ISO-2 code: it must
+ * start with one of `prefixes` as whole words, and with none of `excludes`.
+ *
+ * `excludes` are the other countries' names that begin with one of this
+ * country's — "guinea bissau" for GN, "congo brazzaville" for CD — so the
+ * longer, more specific name wins. Derived from the tables above rather than
+ * listed by hand, so a new alias cannot reintroduce a collision unnoticed.
+ * Returns null for an unknown code, as countryMatchPrefixes does.
+ */
+export function countryMatchRules(isoCode: string): { prefixes: string[]; excludes: string[] } | null {
+  const code = isoCode.trim().toUpperCase();
+  const prefixes = countryMatchPrefixes(code);
+  if (!prefixes) return null;
+  const excludes = new Set((EXTRA_EXCLUDES[code] ?? []).map(normalize));
+  for (const other of Object.keys(CODE_TO_NAME)) {
+    if (other === code) continue;
+    for (const name of countryMatchPrefixes(other) ?? []) {
+      if (prefixes.some((p) => name !== p && startsWithWords(name, p))) excludes.add(name);
+    }
+  }
+  return { prefixes, excludes: [...excludes] };
+}
+
+/** Whether a stored country value (raw, as scraped) is the given ISO-2 code. */
+export function countryValueMatches(stored: string | null | undefined, isoCode: string): boolean {
+  const rules = countryMatchRules(isoCode);
+  if (!rules || !stored) return false;
+  const v = normalize(stored);
+  return rules.prefixes.some((p) => startsWithWords(v, p)) && !rules.excludes.some((e) => startsWithWords(v, e));
+}

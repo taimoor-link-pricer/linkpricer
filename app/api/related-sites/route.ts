@@ -38,6 +38,11 @@ const EVENT_TYPE = "related_sites_search";
 // speed alone: at 80 the cut was measurably discarding sites the model then
 // scored 90+ when it could see them.
 const CLAUDE_SHORTLIST_SIZE = 160;
+// Only reached by a search that cannot go deep (see `deep` below). A
+// match-sorted search returns every site the reranker scored — up to the
+// shortlist size above — and the page loads the rest of the related sites
+// from ./tail/route.ts, where this used to be a hard ceiling of 30 results
+// however many related sites existed.
 const FINAL_RESULT_SIZE = 30;
 // Plain-column sorts (DR/traffic/price/keywords/refDomains) skip Claude
 // entirely, so they can afford to return a much larger, unbounded-feeling
@@ -199,7 +204,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const query = (body.query ?? "").trim();
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  const query = typeof body.query === "string" ? body.query.trim() : "";
   if (!query) return NextResponse.json({ error: "query is required" }, { status: 400 });
 
   // Parsed before the quota gate, unlike before: whether the quota applies at
@@ -252,7 +258,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { results, lowRelevance, degradedAhrefs, total } = await searchCatalog({
+    const { results, lowRelevance, degradedAhrefs, total, tail } = await searchCatalog({
       query,
       filters: body.filters,
       ownSite: body.ownSite,
@@ -262,9 +268,13 @@ export async function POST(req: NextRequest) {
       candidatePoolLimit: isPlainSort ? SORTED_CANDIDATE_POOL_LIMIT : undefined,
       sortBy,
       sortDir: body.sortDir,
+      deep: !isPlainSort,
     });
 
-    if (results.length === 0) {
+    // An empty first page that still carries a tail handle is not a no-hit
+    // search: the rest of the list is about to be loaded (see the early
+    // return in searchCatalog for when this happens).
+    if (results.length === 0 && !tail) {
       // A no-hit search doesn't count — release the slot reserved above.
       if (countAsSearch) await releaseQuotaSlot(userId, weekStartIso);
       return NextResponse.json({ results: [], lowRelevance: false, degradedAhrefs, total: 0, ...quota });
@@ -289,7 +299,7 @@ export async function POST(req: NextRequest) {
     const updatedQuota = countAsSearch && reservedCount !== null
       ? { used: reservedCount, remaining: Math.max(0, quota.limit - reservedCount), limit: quota.limit, resetsAt: quota.resetsAt }
       : quota;
-    return NextResponse.json({ results, lowRelevance, degradedAhrefs, total, ...updatedQuota });
+    return NextResponse.json({ results, lowRelevance, degradedAhrefs, total, tail, ...updatedQuota });
   } catch (err) {
     console.error("[/api/related-sites]", err instanceof Error ? err.message : err);
     // The search never completed — release the reserved slot so a failed
