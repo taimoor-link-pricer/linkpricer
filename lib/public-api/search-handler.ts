@@ -56,6 +56,7 @@ import {
   type ParsedSearch,
   type SearchResult,
 } from "@/lib/public-api/search";
+import { notPlatformHost, sourceAllowed } from "@/lib/public-api/source-quality";
 import { candidateFilterClauses } from "@/lib/search/catalog-search";
 
 const TAG = "[/api/v1/public/domains/search]";
@@ -162,7 +163,8 @@ export function candidateQuery(
     FROM domains d
     JOIN marketplace_offers o
       ON o.domain_id = d.id AND o.available = true AND ${priceCol} > 0
-    WHERE true
+        AND ${sourceAllowed(sql`o.marketplace_name`)}
+    WHERE ${notPlatformHost(sql`d.domain`)}
       ${metricRange(sql`d.domain_rating`, f.min_dr, f.max_dr, sql`int`)}
       ${metricRange(sql`d.org_traffic`, f.min_traffic, f.max_traffic, sql`bigint`)}
       ${metricRange(sql`d.ref_domains`, f.min_ref_domains, f.max_ref_domains, sql`bigint`)}

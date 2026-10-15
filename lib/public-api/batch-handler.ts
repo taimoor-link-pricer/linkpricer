@@ -46,6 +46,7 @@ import {
 } from "@/lib/public-api/batch";
 import type { NicheId } from "@/lib/public-api/pricing";
 import { buildPricingBody, type PricingBody } from "@/lib/public-api/shape";
+import { sourceAllowed } from "@/lib/public-api/source-quality";
 
 const TAG = "[/api/v1/public/domains/pricing]";
 
@@ -115,6 +116,8 @@ export function catalogQuery(domains: string[]): SQL {
         JOIN d ON d.id = o.domain_id
         LEFT JOIN marketplaces m ON lower(m.name) = lower(o.marketplace_name)
         WHERE o.available = true
+          -- Not placements: monthly rentals and the like (source-quality.ts).
+          AND ${sourceAllowed(sql`o.marketplace_name`)}
         ORDER BY d.req_domain,
                  regexp_replace(lower(o.marketplace_name), '^(app|panel)\\.', ''),
                  o.min_price::float ASC NULLS LAST
@@ -260,12 +263,17 @@ export async function handleBatchPricingRequest(req: NextRequest, resolvedKeyHas
     return jsonError("internal_error", "An internal error occurred. No lookups were charged. Please retry.", 500);
   }
 
-  // 5. Build each domain's pricing body.
+  // 5. Build each domain's pricing body. A domain we list whose listings all
+  //    lack a usable price (empty or zero on every niche) has nothing to sell:
+  //    it is answered like a missing domain, with its own error code.
   const found = new Map<string, PricingBody>();
+  const unpriced = new Set<string>();
   try {
     for (const domain of parsed.unique) {
       const body = pricingBodyFor(domain, catalog.get(domain), rates, parsed.niche);
-      if (body) found.set(domain, body);
+      if (!body) continue;
+      if (body.available_niches.length === 0) unpriced.add(domain);
+      else found.set(domain, body);
     }
   } catch (err) {
     console.error(TAG, err);
@@ -274,23 +282,30 @@ export async function handleBatchPricingRequest(req: NextRequest, resolvedKeyHas
     return jsonError("internal_error", "An internal error occurred. No lookups were charged. Please retry.", 500);
   }
 
-  // 6. Domains the catalogue does not hold are not charged.
-  const notFound = units - found.size;
-  const afterRefund = await refund(notFound);
+  // 6. Only an answer that carries a price is charged. A domain that is priced,
+  //    but not for the niche filtered to, still comes back (with
+  //    available_niches saying what it IS priced for) at no cost.
+  const charged = [...found.values()].filter((b) => b.found).length;
+  const afterRefund = await refund(units - charged);
   if (afterRefund != null) monthUsed = afterRefund;
 
   log(parsed.unique.map((domain) => ({ domain, status: found.has(domain) ? 200 : 404 })));
 
-  const body = buildBatchBody(parsed as ParsedBatch, found, {
-    charged: found.size,
-    monthly_limit: monthLimit,
-    monthly_remaining: Math.max(0, monthLimit - monthUsed),
-    resets_at: new Date(w.monthResetEpoch * 1000).toISOString(),
-  });
+  const body = buildBatchBody(
+    parsed as ParsedBatch,
+    found,
+    {
+      charged,
+      monthly_limit: monthLimit,
+      monthly_remaining: Math.max(0, monthLimit - monthUsed),
+      resets_at: new Date(w.monthResetEpoch * 1000).toISOString(),
+    },
+    unpriced
+  );
 
   return jsonOk(body, {
     ...rateLimitHeaders(monthLimit, monthUsed, minuteLimit, minuteUsed, w.monthResetEpoch),
     "X-API-Version": "1",
-    "X-Lookups-Charged": String(found.size),
+    "X-Lookups-Charged": String(charged),
   });
 }

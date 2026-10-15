@@ -57,8 +57,9 @@ export const TOOLS: readonly ToolDefinition[] = [
       "marketplaces (marketplace: what the sources charge) and LinkPricer's own fee-inclusive price " +
       "(linkpricer: what a customer pays, with a recommended price from trusted sources), plus the number " +
       "of offers, when the prices were last updated, and the site's Domain Rating, organic traffic, " +
-      "referring domains and main country. All prices are USD. A domain LinkPricer has no offers for comes " +
-      "back as not_found. Each domain found uses one lookup from the user's monthly quota.",
+      "referring domains and main country. All prices are USD. A domain LinkPricer has no priced offers for comes " +
+      "back as not_found. Each domain answered with a price uses one lookup from the user's monthly quota; " +
+      "not_found domains, and domains not priced for the niche asked, are free.",
     inputSchema: {
       type: "object",
       properties: {
@@ -82,7 +83,9 @@ export const TOOLS: readonly ToolDefinition[] = [
     description:
       "Find websites to buy a guest post or link on, by Domain Rating, organic traffic, referring domains, " +
       "price, country, language, TLD or topic. Returns matching sites with the same prices and metrics as " +
-      "get_link_prices. Set at least one filter. Each site returned uses one lookup from the user's monthly " +
+      "get_link_prices. Never returns blog-hosting subdomains (blogspot, wordpress.com) or social platforms " +
+      "(reddit, linkedin, quora), which are not real editorial placements. Set at least one filter. " +
+      "Each site returned uses one lookup from the user's monthly " +
       `quota, so ask for only as many as needed (default ${MCP_DEFAULT_SEARCH_RESULTS}, max ${MCP_MAX_SEARCH_RESULTS}). ` +
       "For prices on sites the user already named, use get_link_prices instead.",
     inputSchema: {

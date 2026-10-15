@@ -351,3 +351,39 @@ describe("pricing — unchanged by sharing its quota code", () => {
     expect((await pricing({ domains: [] })).status).toBe(401);
   });
 });
+
+describe("pricing — charges only for a price", () => {
+  it("reports a listed domain with no usable price as no_prices, uncharged", async () => {
+    add("priced.com", 300);
+    add("empty.nl", 0);
+    state.catalog.get("empty.nl")!.offers = [{ currency: "EUR", min_price: null, trusted: false, freshness: null }];
+    const res = await pricing({ domains: ["priced.com", "empty.nl"] });
+    const body = await res.json();
+    expect(body.results[1]).toMatchObject({ status: "not_found", data: null, error: { code: "no_prices" } });
+    expect(body.summary).toMatchObject({ ok: 1, not_found: 1 });
+    expect(state.claims).toEqual([2]);
+    expect(state.refunds).toEqual([1]);
+    expect(body.usage).toMatchObject({ charged: 1, monthly_remaining: 999 });
+    expect(res.headers.get("X-Lookups-Charged")).toBe("1");
+  });
+
+  it("answers a niche the domain is not priced for, with what it is priced for, at no cost", async () => {
+    add("a.com", 300);
+    const res = await pricing({ domains: ["a.com"], niche: "gambling" });
+    const body = await res.json();
+    expect(body.results[0]).toMatchObject({ status: "ok", data: { found: false, available_niches: ["standard"] } });
+    expect(body.usage.charged).toBe(0);
+    expect(state.monthUsed).toBe(0);
+  });
+});
+
+describe("search — leaves out what is not a placement", () => {
+  it("drops platform hosts and excluded sources in the candidate query", async () => {
+    await search({ filters: { min_dr: 40 } });
+    const { text, params } = state.searchSql[0];
+    expect(text).toMatch(/lower\(d\.domain\) !~ \$\d+/);
+    expect(text).toMatch(/lower\(o\.marketplace_name\) NOT IN \(\$\d+\)/);
+    expect(params).toContain("serpzilla.com");
+    expect(params.some((p) => typeof p === "string" && p.includes("blogspot"))).toBe(true);
+  });
+});

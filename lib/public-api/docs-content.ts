@@ -120,6 +120,7 @@ for r in res.json()["results"]:
 
 export const RESULT_ERROR_CODES = [
   { name: "domain_not_found", desc: "The domain is not in our catalog. status is \"not_found\". Not charged." },
+  { name: "no_prices", desc: "We list the domain, but none of its listings carries a usable price right now. status is \"not_found\". Not charged." },
   { name: "invalid_domain", desc: "The entry is not a valid domain (or not a string). status is \"invalid\". Not charged." },
 ];
 
@@ -253,13 +254,13 @@ export const BATCH_FIELDS: [field: string, type: string, desc: string][] = [
   ["summary.requested", "number", "Entries you sent."],
   ["summary.unique_domains", "number", "Distinct valid domains looked up."],
   ["summary.ok / not_found / invalid", "number", "Results per status, counted per entry (duplicates included)."],
-  ["usage.charged", "number", "Lookups this request took from your monthly quota — one per distinct domain in our catalog (every status \"ok\" domain, even when data.found is false for the niche you filtered to)."],
+  ["usage.charged", "number", "Lookups this request took from your monthly quota — one per distinct domain answered with a price (status \"ok\" and data.found true). A domain priced, but not for the niche you filtered to, comes back with data.found false and available_niches at no charge."],
   ["usage.monthly_limit", "number", "Your monthly lookup quota."],
   ["usage.monthly_remaining", "number", "Lookups left this month after this request."],
   ["usage.resets_at", "string", "When the quota resets (the 1st, 00:00 UTC), ISO 8601."],
   ["results[].input", "string | null", "The entry exactly as you sent it. null if it was not a string."],
   ["results[].domain", "string | null", "The normalized domain that was looked up. null when the entry was invalid."],
-  ["results[].status", "string", "\"ok\", \"not_found\" (not in our catalog) or \"invalid\" (malformed entry)."],
+  ["results[].status", "string", "\"ok\", \"not_found\" (not in our catalog, or listed without a usable price — see error.code) or \"invalid\" (malformed entry)."],
   ["results[].error", "object | null", "{ code, message } when status is not ok, otherwise null."],
   ["results[].data", "object | null", "When status is ok: the domain's pricing body — see Domain Result in the Reference section. Otherwise null. data.found is false when the domain is catalogued but nothing is priced for the niche you asked for."],
   
@@ -274,7 +275,7 @@ export const SEARCH_RESPONSE_FIELDS: [field: string, type: string, desc: string]
   ["summary.limit", "number", "The limit that applied."],
   ["summary.has_more", "boolean", "true when more sites matched than were returned. There is no next page: narrow the filters or change the sort to see different sites."],
   ["usage", "object", "Same fields as the Pricing API (charged, monthly_limit, monthly_remaining, resets_at). usage.charged equals summary.returned."],
-  ["results[].domain", "string", "The matching domain."],
+  ["results[].domain", "string", "The matching domain. Search never returns blog-hosting subdomains (e.g. *.blogspot.com, *.wordpress.com), sites on shared registry names (*.uk.com, *.it.com …) or social and user-content platforms (reddit.com, linkedin.com, quora.com …): the first two carry the parent domain's Domain Rating rather than their own, and a listing on a social platform is a profile or post link, not an editorial placement. The pricing endpoint still prices them when you ask by name."],
   ["results[].data", "object", "The domain's pricing body — identical to what the pricing endpoint returns for it. See Domain Result."],
   
 ];
@@ -289,12 +290,12 @@ export const RESULT_FIELDS: [field: string, type: string, desc: string][] = [
   ["pricing", "object", "One entry per niche that at least one source prices for this domain. A niche nobody prices is absent — never present with nulls."],
   ["pricing.<niche>.label", "string", "Human-readable niche name, e.g. \"Gambling / iGaming\"."],
   ["pricing.<niche>.summary", "string", "One sentence naming what this niche's headline price is for. For display only — every figure in it is also a number below, and the wording may change at any time, so do not parse it."],
-  ["pricing.<niche>.marketplace", "object", "What the sources charge, WITHOUT the Linkpricer fee. Anonymized — we never say which source a price came from."],
+  ["pricing.<niche>.marketplace", "object", "What the sources charge, WITHOUT the Linkpricer fee. Anonymized — we never say which source a price came from. Monthly link rentals are not counted: they are not a one-off placement, and their per-month price in cents would otherwise be every rented site's lowest price."],
   ["pricing.<niche>.marketplace.lowest", "number", "WITHOUT fee. Lowest price any source charges for this niche, in USD."],
   ["pricing.<niche>.marketplace.average", "number", "WITHOUT fee. Mean price across every source that prices this niche, in USD."],
   ["pricing.<niche>.marketplace.highest", "number", "WITHOUT fee. Highest price any source charges for this niche, in USD."],
   ["pricing.<niche>.linkpricer", "object", "What you pay Linkpricer, fee INCLUDED."],
-  ["pricing.<niche>.linkpricer.lowest", "number", "WITH fee. What Linkpricer charges to place this for you at the best price. Identical to the price shown on the dashboard's Buy button."],
+  ["pricing.<niche>.linkpricer.lowest", "number", "WITH fee. What Linkpricer charges to place this for you at the best price. Matches the dashboard's Buy button, except where the dashboard still counts a monthly rental the API leaves out."],
   ["pricing.<niche>.linkpricer.average", "number", "WITH fee. The mean of your price at every source. NOT marketplace.average plus the fee — each source is priced individually and then averaged, so the minimum fee on cheap placements is reflected honestly."],
   ["pricing.<niche>.linkpricer.highest", "number", "WITH fee. Your price at the most expensive source."],
   ["pricing.<niche>.linkpricer.recommended", "number | null", "WITH fee. What Linkpricer charges via the cheapest source our team has vetted. null when no vetted source prices this niche for this domain — the placement is still available at linkpricer.lowest."],
