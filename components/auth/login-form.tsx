@@ -188,7 +188,9 @@ export function LoginForm() {
 
       <div style={{ textAlign: "center", fontSize: 14, color: "#6b7280", marginTop: 24 }}>
         Don&apos;t have an account?{" "}
-        <Link href={ROUTES.signup} style={{ color: "#0052cc", textDecoration: "none", fontWeight: 600 }}>
+        {/* Carries the return path across, so someone sent here to connect an app
+            (or by the proxy) lands back where they started either way. */}
+        <Link href={redirect ? `${ROUTES.signup}?redirect=${encodeURIComponent(redirect)}` : ROUTES.signup} style={{ color: "#0052cc", textDecoration: "none", fontWeight: 600 }}>
           Sign up free
         </Link>
       </div>
