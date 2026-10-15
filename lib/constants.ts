@@ -34,6 +34,7 @@ export const ROUTES = {
   adminBlogAuthors: "/admin/blog/authors",
   adminAnalyticsUsers: "/admin/analytics/users",
   adminSupportTickets: "/admin/support-tickets",
+  adminApiKeys: "/admin/api-keys",
 } as const;
 
 // The logged-out demo pages and the real in-app tool each one previews.

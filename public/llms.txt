@@ -11,7 +11,7 @@ Linkpricer solves a specific problem: buyers of backlinks (SEO agencies, freelan
 
 ## Developer API
 
-- [API reference (markdown)](https://www.linkpricer.ai/developers/docs.md): The complete reference for the pricing API as plain text — one endpoint, `POST /api/v1/public/domains/pricing`, 1 to 200 domains per request, authenticated with an `x-api-key` header. Read this to integrate.
+- [API reference (markdown)](https://www.linkpricer.ai/developers/docs.md): The complete reference as plain text. Two APIs, both authenticated with an `x-api-key` header and sharing one monthly quota: the Pricing API, `POST /api/v1/public/domains/pricing`, prices 1 to 200 domains you already have; the Search API, `POST /api/v1/public/domains/search`, takes filters (DR, traffic, country, language, price, TLD, category) and returns up to 50 matching domains with their prices. Read this to integrate.
 - [API reference (web page)](https://www.linkpricer.ai/developers/docs): The same content for humans.
 
 ## Company

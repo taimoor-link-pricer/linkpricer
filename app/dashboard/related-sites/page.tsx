@@ -12,7 +12,7 @@
 // semantic/embeddings — see the route file for why) so match quality won't
 // match the reference screenshots exactly; that's a disclosed, known gap
 // pending an embeddings API key decision, not something faked here.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthContext } from "@/lib/contexts/auth-context";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
@@ -400,6 +400,9 @@ const RS_COLUMNS: { label: string; sortKey?: SortableColumn }[] = [
   { label: "Keywords", sortKey: "keywords" }, { label: "Category" },
 ];
 const PAGE_SIZE = 25;
+// CSV export: rows per request, and requests in flight at once.
+const EXPORT_BATCH_SIZE = 50;
+const EXPORT_CONCURRENCY = 5;
 
 // Country and niche are NOT in here: they are multi-select now, and an
 // empty array (like `tlds`) is their "no filter" state, which the "any"
@@ -532,11 +535,44 @@ function truncateCategory(category: string): string {
 }
 
 interface RelatedSite {
+  id: string;
   domain: string; matchPct: number; country: string; lang: string; category: string;
   dr: number; drUpdatedAt: string | null; drTrend: "up" | "flat" | "down"; traffic: number; keywords: number; refDomains: number;
   grade: string; score: number; bestPrice: number | null; yourPrice: number | null; offers: Offer[];
 }
 interface Quota { used: number; remaining: number; limit: number; resetsAt: string }
+// One related site beyond the ones the search returned in full: its id and
+// the four numbers the table can sort by. Offers and prices are fetched per
+// page (see the rows effect in the page component).
+interface TailEntry { id: string; matchPct: number; dr: number; traffic: number; keywords: number }
+
+async function fetchRowsByIds(ids: string[]): Promise<RelatedSite[]> {
+  const res = await fetch("/api/related-sites/rows", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error("rows request failed");
+  return ((await res.json()).rows ?? []) as RelatedSite[];
+}
+
+// Placeholder for a row whose page has been opened but whose data is still
+// on its way from /api/related-sites/rows.
+function LoadingRow({ isLast }: { isLast: boolean }) {
+  return (
+    <tr>
+      <td colSpan={RS_COLUMNS.length} style={{ padding: "14px 14px", borderBottom: isLast ? "none" : `1px solid ${C.line}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={shimmer(20, 20, 6)} />
+          <div style={shimmer(170, 12, 4)} />
+          <div style={shimmer(80, 22, 999)} />
+          <div style={shimmer(110, 22, 8)} />
+          <div style={shimmer(52, 12, 4)} />
+          <div style={shimmer(40, 12, 4)} />
+        </div>
+      </td>
+    </tr>
+  );
+}
 
 // DR hover tooltip text — domain_rating_updated_at is only ever set by the
 // live ahrefs-dr.ts job on a confirmed fetch (see lib/db/schema.ts), so a
@@ -700,6 +736,29 @@ export default function RelatedSitesPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
   const [results, setResults] = useState<RelatedSite[]>([]);
+  // The rest of the related sites, beyond what the search itself returned.
+  // `results` is the head: every site the reranker read and scored, fully
+  // loaded. The tail arrives from /api/related-sites/tail a few seconds
+  // later as ids and numbers only; a tail row's offers and prices are
+  // fetched from /api/related-sites/rows when a page showing it is opened.
+  const [tail, setTail] = useState<TailEntry[]>([]);
+  const [tailStatus, setTailStatus] = useState<"idle" | "loading" | "done" | "failed">("idle");
+  const [tailCapped, setTailCapped] = useState(false);
+  const [tailRows, setTailRows] = useState<Record<string, RelatedSite>>({});
+  // The set of row ids whose fetch last failed (as the comma-joined key the
+  // rows effect uses), so the failure notice belongs to that page only and
+  // clears itself when another page is opened.
+  const [rowsFailedFor, setRowsFailedFor] = useState("");
+  const [rowsRetry, setRowsRetry] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  // Bumped on every new search so a tail or page response that belongs to
+  // the previous search is dropped instead of being merged into this one.
+  const searchSeq = useRef(0);
+  // Counts searches *started* (searchSeq counts searches that replaced what
+  // is on screen). The gap between the two is a search in flight.
+  const searchesStarted = useRef(0);
+  // What the last search asked for, kept so "retry" can re-request its tail.
+  const lastTailRequest = useRef<Record<string, unknown> | null>(null);
   // Traffic/DR/price used to be fixed-bucket dropdowns (10K+/100K+/...,
   // DR 30+/50+/70+/90+, $300-$700) applied as SQL pre-filters, so any query
   // whose matches didn't clear that bucket silently returned nothing.
@@ -750,10 +809,30 @@ export default function RelatedSitesPage() {
   // dropdown made impossible. Empty array = no filter.
   const [countries, setCountries] = useState<string[]>([]);
   const [niches, setNiches] = useState<string[]>([]);
-  // Traffic/DR/price are now sent to the server as real SQL filters (see
-  // runSearch) instead of trimmed client-side after the fact, so `results`
-  // already reflects them by the time it lands here.
-  const filteredResults = results;
+  // Every result in display order: the head and the tail as one list.
+  // Traffic/DR/price are sent to the server as real SQL filters (see
+  // runSearch), so both halves already reflect them. Sorting, on the other
+  // hand, happens here: the list carries match %, DR, traffic and keywords
+  // for every site, so a column sort re-orders the same results instantly
+  // instead of re-running the search (which used to return a different set
+  // of sites for each sort).
+  const order = useMemo<TailEntry[]>(() => {
+    const all: TailEntry[] = [
+      ...results.map((r) => ({ id: r.id, matchPct: r.matchPct, dr: r.dr, traffic: r.traffic, keywords: r.keywords })),
+      ...tail,
+    ];
+    const key = sortBy === "match" ? "matchPct" : sortBy;
+    const asc = sortBy !== "match" && sortDir === "asc";
+    // Array.sort is stable and the head is listed first, so on a tied match %
+    // a site the model actually read stays ahead of an estimated one. A
+    // missing metric arrives as 0 and sorts last in both directions, so
+    // "lowest DR first" does not open with sites that simply have no DR.
+    return all.sort((a, b) => {
+      if (asc && (a[key] === 0) !== (b[key] === 0)) return a[key] === 0 ? 1 : -1;
+      return asc ? a[key] - b[key] : b[key] - a[key];
+    });
+  }, [results, tail, sortBy, sortDir]);
+  const headById = useMemo(() => new Map(results.map((r) => [r.id, r])), [results]);
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [lowRelevance, setLowRelevance] = useState(false);
@@ -855,7 +934,7 @@ export default function RelatedSitesPage() {
   }, []);
 
   async function runSearch(overrides?: {
-    sortBy?: SortableColumn; sortDir?: SortDir; countAsSearch?: boolean;
+    countAsSearch?: boolean;
     trafficMin?: number; trafficMax?: number; drMin?: number; drMax?: number; priceMin?: number; priceMax?: number;
     filters?: typeof RS_DEFAULT_FILTERS;
     trafficFilterActive?: boolean; drFilterActive?: boolean; priceFilterActive?: boolean;
@@ -864,8 +943,6 @@ export default function RelatedSitesPage() {
     niches?: string[];
   }) {
     if (!query.trim() || searching) return;
-    const useSortBy = overrides?.sortBy ?? sortBy;
-    const useSortDir = overrides?.sortDir ?? sortDir;
     const countAsSearch = overrides?.countAsSearch ?? true;
     // Overrides let callers (e.g. clearFilters) pass the post-clear values
     // explicitly rather than reading state that a just-fired setState hasn't
@@ -885,6 +962,7 @@ export default function RelatedSitesPage() {
     const useNiches = overrides?.niches ?? niches;
     setSearching(true);
     setError(null);
+    searchesStarted.current++;
     try {
       // These become real SQL WHERE-clause filters in catalog-search.ts, not
       // a post-fetch trim — so the result set (and quota-limited page size)
@@ -914,20 +992,54 @@ export default function RelatedSitesPage() {
           filters: parsedFilters,
           ownSite: hasSite ? ownSite.trim() : undefined,
           hideLinked: hasSite && hideLinked,
-          sortBy: useSortBy,
-          sortDir: useSortDir,
           countAsSearch,
         }),
       });
       const data = await res.json();
       setHasSearched(true);
+      // The sequence number moves here, when this search replaces what is on
+      // screen (with results or with nothing) — not when it starts. A search
+      // that dies on the way (network error, a gateway's non-JSON 504) leaves
+      // the previous results up, and their tail and page requests still in
+      // flight have to be allowed to land; bumping at the start orphaned
+      // them, leaving "finding more…" and loading rows up for good.
+      const seq = ++searchSeq.current;
       if (!res.ok) {
         setError(data.error ?? "Search failed");
         if (data.remaining != null) setQuota({ used: data.used, remaining: data.remaining, limit: data.limit, resetsAt: data.resetsAt });
         setResults([]);
+        setTail([]);
+        setTailRows({});
+        setTailStatus("idle");
+        lastTailRequest.current = null;
         return;
       }
       setResults(data.results);
+      setTail([]);
+      setTailRows({});
+      setTailCapped(false);
+      setRowsFailedFor("");
+      // The search answers with the sites it scored; `tail` is its handle
+      // for everything else that is related. That list is loaded in the
+      // background — it can take many seconds on a search nobody has run
+      // lately, and the first page should not wait for it.
+      // Also when the first page came back empty but with a tail handle: a
+      // narrow filter on a search nobody has run lately can leave the first
+      // page with nothing while the filtered list still has sites to show.
+      if (data.tail && !data.lowRelevance) {
+        lastTailRequest.current = {
+          query,
+          filters: parsedFilters,
+          ownSite: hasSite ? ownSite.trim() : undefined,
+          hideLinked: hasSite && hideLinked,
+          anchor: data.tail,
+          excludeIds: (data.results as RelatedSite[]).map((r) => r.id),
+        };
+        loadTail(seq);
+      } else {
+        lastTailRequest.current = null;
+        setTailStatus("idle");
+      }
       // Traffic/DR/price are search options the customer sets directly (drag
       // or type), not something the app should silently readjust based on
       // what a search happened to return — so, unlike the old behavior, they
@@ -943,10 +1055,57 @@ export default function RelatedSitesPage() {
     }
   }
 
+  // Two requests, not one. The full list of related sites is slow to read
+  // the first time a search is run, and most of that cost is how many sites
+  // are asked for — so the first request asks only for the nearest few
+  // hundred and the count appears early. The second, for the complete list,
+  // is made only when the first says more remain (`partial`); a search with a
+  // short tail is finished after one. The full list starts with the same
+  // sites in the same order, so replacing one with the other does not move
+  // anything the user is looking at.
+  async function loadTail(seq: number) {
+    const request = lastTailRequest.current;
+    if (!request) return;
+    const startedAtSearch = searchesStarted.current;
+    setTailStatus("loading");
+    const ask = async (quick: boolean) => {
+      const res = await fetch("/api/related-sites/tail", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...request, quick }),
+      });
+      return res.ok ? ((await res.json()) as { entries?: TailEntry[]; capped?: boolean; partial?: boolean }) : null;
+    };
+    try {
+      // A failed quick pass is not fatal: the full request below can still
+      // answer on its own.
+      const first = await ask(true).catch(() => null);
+      if (seq !== searchSeq.current) return;
+      if (first) {
+        setTail(first.entries ?? []);
+        setTailCapped(!!first.capped);
+        if (!first.partial) { setTailStatus("done"); return; }
+      }
+      // A newer search has started since: do not put the long read of a list
+      // that is about to be replaced on the database next to that search's
+      // first page. Left as "failed" rather than "loading" so that, if the
+      // newer search dies and these results stay up, there is a retry link.
+      if (startedAtSearch !== searchesStarted.current) { setTailStatus("failed"); return; }
+      const full = await ask(false);
+      if (seq !== searchSeq.current) return;
+      // Keeps whatever the quick pass delivered and offers a retry.
+      if (!full) { setTailStatus("failed"); return; }
+      setTail(full.entries ?? []);
+      setTailCapped(!!full.capped);
+      setTailStatus("done");
+    } catch {
+      if (seq === searchSeq.current) setTailStatus("failed");
+    }
+  }
+
   function handleSearchClick() {
     setSortBy("match");
     setSortDir("desc");
-    runSearch({ sortBy: "match", sortDir: "desc", countAsSearch: true });
+    runSearch({ countAsSearch: true });
   }
 
   function cycleColumnSort(col: Exclude<SortableColumn, "match">) {
@@ -960,18 +1119,70 @@ export default function RelatedSitesPage() {
     } // else: already asc on this column -> falls back to "match" (neutral)
     setSortBy(nextBy);
     setSortDir(nextDir);
-    runSearch({ sortBy: nextBy, sortDir: nextDir, countAsSearch: false });
+    setPage(1);
   }
 
   function resetToMatchSort() {
     if (searching || !hasSearched || sortBy === "match") return;
     setSortBy("match");
     setSortDir("desc");
-    runSearch({ sortBy: "match", sortDir: "desc", countAsSearch: false });
+    setPage(1);
   }
 
-  function exportCsv() {
-    if (filteredResults.length === 0) return;
+  async function exportCsv() {
+    // Not while the list is still arriving: the file would hold whatever had
+    // loaded so far and look complete.
+    if (order.length === 0 || exporting || tailStatus === "loading") return;
+    setError(null);
+    // "Export all results" means all of them, including pages nobody has
+    // opened yet — those rows are fetched now. In small batches, several at
+    // a time: one after another, 100 rows a request, a 738-result export
+    // took 49 seconds, nearly all of it waiting on one slow request before
+    // sending the next.
+    const seq = searchSeq.current;
+    const loaded: Record<string, RelatedSite> = { ...tailRows };
+    const missing = order.filter((e) => !headById.has(e.id) && !loaded[e.id]).map((e) => e.id);
+    if (missing.length > 0) {
+      setExporting(true);
+      try {
+        const batches: string[][] = [];
+        for (let i = 0; i < missing.length; i += EXPORT_BATCH_SIZE) batches.push(missing.slice(i, i + EXPORT_BATCH_SIZE));
+        let next = 0;
+        let failed = false;
+        const worker = async () => {
+          // `failed` stops the other workers taking new batches once one
+          // request has failed, instead of running the queue out for a file
+          // that will not be written.
+          while (!failed && seq === searchSeq.current && next < batches.length) {
+            const batch = batches[next++];
+            try {
+              for (const row of await fetchRowsByIds(batch)) loaded[row.id] = row;
+            } catch (err) {
+              failed = true;
+              throw err;
+            }
+          }
+        };
+        const settled = await Promise.allSettled(Array.from({ length: Math.min(EXPORT_CONCURRENCY, batches.length) }, worker));
+        // Rows that did arrive are kept either way, so a retry only has to
+        // fetch what is still missing.
+        // Replaced by another search meanwhile: nothing here is for what is on
+        // screen now — no rows to keep, no file, no message.
+        if (seq !== searchSeq.current) return;
+        setTailRows((prev) => ({ ...prev, ...loaded }));
+        if (settled.some((r) => r.status === "rejected")) {
+          setError("Couldn't load every result for the export. Please try again.");
+          return;
+        }
+      } finally {
+        setExporting(false);
+      }
+      if (seq !== searchSeq.current) return;
+    }
+    const exportRows = order.flatMap((e) => {
+      const row = headById.get(e.id) ?? loaded[e.id];
+      return row ? [{ ...row, matchPct: e.matchPct }] : [];
+    });
     // Matches the old app's export format exactly (client/src/components/
     // RelatedWebsites.tsx handleExportCSV) — same column set/order and
     // filename pattern.
@@ -980,7 +1191,7 @@ export default function RelatedSitesPage() {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = filteredResults.map((r) => {
+    const rows = exportRows.map((r) => {
       const cheapest = [...r.offers].sort((a, b) => a.minPrice - b.minPrice)[0];
       return [
         r.domain,
@@ -1084,14 +1295,48 @@ export default function RelatedSitesPage() {
     setCartItems((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  // Sorting now happens server-side (lib/search/catalog-search.ts) — `results`
-  // already arrives in the correct order for the active sortBy/sortDir, and
-  // filtering by the traffic slider preserves that order (Array.filter is
-  // stable). Pagination is a pure client-side slice over `filteredResults`,
-  // so CSV export (which uses the same array) always matches the same
-  // sequence the table is showing, page or no page.
-  const totalPages = Math.max(1, Math.ceil(filteredResults.length / PAGE_SIZE));
-  const pageResults = filteredResults.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // Pagination is a slice over `order`, the same list the CSV export walks,
+  // so the export always matches the sequence the table is showing. A page
+  // made of head rows renders immediately; a page reaching into the tail
+  // renders placeholders until its rows arrive (the effect below).
+  const totalPages = Math.max(1, Math.ceil(order.length / PAGE_SIZE));
+  // Clamped: the list can get shorter under the user (a site removed from
+  // the catalogue is dropped when its page is opened), and the page they are
+  // on must not end up past the end, showing an empty table.
+  const currentPage = Math.min(page, totalPages);
+  const pageEntries = order.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const pageRows = pageEntries.map((e): RelatedSite | null => {
+    const row = headById.get(e.id) ?? tailRows[e.id];
+    // The match % belongs to the list entry, not the fetched row: a tail row
+    // comes back from /rows without one.
+    return row ? (row.matchPct === e.matchPct ? row : { ...row, matchPct: e.matchPct }) : null;
+  });
+  const missingIds = pageEntries.filter((e) => !headById.has(e.id) && !tailRows[e.id]).map((e) => e.id).join(",");
+  useEffect(() => {
+    if (!missingIds) return;
+    const seq = searchSeq.current;
+    const ids = missingIds.split(",");
+    let cancelled = false;
+    // Held back a moment so clicking Next several times in a row fetches the
+    // page that was stopped on, not every page passed on the way there.
+    const timer = setTimeout(() => {
+      fetchRowsByIds(ids)
+        .then((rows) => {
+          // Kept even if the user has paged on in the meantime (`cancelled`):
+          // they are still this search's rows, and throwing them away meant
+          // fetching the same page again on the way back.
+          if (seq !== searchSeq.current) return;
+          setTailRows((prev) => ({ ...prev, ...Object.fromEntries(rows.map((r) => [r.id, r])) }));
+          // A site removed from the catalogue since the search ran comes back
+          // absent. Dropped from the list so its page does not wait forever.
+          const returned = new Set(rows.map((r) => r.id));
+          const gone = new Set(ids.filter((id) => !returned.has(id)));
+          if (gone.size > 0) setTail((prev) => prev.filter((e) => !gone.has(e.id)));
+        })
+        .catch(() => { if (!cancelled && seq === searchSeq.current) setRowsFailedFor(missingIds); });
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [missingIds, rowsRetry]);
 
   if (loading) return <LoadingSpinner />;
 
@@ -1304,24 +1549,30 @@ export default function RelatedSitesPage() {
           <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, marginBottom: 4 }}>Describe a topic above and click Search</div>
           <div style={{ fontSize: 13, color: C.mute }}>We&apos;ll rank every site in the marketplace by how well it matches.</div>
         </div>
-      ) : searching ? (
+      ) : searching || (order.length === 0 && tailStatus === "loading") ? (
+        // Second case: nothing on the first page, list still being read.
         <SkeletonResults />
-      ) : results.length === 0 || lowRelevance ? (
-        <EmptyState query={query} hasResults={results.length > 0} activeFilterCount={activeFilterCount} onClear={clearFilters} />
+      ) : order.length === 0 || lowRelevance ? (
+        <EmptyState query={query} hasResults={order.length > 0} activeFilterCount={activeFilterCount} onClear={clearFilters} />
       ) : (
         <section data-tour="results" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.05)", overflow: "hidden" }}>
           <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Related sites</h2>
-              <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{filteredResults.length} {filteredResults.length === 1 ? "result" : "results"}</span>
+              <span style={{ background: C.accent50, color: C.accent, borderRadius: 99, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{order.length.toLocaleString("en-US")}{tailCapped ? "+" : ""} {order.length === 1 ? "result" : "results"}</span>
+              {tailStatus === "loading" && <span style={{ fontSize: 12, color: C.mute }}>finding more…</span>}
+              {tailStatus === "failed" && (
+                <button onClick={() => loadTail(searchSeq.current)} style={{ border: "none", background: "none", padding: 0, fontSize: 12, color: C.accent, fontWeight: 600, cursor: "pointer" }}>Couldn&apos;t load more results — retry</button>
+              )}
               <span style={{ fontSize: 12, color: C.mute }}>{sortBy === "match" ? "ranked by semantic match" : `sorted by ${sortBy} (${sortDir === "desc" ? "high to low" : "low to high"})`}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button onClick={exportCsv} title="Export all results as CSV" style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 34, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
-                ⬇ Export CSV
+              <button onClick={exportCsv} disabled={exporting || tailStatus === "loading"} title={tailStatus === "loading" ? "Available once all results are found" : "Export all results as CSV"} style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 34, padding: "0 14px", border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", color: C.ink2, fontSize: 12.5, fontWeight: 700, cursor: exporting ? "wait" : tailStatus === "loading" ? "not-allowed" : "pointer", opacity: exporting || tailStatus === "loading" ? 0.6 : 1 }}>
+                {exporting ? "Preparing export…" : "⬇ Export CSV"}
               </button>
             </div>
           </header>
+          <style>{`@keyframes lp-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
           <div ref={setTableWrapEl} style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
               <thead>
@@ -1347,11 +1598,11 @@ export default function RelatedSitesPage() {
                 </tr>
               </thead>
               <tbody>
-                {pageResults.map((row, idx) => (
+                {pageRows.map((row, idx) => row ? (
                   <ResultRow
-                    key={row.domain}
+                    key={row.id}
                     row={row}
-                    isLast={idx === pageResults.length - 1}
+                    isLast={idx === pageRows.length - 1}
                     expanded={expanded.has(row.domain)}
                     onToggle={() => toggleRow(row.domain)}
                     isFav={favorites.has(row.domain)}
@@ -1360,15 +1611,23 @@ export default function RelatedSitesPage() {
                     onAddToCart={addToCart}
                     tableWrapWidth={tableWrapWidth}
                   />
+                ) : (
+                  <LoadingRow key={pageEntries[idx].id} isLast={idx === pageRows.length - 1} />
                 ))}
               </tbody>
             </table>
           </div>
+          {missingIds && rowsFailedFor === missingIds && (
+            <div style={{ padding: "12px 20px", borderTop: `1px solid ${C.line}`, fontSize: 12.5, color: C.ink3, textAlign: "center" }}>
+              Couldn&apos;t load this page.{" "}
+              <button onClick={() => { setRowsFailedFor(""); setRowsRetry((n) => n + 1); }} style={{ border: "none", background: "none", padding: 0, fontSize: 12.5, color: C.accent, fontWeight: 600, cursor: "pointer" }}>Retry</button>
+            </div>
+          )}
           {totalPages > 1 && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 20px", borderTop: `1px solid ${C.line}` }}>
-              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} style={{ padding: "6px 12px", border: `1px solid ${C.line}`, borderRadius: 7, background: "#fff", color: page <= 1 ? C.mute2 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: page <= 1 ? "not-allowed" : "pointer" }}>← Prev</button>
-              <span style={{ fontSize: 12.5, color: C.ink3, fontWeight: 600 }}>Page {page} of {totalPages}</span>
-              <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={{ padding: "6px 12px", border: `1px solid ${C.line}`, borderRadius: 7, background: "#fff", color: page >= totalPages ? C.mute2 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: page >= totalPages ? "not-allowed" : "pointer" }}>Next →</button>
+              <button onClick={() => setPage(Math.max(1, currentPage - 1))} disabled={currentPage <= 1} style={{ padding: "6px 12px", border: `1px solid ${C.line}`, borderRadius: 7, background: "#fff", color: currentPage <= 1 ? C.mute2 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}>← Prev</button>
+              <span style={{ fontSize: 12.5, color: C.ink3, fontWeight: 600 }}>Page {currentPage} of {totalPages}</span>
+              <button onClick={() => setPage(Math.min(totalPages, currentPage + 1))} disabled={currentPage >= totalPages} style={{ padding: "6px 12px", border: `1px solid ${C.line}`, borderRadius: 7, background: "#fff", color: currentPage >= totalPages ? C.mute2 : C.ink2, fontSize: 12.5, fontWeight: 600, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}>Next →</button>
             </div>
           )}
         </section>

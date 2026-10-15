@@ -218,6 +218,25 @@ export function normalizeLanguage(raw: string | null | undefined): string | null
   return null;
 }
 
+/**
+ * Every raw first-token spelling normalizeLanguage maps to `code`, lowercased —
+ * the inverse of the lookup above. Lets a SQL filter select the same rows the
+ * JS normalizer would accept (`lower(first token) IN (...)`) so the language
+ * filter can be applied before candidates are cut, not after. normalizeLanguage
+ * stays the authority; this must only ever be used alongside it.
+ */
+export function languageMatchValues(code: string): string[] {
+  const wanted = code.trim().toLowerCase();
+  if (!wanted) return [];
+  const values = Object.keys(LANGUAGE_ALIASES).filter((raw) => LANGUAGE_ALIASES[raw] === wanted);
+  // A bare 2-letter token passes through normalizeLanguage unchanged unless
+  // the alias table claims it for a different language.
+  if (/^[a-z]{2}$/.test(wanted) && (LANGUAGE_ALIASES[wanted] ?? wanted) === wanted && !values.includes(wanted)) {
+    values.push(wanted);
+  }
+  return values;
+}
+
 // Mirrors the labels in RS_FILTERS.language (app/dashboard/related-sites/page.tsx)
 // so a recognized code always displays the same friendly name a user picked
 // from the filter dropdown, regardless of how messy the underlying raw value was.

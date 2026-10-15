@@ -1,22 +1,122 @@
-// The reference content of /developers/docs, kept apart from the page so the
-// plain-markdown copy at /developers/docs.md (the one AI assistants read) is
-// built from the very same strings and cannot drift from what humans see.
+// Text shared by the developer docs page (app/developers/docs/page.tsx) and
+// its plain-markdown copy (lib/public-api/docs-markdown.ts, served at
+// /developers/docs.md), so the two cannot drift apart.
 
-export const ERROR_CODES = [
-  { code: "400", name: "invalid_request", desc: "The body is not an object with a domains array." },
+/** Errors either API can return; the request-specific ones are listed under each API. */
+export const COMMON_ERROR_CODES = [
   { code: "400", name: "invalid_json", desc: "The body is not valid JSON." },
   { code: "401", name: "missing_api_key", desc: "No x-api-key header was sent." },
-  { code: "401", name: "invalid_api_key", desc: "The key is unknown, or its subscription is no longer active." },
+  { code: "401", name: "invalid_api_key", desc: "The key is unknown, expired or blocked, or its subscription is no longer active. The message says which." },
   { code: "405", name: "method_not_allowed", desc: "Anything other than POST." },
-  { code: "413", name: "payload_too_large", desc: "The body is larger than 128 KB." },
+  { code: "413", name: "payload_too_large", desc: "The body is larger than 128 KB (Pricing) or 16 KB (Search)." },
+  { code: "429", name: "rate_limit_exceeded", desc: "Per-minute burst limit hit. Retry-After is about 60 seconds." },
+  { code: "429", name: "quota_exceeded", desc: "The request needs more lookups than remain this month; the message says how many remain. Retry-After counts down to the 1st, 00:00 UTC." },
+  { code: "500", name: "internal_error", desc: "Error on our side. No lookups are charged. Retry with exponential backoff." },
+];
+
+export const PRICING_ERROR_CODES = [
+  { code: "400", name: "invalid_request", desc: "The body is not an object with a domains array." },
   { code: "422", name: "empty_batch", desc: "domains is an empty array." },
   { code: "422", name: "too_many_domains", desc: "More than 200 entries. Split the list into several requests." },
   { code: "422", name: "invalid_niche", desc: "The niche value is not one we price." },
   { code: "422", name: "no_valid_domains", desc: "Every entry was malformed. The body carries a results array saying why for each one." },
-  { code: "429", name: "rate_limit_exceeded", desc: "Per-minute burst limit hit. Retry-After is about 60 seconds." },
-  { code: "429", name: "quota_exceeded", desc: "The request needs more lookups than remain this month; the message names both numbers. Retry-After counts down to the 1st, 00:00 UTC. Send fewer distinct domains or wait for the reset." },
-  { code: "500", name: "internal_error", desc: "Error on our side. No lookups are charged. Retry with exponential backoff." },
 ];
+
+export const SEARCH_ERROR_CODES = [
+  { code: "400", name: "invalid_request", desc: "The body is not an object with a filters object." },
+  { code: "422", name: "no_filters", desc: "filters is empty. Set at least one filter; niche on its own is not one." },
+  { code: "422", name: "unknown_filter", desc: "A key inside filters is not a filter we support. The message lists the ones we do." },
+  { code: "422", name: "unknown_field", desc: "A top-level field we do not recognise — usually a filter sent outside filters." },
+  { code: "422", name: "invalid_filter", desc: "A filter has the wrong type or range, or a min is above its max. The message names it." },
+  { code: "422", name: "invalid_country / invalid_language / invalid_tld / invalid_category", desc: "A value in that filter is not one we can match." },
+  { code: "422", name: "invalid_niche", desc: "The niche value is not one we price." },
+  { code: "422", name: "invalid_sort", desc: "sort or order is not an accepted value." },
+  { code: "422", name: "invalid_limit", desc: "limit is not a whole number from 1 to 50." },
+];
+
+export const SEARCH_FILTERS: [string, string, string][] = [
+  ["min_dr / max_dr", "number", "Ahrefs Domain Rating, 0–100, whole numbers."],
+  ["min_traffic / max_traffic", "number", "Estimated monthly organic traffic."],
+  ["min_ref_domains / max_ref_domains", "number", "Number of referring domains."],
+  ["min_price / max_price", "number", "US dollars, compared against pricing.<niche>.linkpricer.lowest — the price you would pay, fee included. For the niche you asked for, or standard when you sent none."],
+  ["country", "string | string[]", "Primary traffic country as ISO 3166-1 alpha-2 codes: \"US\", [\"DE\", \"AT\"]. A site matches if it is in any of them."],
+  ["language", "string", "Site language as one ISO 639-1 code: \"en\", \"de\", \"es\"."],
+  ["tld", "string | string[]", "Domain ending without the dot: \"de\", [\"com\", \"co.uk\"]. A site matches if it ends in any of them."],
+  ["category", "string | string[]", "A word or short phrase matched against the site's category text: \"technology\", [\"health\", \"fitness\"]. Categories come from the sources as free text in several languages, so treat this as a keyword match, not a fixed taxonomy."],
+];
+
+export const SEARCH_REQUEST_EXAMPLE = `POST /api/v1/public/domains/search
+x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx
+Content-Type: application/json
+
+{
+  "filters": {
+    "min_dr": 40,
+    "country": ["US", "GB"],
+    "language": "en",
+    "max_price": 250
+  },
+  "niche": "gambling",
+  "sort": "price",
+  "limit": 50
+}`;
+
+export const SEARCH_RESPONSE_EXAMPLE = `{
+  "api_version": "1",
+  "niche": "gambling",
+  "filters": { "min_dr": 40, "max_price": 250, "country": ["US", "GB"], "language": "en" },
+  "sort": { "by": "price", "order": "asc" },
+  "summary": { "returned": 50, "limit": 50, "has_more": true },
+  "usage": {
+    "charged": 50,
+    "monthly_limit": 10000,
+    "monthly_remaining": 9362,
+    "resets_at": "2026-11-01T00:00:00.000Z"
+  },
+  "results": [
+    {
+      "domain": "techblog.com",
+      "data": { "domain": "techblog.com", "found": true, "currency": "USD", "pricing": { "gambling": { … } }, "metrics": { … }, … }
+    },
+    …
+  ]
+}`;
+
+export const SEARCH_CURL_EXAMPLE = `curl -X POST "https://www.linkpricer.ai/api/v1/public/domains/search" \\
+  -H "x-api-key: lp_live_xxxxxxxxxxxxxxxxxxxxxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"filters": {"min_dr": 40, "country": ["US"], "max_price": 250}, "sort": "price"}'`;
+
+export const SEARCH_JS_EXAMPLE = `const res = await fetch("https://www.linkpricer.ai/api/v1/public/domains/search", {
+  method: "POST",
+  headers: {
+    "x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    filters: { min_dr: 50, country: ["US"], language: "en" },
+    sort: "price",
+  }),
+});
+const body = await res.json();
+for (const r of body.results) {
+  console.log(r.domain, r.data.metrics.domain_rating, r.data.pricing.standard?.linkpricer.lowest);
+}`;
+
+export const SEARCH_PYTHON_EXAMPLE = `import requests
+
+res = requests.post(
+    "https://www.linkpricer.ai/api/v1/public/domains/search",
+    headers={"x-api-key": "lp_live_xxxxxxxxxxxxxxxxxxxxxxxx"},
+    json={
+        "filters": {"min_dr": 50, "country": ["US"], "language": "en"},
+        "sort": "price",
+    },
+)
+res.raise_for_status()
+for r in res.json()["results"]:
+    print(r["domain"], r["data"]["metrics"]["domain_rating"],
+          r["data"]["pricing"].get("standard", {}).get("linkpricer", {}).get("lowest"))`;
 
 export const RESULT_ERROR_CODES = [
   { name: "domain_not_found", desc: "The domain is not in our catalog. status is \"not_found\". Not charged." },
@@ -87,7 +187,7 @@ export const JS_EXAMPLE = `const res = await fetch("https://www.linkpricer.ai/ap
   },
   body: JSON.stringify({ domains: ["techblog.com", "newsdaily.io"], niche: "gambling" }),
 });
-export const body = await res.json();
+const body = await res.json();
 for (const r of body.results) {
   if (r.status === "ok") console.log(r.domain, r.data.pricing.gambling?.linkpricer.lowest);
 }`;
@@ -161,7 +261,22 @@ export const BATCH_FIELDS: [field: string, type: string, desc: string][] = [
   ["results[].domain", "string | null", "The normalized domain that was looked up. null when the entry was invalid."],
   ["results[].status", "string", "\"ok\", \"not_found\" (not in our catalog) or \"invalid\" (malformed entry)."],
   ["results[].error", "object | null", "{ code, message } when status is not ok, otherwise null."],
-  ["results[].data", "object | null", "When status is ok: the domain's pricing body — see Domain Result below. Otherwise null. data.found is false when the domain is catalogued but nothing is priced for the niche you asked for."],
+  ["results[].data", "object | null", "When status is ok: the domain's pricing body — see Domain Result in the Reference section. Otherwise null. data.found is false when the domain is catalogued but nothing is priced for the niche you asked for."],
+  
+];
+
+export const SEARCH_RESPONSE_FIELDS: [field: string, type: string, desc: string][] = [
+  ["api_version", "string", "Always \"1\"."],
+  ["niche", "string | null", "The niche searched, as its canonical id. null when you sent none."],
+  ["filters", "object", "The filters as we understood them: codes upper- or lower-cased, single values turned into lists. Compare it with what you sent if a search surprises you."],
+  ["sort.by / sort.order", "string", "The sort that was applied, defaults filled in."],
+  ["summary.returned", "number", "How many domains are in results."],
+  ["summary.limit", "number", "The limit that applied."],
+  ["summary.has_more", "boolean", "true when more sites matched than were returned. There is no next page: narrow the filters or change the sort to see different sites."],
+  ["usage", "object", "Same fields as the Pricing API (charged, monthly_limit, monthly_remaining, resets_at). usage.charged equals summary.returned."],
+  ["results[].domain", "string", "The matching domain."],
+  ["results[].data", "object", "The domain's pricing body — identical to what the pricing endpoint returns for it. See Domain Result."],
+  
 ];
 
 export const RESULT_FIELDS: [field: string, type: string, desc: string][] = [
@@ -191,4 +306,5 @@ export const RESULT_FIELDS: [field: string, type: string, desc: string][] = [
   ["metrics.ref_domains", "number | null", "Number of referring domains."],
   ["metrics.country", "string | null", "Primary traffic country, full name (e.g. \"United States\") — not an ISO code."],
   ["last_updated", "string | null", "The most recent of the per-niche dates in this response. null when nothing is priced."],
+  
 ];

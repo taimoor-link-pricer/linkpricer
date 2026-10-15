@@ -15,6 +15,7 @@ const ADMIN_NAV = [
   { label: "Reviews", href: "/admin/reviews", icon: "⭐" },
   { label: "Domain Examples", href: "/admin/domain-examples", icon: "🔗" },
   { label: "Currency Rates", href: "/admin/currency-rates", icon: "💱" },
+  { label: "API Keys", href: ROUTES.adminApiKeys, icon: "🔑" },
   { label: "Support Tickets", href: ROUTES.adminSupportTickets, icon: "🎫" },
 ];
 

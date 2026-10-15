@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
     const keyRows = await db.execute(sql`
       SELECT id, key_hash, name, monthly_limit, daily_limit, per_minute_limit,
              month_count, month_window, last_used_at, created_at,
+             expires_at, (blocked_at IS NOT NULL) AS blocked,
              -- The plaintext reveal EXPIRES, whether or not anyone acked it.
              --
              -- Clearing it was previously the sole responsibility of
@@ -136,6 +137,10 @@ export async function GET(req: NextRequest) {
             perMinuteLimit: keyRow.per_minute_limit,
             lastUsedAt: keyRow.last_used_at ?? null,
             createdAt: keyRow.created_at ?? null,
+            // Set by an admin (/admin/api-keys). Either one makes the API
+            // answer 401, so the dashboard has to be able to say why.
+            expiresAt: keyRow.expires_at ?? null,
+            blocked: !!keyRow.blocked,
           }
         : null,
       usage: {

@@ -31,8 +31,10 @@ export default function DevelopersLayout({ children }: { children: React.ReactNo
         .dev-footer a { color: #6b7280; text-decoration: none; }
         .dev-footer a:hover { color: #0052cc; }
         @media (max-width: 640px) {
-          .dev-header-inner { padding: 0 16px; gap: 16px; }
-          .dev-nav-link { padding: 6px 10px; font-size: 13px; }
+          .dev-header-inner { padding: 10px 16px 0; gap: 8px 16px; height: auto; flex-wrap: wrap; justify-content: space-between; }
+          .dev-nav { order: 3; flex: 1 0 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; padding-bottom: 8px; }
+          .dev-nav::-webkit-scrollbar { display: none; }
+          .dev-nav-link { padding: 6px 10px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
           .dev-logo-badge { display: none; }
         }
       `}</style>

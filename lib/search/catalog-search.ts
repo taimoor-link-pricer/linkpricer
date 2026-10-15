@@ -5,14 +5,14 @@
 // the offers joins.
 import { db } from "@/lib/db";
 import { sql, type SQL } from "drizzle-orm";
-import { getExcludedDomains, normalizeDomain } from "@/lib/integrations/referring-domains-cache";
+import { getExcludedDomains, getCachedExcludedDomains, normalizeDomain } from "@/lib/integrations/referring-domains-cache";
 import { rerankWithClaude } from "@/lib/ai/claude-rerank";
 import { rerankWithOpenAI } from "@/lib/ai/openai-rerank";
-import { normalizeLanguage, languageDisplayLabel } from "@/lib/search/language-normalize";
-import { countryMatchPrefixes } from "@/lib/search/country-normalize";
+import { normalizeLanguage, languageDisplayLabel, languageMatchValues } from "@/lib/search/language-normalize";
+import { countryMatchRules } from "@/lib/search/country-normalize";
 import { getUsdRates, toUsd } from "@/lib/currency";
 import { embedQuery, embeddingForDomain } from "@/lib/search/query-embedding";
-import { vectorCandidates } from "@/lib/search/vector-candidates";
+import { vectorCandidates, headVectorCandidates, deepVectorCandidates, type DeepCandidate, type VectorCandidate } from "@/lib/search/vector-candidates";
 
 const DEFAULT_CLAUDE_SHORTLIST_SIZE = 80;
 const DEFAULT_FINAL_RESULT_SIZE = 30;
@@ -65,6 +65,7 @@ function searchCacheKey(opts: CatalogSearchOptions): string {
     opts.finalResultSize ?? DEFAULT_FINAL_RESULT_SIZE,
     opts.sortBy ?? "match", opts.sortDir ?? "desc",
     opts.candidatePoolLimit ?? DEFAULT_CANDIDATE_POOL_LIMIT,
+    opts.deep ?? false,
   ]);
 }
 
@@ -168,6 +169,8 @@ export interface CatalogSearchFilters {
 }
 
 export interface CatalogSearchResult {
+  // domains.id — what tail entries and fetchResultRowsByIds are keyed on.
+  id: string;
   domain: string;
   matchPct: number;
   country: string;
@@ -200,6 +203,47 @@ export interface CatalogSearchOptions {
   sortBy?: CatalogSortBy;
   sortDir?: CatalogSortDir;
   candidatePoolLimit?: number;
+  // Paginated mode. Returns every site the reranker scored (the whole
+  // shortlist, not the best `finalResultSize` of it) plus `tail`, the handle
+  // for loading the rest of the related sites with searchCatalogTail. Off by
+  // default so the public homepage search, which shows a single result, is
+  // unchanged.
+  deep?: boolean;
+}
+
+// What the first page of a deep search hands to searchCatalogTail so the
+// rest of the list is scored on the same scale. Display-only: it shapes the
+// estimated match % and nothing else, so it is safe to round-trip through
+// the client.
+export interface CatalogTailAnchor {
+  // Best similarity in the search — the reference the relevance floor is a
+  // fraction of.
+  simTop: number;
+  // A similarity and the match % the model gave sites at that similarity.
+  anchorSim: number;
+  anchorPct: number;
+  // Upper bound on any estimated match %.
+  pctCap: number;
+}
+
+// One row of the tail: enough to count, order and re-sort it. The full row
+// (offers, prices) is fetched per page through fetchResultRowsByIds.
+export interface CatalogTailEntry {
+  id: string;
+  matchPct: number;
+  dr: number;
+  traffic: number;
+  keywords: number;
+}
+
+export interface CatalogTailOutput {
+  entries: CatalogTailEntry[];
+  // True when the list did not reach the relevance floor — i.e. more related
+  // sites may exist than were returned.
+  capped: boolean;
+  // Only ever true on a `quick` answer: the quick pass did not reach the
+  // relevance floor, so the full list has to be asked for to finish the job.
+  partial: boolean;
 }
 
 export interface CatalogSearchOutput {
@@ -207,6 +251,9 @@ export interface CatalogSearchOutput {
   lowRelevance: boolean;
   degradedAhrefs: boolean;
   total: number;
+  // Present only in `deep` mode on a match-sorted search that reached the
+  // vector index: pass it to searchCatalogTail to load the rest of the list.
+  tail?: CatalogTailAnchor;
 }
 
 // Same offers join as /api/analyze — marketplace_offers + supplier_offers +
@@ -337,6 +384,80 @@ async function fetchOffersForDomains(domains: string[], rates: Record<string, nu
   return offersMap;
 }
 
+// One aggregated catalogue row (as selected by the search query or by
+// fetchResultRowsByIds) plus its offers, in the shape the results table
+// renders. Shared so a row looks the same whichever path produced it.
+function toResult(r: Record<string, unknown>, matchPct: number, offers: CatalogSearchOffer[]): CatalogSearchResult {
+  const domain = r.domain as string;
+  const dr = r.dr != null ? Number(r.dr) : 0;
+  const traffic = r.traffic != null ? Number(r.traffic) : 0;
+  const grade = (r.ai_grade as string) ?? (dr >= 70 ? "A+" : dr >= 55 ? "A" : dr >= 40 ? "B+" : "B");
+  const score = r.ai_score != null ? Math.round(Number(r.ai_score)) : Math.round(Math.min(dr, 100) * 0.7 + Math.min(traffic / 100000, 30));
+  const lpBestPrice = r.best_price != null ? Number(r.best_price) : null;
+  const offerMin = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
+  // Prefer marketplace_offers (kept fresh by the scraper fleet) over
+  // lp_domain_price, a legacy table most connectors stopped writing to
+  // (frozen ~March 2026 for 44/46 marketplaces). Math.min let a months-stale
+  // number beat today's real price. lp is fallback-only for domains with no
+  // offers coverage yet.
+  const bestPrice = offerMin ?? lpBestPrice;
+  return {
+    id: String(r.id),
+    domain,
+    matchPct,
+    country: (r.country as string) ?? "US",
+    lang: languageDisplayLabel(r.lang as string | null),
+    category: (r.raw_category as string) ?? (r.semantic_category as string) ?? "General",
+    dr,
+    drUpdatedAt: (r.dr_updated_at as string | null) ?? null,
+    drTrend: "flat",
+    traffic,
+    keywords: r.keywords != null ? Number(r.keywords) : 0,
+    refDomains: r.ref_domains != null ? Number(r.ref_domains) : 0,
+    grade,
+    score,
+    bestPrice,
+    yourPrice: null,
+    offers,
+  };
+}
+
+/**
+ * Full result rows for the given domain ids, in the order asked for — the
+ * per-page fetch behind the tail. `matchPct` is 0 here: the score belongs to
+ * a particular search and travels with its tail entry, so the caller fills
+ * it in from there.
+ *
+ * Ids that no longer exist are simply absent from the result. A domain whose
+ * offers have all gone since the search ran is still returned, with an empty
+ * offer list, so the caller decides what a now-unsellable row means.
+ */
+export async function fetchResultRowsByIds(ids: string[], knownRates?: Record<string, number>): Promise<CatalogSearchResult[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return [];
+  const rates = knownRates ?? (await getUsdRates());
+  const rows = (await db.execute(sql`
+    SELECT d.id, LOWER(d.domain) AS domain, d.category AS raw_category,
+           d.country_main_traffic AS country, d.language_written_in_website AS lang,
+           d.domain_rating::float AS dr, d.domain_rating_updated_at AS dr_updated_at,
+           d.org_traffic AS traffic, d.org_keywords AS keywords, d.ref_domains,
+           ${bestPriceUsdExpr(rates)} AS best_price,
+           COALESCE(d.semantic_category, ai."semanticCategory") AS semantic_category,
+           ai."valueGrade" AS ai_grade, ai."valueScore"::float AS ai_score
+    FROM domains d
+    LEFT JOIN lp_domain_ai_metrics ai ON ai."domainUrl" = d.domain
+    WHERE d.id IN (${sql.join(unique.map((id) => sql`${id}`), sql`, `)})
+  `)).rows as Record<string, unknown>[];
+
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const r of rows) if (!byId.has(String(r.id))) byId.set(String(r.id), r);
+  const offersMap = await fetchOffersForDomains([...byId.values()].map((r) => r.domain as string), rates);
+  return unique
+    .map((id) => byId.get(id))
+    .filter((r): r is Record<string, unknown> => !!r)
+    .map((r) => toResult(r, 0, offersMap.get(r.domain as string) ?? []));
+}
+
 // How many nearest neighbours to pull from the HNSW index. Kept in step with
 // EF_SEARCH in vector-candidates.ts — asking for more than ef_search returns
 // silently fewer rows, not an error. These are then narrowed by the "has a
@@ -349,10 +470,257 @@ const VECTOR_CANDIDATE_LIMIT = 150;
 // a generic word cannot turn one search into a full-table scan.
 const KEYWORD_SCAN_LIMIT = 4000;
 
+// How many related sites paginated ("deep") mode ranks in total. The
+// reranked shortlist is the head of this list; the rest follows in order of
+// similarity. 1,000 is pgvector's ef_search ceiling, i.e. the most the index
+// returns in a single pass, and at 25 a page it is forty pages — past the
+// point anyone reads to, but enough that a filtered search never runs dry
+// while related sites still exist.
+const DEEP_CANDIDATE_LIMIT = 1000;
+
+// The quick first pass of the same list (searchCatalogTail with `quick`).
+// What makes the deep read slow is not the query but the vector index being
+// fetched from storage page by page on a search nobody has run lately, and
+// that cost grows with how many neighbours are asked for. So the page asks
+// for this many first, shows a count, and only then — and only if the list
+// did not already end inside them — for the full thousand. 400 because the
+// nearest ~150 are the shortlist the first page already shows, leaving about
+// 250 new sites: ten more pages, for well under half the read.
+const TAIL_QUICK_LIMIT = 400;
+// Index tuples the quick pass may visit looking for those rows. Under a
+// filter every tuple visited is a row fetched to test it, and cold that is
+// the whole cost — so the budget, not the row limit, is what keeps the quick
+// pass quick when the filter is selective. 3,000 fills the 400 rows for a
+// broad filter (a large country) and stops a narrow one at a few seconds'
+// work; the full read then goes the distance.
+const TAIL_QUICK_SCAN_TUPLES = 3000;
+
+// Sites past the shortlist were never read by the reranker, so they have no
+// judged score. Their match % is estimated from similarity instead: the
+// score the model gave sites at the edge of the shortlist (the anchor),
+// scaled by how much less similar this site is.
+//
+// Proportional on purpose. Checked by having the reranker score 30 tail
+// sites per search in one batch with 10 sites it had already scored (so both
+// are on the same scale), 600 tail sites over 20 searches: this estimate was
+// off by 10.6 points on average. The model disagrees with *itself* by 9.0
+// when it re-scores the same shortlisted sites, so that is about as close as
+// an estimate can get. A steeper fall-off (similarity to the 5th power, the
+// first version) was off by 21.6 and scored the tail 18 points too low.
+//
+// Estimates never reach the "strong match" band the UI colours green (60+):
+// that band should mean a model read the site and agreed.
+const TAIL_PCT_CAP = 59;
+
+// Where the list stops: at TAIL_MIN_RATIO of the best match's similarity,
+// or sooner if the estimate falls below TAIL_MIN_PCT first. Both from the
+// same 600 graded sites, counting a site as on topic when the model scored
+// it 40+ (the line the "only weak matches" notice already uses):
+//
+//   similarity ratio 0.80+      98% on topic
+//   ratio 0.70-0.80             88-94%
+//   ratio 0.65-0.70             85%
+//   ratio 0.60-0.65             75%
+//   ratio 0.55-0.60             49%
+//
+// Together the two limits kept 95% on-topic sites with 2% clear misses
+// (scored under 25).
+//
+// The ratio does the work on an ordinary search, which matters for more than
+// tidiness: it depends only on similarities, so the same search returns the
+// same number of results every time. The estimate depends on the model's
+// scores, which wobble between runs, and a cut-off resting on it made one
+// search report 693 results on one run and 909 on the next. It is kept for
+// the case the ratio cannot see — a narrow search ("methylene blue
+// supplements") whose shortlist has already run out of real matches. There
+// the model scores the shortlist's edge at 40, so the estimate ends the list
+// almost at once, where the ratio alone would add sites that merely sit near
+// the query. 50 and not lower: at 45 that search listed 16 more sites and the
+// model called 10 of them clear misses; at 50 it lists one.
+const TAIL_MIN_RATIO = 0.7;
+const TAIL_MIN_PCT = 50;
+
+// Top of the estimated scale when no model scored anything in this request
+// (the rerank being unavailable). The top of the amber band, one short of the
+// 60 the UI colours green, and it makes the cut-off above work out to 85% of
+// the best similarity — stricter than a judged search gets, because there is
+// no judgement to lean on.
+const UNJUDGED_TOP_PCT = TAIL_PCT_CAP;
+
+function median(xs: number[]): number {
+  const a = [...xs].sort((x, y) => x - y);
+  return a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
+}
+
+// The similarity every cut-off is a fraction of: the best match's — but not
+// the query's own. A catalogue domain typed in as the query is searched by
+// its own stored vector (resolveQueryVector), so it comes back as its own
+// nearest neighbour at similarity 1.0. Measured against that, "70% of the
+// best match" stops being relative at all and becomes a flat 0.70, which
+// very few sites reach: the same topic typed as words would list hundreds
+// more. So a perfect self-match is stepped over.
+const SELF_MATCH_SIMILARITY = 0.9999;
+function topSimilarity(hits: { similarity: number }[]): number {
+  for (const h of hits) if (h.similarity < SELF_MATCH_SIMILARITY) return h.similarity;
+  // Empty, or nothing but the query's own row: unknown, not 1.0.
+  return 0;
+}
+
+// What the model would probably score a site it has not read, from its
+// similarity alone. Unrounded and uncapped: this is the estimate itself, used
+// for the cut-off; what is displayed goes through estimateMatchPct or, for a
+// whole tail, the rescaling in searchCatalogTail.
+function rawEstimate(similarity: number, anchor: CatalogTailAnchor): number {
+  return anchor.anchorSim > 0 ? (anchor.anchorPct * similarity) / anchor.anchorSim : 0;
+}
+
+// Displayed match % for a single unread site.
+function estimateMatchPct(similarity: number, anchor: CatalogTailAnchor): number {
+  return Math.max(1, Math.min(anchor.pctCap, Math.round(rawEstimate(similarity, anchor))));
+}
+
+// The similarity below which a site is no longer listed (see TAIL_MIN_RATIO).
+function tailFloorSimilarity(anchor: CatalogTailAnchor): number {
+  const byEstimate = anchor.anchorPct > 0 ? (anchor.anchorSim * TAIL_MIN_PCT) / anchor.anchorPct : Infinity;
+  return Math.max(anchor.simTop * TAIL_MIN_RATIO, byEstimate);
+}
+
+// Cheapest live offer for the domain aliased `d`, in USD. One definition so
+// the price a row is filtered on, sorted on and shown with cannot drift
+// between the queries that need it. NULL means nothing is for sale.
+function bestPriceUsdExpr(rates: Record<string, number>): SQL {
+  return sql`(SELECT MIN(price) FROM (
+             SELECT ${usdCaseExpr(sql`mo.min_price::float`, sql`mo.currency`, rates)} AS price FROM marketplace_offers mo WHERE mo.domain_id = d.id AND mo.available = true AND mo.min_price::float > 0
+             UNION ALL
+             SELECT ${usdCaseExpr(sql`so.min_price::float`, sql`so.currency`, rates)} AS price FROM supplier_offers so WHERE so.domain_id = d.id AND so.status = 'active' AND so.is_active = true AND so.min_price::float > 0
+           ) prices)`;
+}
+
 // Prefers a stored vector when the query is a catalog domain (free, and
 // built from that site's real content), otherwise embeds the query text.
 async function resolveQueryVector(query: string): Promise<number[] | null> {
   return (await embeddingForDomain(query)) ?? (await embedQuery(query));
+}
+
+// The filters that can be tested on a plain `domains` column, as SQL clauses
+// against the alias `d`. Built in one place because three queries must agree
+// on them exactly: the candidate CTEs in searchCatalog, the nearest-neighbour
+// scan that feeds them, and the deep list in searchCatalogTail. Price and
+// grade are not here — both are computed from joins and are applied to rows
+// after they are fetched.
+export function candidateFilterClauses(f: CatalogSearchFilters) {
+  const categories = normalizeFilterList(f.categories, f.category);
+
+  // TLD filter — applied here, inside text_matched (before the `matched`
+  // CTE's candidatePoolLimit LIMIT), not as an outer post-aggregation
+  // filter. The `matched` CTE below has no ORDER BY before its LIMIT, so
+  // whatever gets past text_matched is an arbitrary plan-dependent subset —
+  // filtering by TLD *after* that LIMIT would silently starve the result
+  // set for any TLD that happened not to survive the cut, even when plenty
+  // of matching domains exist in the full (pre-LIMIT) candidate set.
+  // ILIKE + a literal ".tld" suffix, not a bare substring match — LIKE
+  // '%.com' can only match a string that actually ENDS in ".com"
+  // ("example.company" does not, since it ends in "pany"), same anchoring
+  // principle as the word-boundary regex above.
+  // DR, traffic and category are filtered inside the candidate CTEs for the
+  // same reason as country and TLD: the pool carries a LIMIT with no ORDER
+  // BY, so a filter applied afterwards runs against an arbitrary slice and
+  // silently returns fewer rows than match. Country was the visible case (0
+  // results where 30 existed); these degrade less obviously but identically.
+  //
+  // Price and grade cannot move here — both are computed during aggregation
+  // from the offer joins, so they have no column to test at this stage and
+  // stay as outer filters.
+  const poolFilterClauses = [
+    f.minDr != null ? sql`AND COALESCE(d.domain_rating, 0) >= ${f.minDr}` : sql``,
+    f.maxDr != null ? sql`AND COALESCE(d.domain_rating, 0) <= ${f.maxDr}` : sql``,
+    f.minTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) >= ${f.minTraffic}` : sql``,
+    f.maxTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) <= ${f.maxTraffic}` : sql``,
+  ];
+  const poolFilters = sql.join(poolFilterClauses, sql` `);
+
+  // Country is filtered here, inside the candidate CTEs, for the same reason
+  // the TLD filter is (see below): the pool carries a LIMIT with no ORDER BY,
+  // so anything filtered *after* it is filtered against an arbitrary,
+  // plan-dependent slice. Applied as an outer filter, "supplements" + US
+  // returned zero results while the unfiltered search returned thirty —
+  // there were plenty of US domains, just none that happened to survive the
+  // cut. Filtering early builds the pool from that country instead.
+  const countryRules = [...new Set(normalizeFilterList(f.countries, f.country))]
+    .map((c) => countryMatchRules(c))
+    .filter((r): r is NonNullable<typeof r> => r != null);
+  // Backslashes doubled on purpose. A tagged template hands the tag the
+  // *cooked* string, so a single-backslash '\(the\)|\ythe\y' reached Postgres
+  // as '(the)|ythey' — a pattern that deletes every "the" inside a word.
+  // "netherlands" became "ne rlands" and matched nothing: the Netherlands
+  // filter returned zero sites, always (as did anything else with "the" in
+  // its name, e.g. the "northern ireland" alias). The intent, and what
+  // normalize() in country-normalize.ts does on the JS side, is to drop only
+  // a standalone "the" / "(the)". The outermost replace collapses the runs
+  // of spaces the first two leave behind ("saint vincent and   grenadines"),
+  // as normalize() does; without it such names never matched their own prefix.
+  const normCountry = sql`btrim(regexp_replace(regexp_replace(regexp_replace(lower(d.country_main_traffic), '\\(the\\)|\\ythe\\y', ' ', 'g'), '[^a-z ]+', ' ', 'g'), ' +', ' ', 'g'))`;
+  // Whole words only (countryValueMatches is the JS twin): "uk" must match
+  // "uk" and "uk something", never "ukraine". Prefixes are letters and
+  // spaces only, so they carry no LIKE wildcards.
+  const startsWithWords = (p: string) => sql`(${normCountry} = ${p} OR ${normCountry} LIKE ${p + " %"})`;
+  const countryClause = countryRules.length
+    ? sql`AND (${sql.join(
+        countryRules.map(
+          (r) => sql`(${sql.join(r.prefixes.map(startsWithWords), sql` OR `)})${
+            r.excludes.length ? sql` AND NOT (${sql.join(r.excludes.map(startsWithWords), sql` OR `)})` : sql``
+          }`,
+        ),
+        sql` OR `,
+      )})`
+    : sql``;
+
+  // Niche/category, like country and TLD, must be applied inside the
+  // candidate CTEs rather than after the pool LIMIT — see the comment above.
+  // Multiple selections are OR'd: a domain carries one category string, so
+  // AND-ing them would always return nothing.
+  const categoryClause = categories.length
+    ? sql`AND (${sql.join(
+        categories.map((c) => sql`LOWER(d.category) LIKE LOWER(${"%" + c + "%"})`),
+        sql` OR `,
+      )})`
+    : sql``;
+
+  const tlds = (f.tlds ?? []).map((t) => t.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
+  const tldClauses = tlds.map((t) => sql`d.domain ILIKE ${"%." + t}`);
+  const tldClause = tldClauses.length
+    ? sql`AND (${sql.join(tldClauses, sql` OR `)})`
+    : sql``;
+
+  // Language, narrowed in SQL for the same reason as country: applied only
+  // to the candidates already cut, "German" kept whichever of the nearest
+  // 150 sites happened to be German. The raw column is messy free text, so
+  // this selects exactly the spellings normalizeLanguage maps to the wanted
+  // code (languageMatchValues is its inverse) and the JS check further down
+  // remains the authority on what counts as a match.
+  const languageValues = f.language ? languageMatchValues(f.language) : [];
+  const languageClause = languageValues.length
+    // Trimmed with a whitespace class rather than btrim(): btrim() strips
+    // spaces only, while normalizeLanguage trims tabs and line ends too, and
+    // a value the JS check accepts must not be dropped here first.
+    ? sql`AND lower(regexp_replace(split_part(d.language_written_in_website, ',', 1), '^[[:space:]]+|[[:space:]]+$', '', 'g')) IN (${sql.join(languageValues.map((v) => sql`${v}`), sql`, `)})`
+    : sql``;
+
+  // Everything the vector queries can test. These are the same clauses the
+  // candidate CTEs apply, pushed one level further down: into the
+  // nearest-neighbour scan itself. Applied only in the CTEs, they ran against
+  // the nearest 150 sites *of the whole catalogue* — so "sport" limited to
+  // the US kept the 22 of those 150 that happened to be American and reported
+  // that as the answer, while over a thousand US sport sites sat one filter
+  // away.
+  const vectorFilter = sql.join([tldClause, countryClause, languageClause, categoryClause, poolFilters], sql` `);
+  // Whether any of them is actually set. An unfiltered vector read is a
+  // different (much cheaper) thing from a filtered one, and callers choose
+  // between them on this.
+  const hasFilters = countryRules.length > 0 || categories.length > 0 || tlds.length > 0 || languageValues.length > 0
+    || f.minDr != null || f.maxDr != null || f.minTraffic != null || f.maxTraffic != null;
+
+  return { tldClause, countryClause, languageClause, categoryClause, poolFilters, vectorFilter, hasFilters };
 }
 
 /**
@@ -387,31 +755,11 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // handled below, and no vector simply means keyword-only retrieval.
   const [rates, queryVector] = await Promise.all([
     getUsdRates(),
-    sortBy === "match" && process.env.SEARCH_RETRIEVAL_MODE !== "keyword"
+sortBy === "match" && process.env.SEARCH_RETRIEVAL_MODE !== "keyword"
       ? resolveQueryVector(query)
       : Promise.resolve(null),
   ]);
   const __tRates = Date.now();
-
-  // Only fetched for sortBy "match" above: a plain-column sort (DR, price,
-  // ...) skips the Claude rerank entirely and orders by a SQL column, so
-  // paying for an embedding there would buy nothing.
-  const vectorHits = queryVector ? await vectorCandidates(queryVector, VECTOR_CANDIDATE_LIMIT) : [];
-  const vectorSimById = new Map(vectorHits.map((v) => [v.id, v.similarity]));
-  const __tVector = Date.now();
-
-  // We asked for neighbours and got none. That is not a real answer: the
-  // vector query carries no WHERE beyond "has an embedding" against 282K
-  // vectors, so it returns `limit` rows or it failed (timeout, connection
-  // reset — vectorCandidates swallows both and returns []). The search still
-  // completes on the keyword branch, which is the intended degradation, but
-  // the result is materially worse and must not be written to the cache
-  // below: observed live, one failed vector read pinned "SaaS website about
-  // VPN" to vpn-test.no (DR 6, 1 monthly visit) for the full 3-minute TTL,
-  // served to every visitor who searched it, long after the connection had
-  // recovered. Serving one degraded answer is the cost of a blip; serving it
-  // for three minutes is a bug.
-  const vectorDegraded = queryVector !== null && vectorHits.length === 0;
 
   // Outer filters apply to the *aggregated* result (after GROUP BY), since
   // that's the layer that actually has country/lang/dr/traffic/best_price
@@ -514,6 +862,68 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     // itself as the backfill runs.
     return sql`(d.domain LIKE ${w + "%"} OR d.domain LIKE ${"www." + w + "%"})`;
   });
+  const { tldClause, countryClause, languageClause, categoryClause, poolFilters, vectorFilter, hasFilters } = candidateFilterClauses(f);
+
+  // Started before the candidates are cut rather than alongside the main
+  // query only so the two do not wait on each other.
+  const exclusionPromise = opts.hideLinked && opts.ownSite?.trim()
+    ? getExcludedDomains(opts.ownSite.trim())
+    : Promise.resolve({ excluded: new Set<string>(), degraded: false });
+  // It is awaited further down, after the vector read. A rejection arriving
+  // before then would otherwise count as unhandled; this claims it without
+  // swallowing it — the Promise.all below still rejects with the same error.
+  exclusionPromise.catch(() => {});
+
+  // Price, grade and "hide sites that already link to me" cannot run inside
+  // the vector scan: the first two are computed from joins, the third is a
+  // set of thousands of domains held in JS. They still cut the candidates
+  // after the nearest-neighbour limit, so with one of them on the limit is
+  // tripled — the nearest 150 sites under $50 are not the under-$50 sites
+  // among the nearest 150, and asking for 450 leaves room for the filter to
+  // take its share and still fill the shortlist.
+  const hasPostFilters = f.minPrice != null || f.maxPrice != null
+    || (!!f.grade && GRADE_RANK[f.grade] != null)
+    || !!(opts.hideLinked && opts.ownSite?.trim());
+  const vectorLimit = hasPostFilters ? VECTOR_CANDIDATE_LIMIT * 3 : VECTOR_CANDIDATE_LIMIT;
+
+  // Only fetched for sortBy "match": a plain-column sort (DR, price, ...)
+  // skips the Claude rerank entirely and orders by a SQL column, so paying
+  // for an embedding there would buy nothing.
+  //
+  // With filters on, the read is hedged (headVectorCandidates): the filtered
+  // neighbours when they arrive in time, the unfiltered ones when they do
+  // not. `headFiltered` records which it was. The candidate CTEs below apply
+  // the filters either way, so unfiltered hits are only ever a shorter
+  // shortlist — what this search returned before filters moved into the
+  // scan — never a wrong one.
+  let vectorHits: VectorCandidate[] = [];
+  let headFiltered = true;
+  if (queryVector) {
+    if (hasFilters) {
+      const head = await headVectorCandidates(queryVector, vectorLimit, vectorFilter);
+      vectorHits = head.hits;
+      headFiltered = head.filtered;
+    } else {
+      vectorHits = await vectorCandidates(queryVector, vectorLimit);
+    }
+  }
+  const vectorSimById = new Map(vectorHits.map((v) => [v.id, v.similarity]));
+  const __tVector = Date.now();
+
+  // We asked for neighbours and got none. Unfiltered, that is never a real
+  // answer: the query returns `limit` rows or it failed (timeout, connection
+  // reset — vectorCandidates swallows both and returns []). The search still
+  // completes on the keyword branch, which is the intended degradation, but
+  // the result is materially worse and must not be written to the cache
+  // below: observed live, one failed vector read pinned "SaaS website about
+  // VPN" to vpn-test.no (DR 6, 1 monthly visit) for the full 3-minute TTL,
+  // served to every visitor who searched it, long after the connection had
+  // recovered. Serving one degraded answer is the cost of a blip; serving it
+  // for three minutes is a bug. With filters an empty list can also be the
+  // truth (nothing in that country), and the two cannot be told apart here;
+  // not caching a genuinely empty answer only costs a repeat lookup.
+  const vectorDegraded = queryVector !== null && vectorHits.length === 0;
+
   // The vector branch is OR'd into the same prefilter rather than run as a
   // separate query: a domain qualifies if it matches the query's *words* or
   // its *meaning*. This is the hybrid part, and both halves are needed —
@@ -523,77 +933,16 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const vectorIdClause = vectorHits.length
     ? sql`d.id IN (${sql.join(vectorHits.map((v) => sql`${v.id}`), sql`, `)})`
     : null;
-  const recallClauses = [
-    ...(wordClauses.length ? [sql`(${sql.join(wordClauses, sql` OR `)})`] : []),
-    ...(vectorIdClause ? [vectorIdClause] : []),
-  ];
-  const matchClause = recallClauses.length
-    ? sql`AND (${sql.join(recallClauses, sql` OR `)})`
-    : sql``;
 
-  // TLD filter — applied here, inside text_matched (before the `matched`
-  // CTE's candidatePoolLimit LIMIT), not as an outer post-aggregation
-  // filter. The `matched` CTE below has no ORDER BY before its LIMIT, so
-  // whatever gets past text_matched is an arbitrary plan-dependent subset —
-  // filtering by TLD *after* that LIMIT would silently starve the result
-  // set for any TLD that happened not to survive the cut, even when plenty
-  // of matching domains exist in the full (pre-LIMIT) candidate set.
-  // ILIKE + a literal ".tld" suffix, not a bare substring match — LIKE
-  // '%.com' can only match a string that actually ENDS in ".com"
-  // ("example.company" does not, since it ends in "pany"), same anchoring
-  // principle as the word-boundary regex above.
-  // DR, traffic and category are filtered inside the candidate CTEs for the
-  // same reason as country and TLD: the pool carries a LIMIT with no ORDER
-  // BY, so a filter applied afterwards runs against an arbitrary slice and
-  // silently returns fewer rows than match. Country was the visible case (0
-  // results where 30 existed); these degrade less obviously but identically.
-  //
-  // Price and grade cannot move here — both are computed during aggregation
-  // from the offer joins, so they have no column to test at this stage and
-  // stay as outer filters.
-  const poolFilterClauses = [
-    f.minDr != null ? sql`AND COALESCE(d.domain_rating, 0) >= ${f.minDr}` : sql``,
-    f.maxDr != null ? sql`AND COALESCE(d.domain_rating, 0) <= ${f.maxDr}` : sql``,
-    f.minTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) >= ${f.minTraffic}` : sql``,
-    f.maxTraffic != null ? sql`AND COALESCE(d.org_traffic, 0) <= ${f.maxTraffic}` : sql``,
-  ];
-  const poolFilters = sql.join(poolFilterClauses, sql` `);
-
-  // Country is filtered here, inside the candidate CTEs, for the same reason
-  // the TLD filter is (see below): the pool carries a LIMIT with no ORDER BY,
-  // so anything filtered *after* it is filtered against an arbitrary,
-  // plan-dependent slice. Applied as an outer filter, "supplements" + US
-  // returned zero results while the unfiltered search returned thirty —
-  // there were plenty of US domains, just none that happened to survive the
-  // cut. Filtering early builds the pool from that country instead.
-  const countryPrefixes = [
-    ...new Set(normalizeFilterList(f.countries, f.country).flatMap((c) => countryMatchPrefixes(c) ?? [])),
-  ];
-  const countryClause = countryPrefixes.length
-    ? sql`AND (${sql.join(
-        countryPrefixes.map(
-          (p) => sql`btrim(regexp_replace(regexp_replace(lower(d.country_main_traffic), '\(the\)|\ythe\y', ' ', 'g'), '[^a-z ]+', ' ', 'g')) LIKE ${p + "%"}`,
-        ),
-        sql` OR `,
-      )})`
-    : sql``;
-
-  // Niche/category, like country and TLD, must be applied inside the
-  // candidate CTEs rather than after the pool LIMIT — see the comment above.
-  // Multiple selections are OR'd: a domain carries one category string, so
-  // AND-ing them would always return nothing.
-  const categoryClause = categories.length
-    ? sql`AND (${sql.join(
-        categories.map((c) => sql`LOWER(d.category) LIKE LOWER(${"%" + c + "%"})`),
-        sql` OR `,
-      )})`
-    : sql``;
-
-  const tlds = (f.tlds ?? []).map((t) => t.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
-  const tldClauses = tlds.map((t) => sql`d.domain ILIKE ${"%." + t}`);
-  const tldClause = tldClauses.length
-    ? sql`AND (${sql.join(tldClauses, sql` OR `)})`
-    : sql``;
+  // How many name matches the keyword arm reads. Only `candidatePoolLimit`
+  // of them survive the cut further down, so reading the full
+  // KEYWORD_SCAN_LIMIT for the default pool of 400 was nine rows fetched —
+  // and offer-checked — for every one kept. On a common word that is the
+  // slowest part of a cold search: "sport" spent 12.7 of its 20.6 seconds in
+  // this query, "houseplant care guide" 24 of 32. Half as many again as the
+  // pool covers the names that turn out to have nothing for sale (about one
+  // in six); a caller that asks for a bigger pool still gets the full scan.
+  const keywordScanLimit = Math.min(KEYWORD_SCAN_LIMIT, Math.ceil(candidatePoolLimit * 1.5));
 
   // Main catalog query and the (optional) "already links to me" exclusion
   // lookup are independent — run them concurrently rather than serially.
@@ -618,6 +967,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           ${wordClauses.length ? sql`AND (${sql.join(wordClauses, sql` OR `)})` : sql`AND false`}
           ${tldClause}
           ${countryClause}
+          ${languageClause}
           ${categoryClause}
           ${poolFilters}
         -- Bound the keyword scan. The word-boundary regex has no index, so a
@@ -628,7 +978,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         -- VECTOR_CANDIDATE_LIMIT and are OR'd in by primary key, so they are
         -- unaffected by this cap; it only stops the keyword arm from
         -- scanning the whole catalogue on generic words.
-        LIMIT ${KEYWORD_SCAN_LIMIT}
+        LIMIT ${keywordScanLimit}
       ),
       -- The vector arm is a separate CTE, deliberately outside the keyword
       -- LIMIT above. Applying one cap to the combined set silently dropped
@@ -651,6 +1001,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
         WHERE ${vectorIdClause ?? sql`false`}
           ${tldClause}
           ${countryClause}
+          ${languageClause}
           ${categoryClause}
           ${poolFilters}
       ),
@@ -676,7 +1027,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       -- on "football news", enough to blow the serverless timeout. Giving
       -- each arm its own LIMIT keeps the guarantee and lets both stop early.
       matched AS (
-        (SELECT * FROM sellable WHERE is_vector LIMIT ${VECTOR_CANDIDATE_LIMIT})
+        (SELECT * FROM sellable WHERE is_vector LIMIT ${vectorLimit})
         UNION
         (SELECT * FROM sellable WHERE NOT is_vector LIMIT ${candidatePoolLimit})
       ),
@@ -693,11 +1044,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
           MAX(d.org_traffic) AS traffic,
           MAX(d.org_keywords) AS keywords,
           MAX(d.ref_domains) AS ref_domains,
-          (SELECT MIN(price) FROM (
-             SELECT ${usdCaseExpr(sql`mo.min_price::float`, sql`mo.currency`, rates)} AS price FROM marketplace_offers mo WHERE mo.domain_id = d.id AND mo.available = true AND mo.min_price::float > 0
-             UNION ALL
-             SELECT ${usdCaseExpr(sql`so.min_price::float`, sql`so.currency`, rates)} AS price FROM supplier_offers so WHERE so.domain_id = d.id AND so.status = 'active' AND so.is_active = true AND so.min_price::float > 0
-           ) prices) AS best_price,
+          ${bestPriceUsdExpr(rates)} AS best_price,
           MAX(d.semantic_category) AS semantic_category,
           MAX(d.semantic_summary) AS semantic_summary,
           MAX(d.ai_grade) AS ai_grade,
@@ -709,9 +1056,7 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
       WHERE 1 = 1
         ${sql.join(outerFilterClauses, sql` `)}
     `),
-    opts.hideLinked && opts.ownSite?.trim()
-      ? getExcludedDomains(opts.ownSite.trim())
-      : Promise.resolve({ excluded: new Set<string>(), degraded: false }),
+    exclusionPromise,
   ]);
   const degradedAhrefs = exclusionResult.degraded;
   const __tSql = Date.now();
@@ -735,6 +1080,19 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   }
 
   if (matchedRows.length === 0) {
+    // Nothing for the first page. If that is because the head read fell back
+    // to unfiltered neighbours and none of them passed the filters, it says
+    // nothing about what the filters would find — a narrow filter on a cold
+    // search lands here every time. The deep read is filtered and has the
+    // time the first page did not, so hand back a handle to it (with no
+    // similarity in it: searchCatalogTail then anchors on its own list)
+    // instead of reporting "no results" for sites that exist.
+    if (opts.deep && sortBy === "match" && queryVector && !headFiltered) {
+      return {
+        results: [], lowRelevance: false, degradedAhrefs, total: 0,
+        tail: { simTop: 0, anchorSim: 0, anchorPct: UNJUDGED_TOP_PCT, pctCap: UNJUDGED_TOP_PCT },
+      };
+    }
     return { results: [], lowRelevance: false, degradedAhrefs, total: 0 };
   }
 
@@ -969,12 +1327,13 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
             matchPct: Math.round(Math.max(0, Math.min(100, claudeScores.get(s.row.domain as string)!))),
           }))
           .sort((a, b) => b.matchPct - a.matchPct)
-          .slice(0, finalResultSize)
       : (() => {
-          const top = shortlist.slice(0, finalResultSize);
-          const maxRel = Math.max(1, ...top.map((s) => s.rel));
-          return top.map((s) => ({ row: s.row, matchPct: Math.round((s.rel / maxRel) * 100) }));
+          const maxRel = Math.max(1, ...shortlist.map((s) => s.rel));
+          return shortlist.map((s) => ({ row: s.row, matchPct: Math.round((s.rel / maxRel) * 100) }));
         })();
+    // Deep mode keeps every scored row: they are the head of the ranking,
+    // not a pool to take the best `finalResultSize` from.
+    if (!opts.deep) scored = scored.slice(0, finalResultSize);
     total = claudeScores ? claudeScores.size : shortlist.length;
   }
 
@@ -985,6 +1344,83 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   const offersMap = offersPromise
     ? await offersPromise
     : await fetchOffersForDomains(scored.map((s) => s.row.domain as string), rates);
+
+  // ── Deep mode: hand over what the tail needs ───────────────────────────────
+  // `scored` is the head of the full ranking: the shortlist, read and scored
+  // by the model. Everything else that is related comes from
+  // searchCatalogTail, which no model reads, so those rows need a match %
+  // estimated from similarity. The anchor says where that estimate starts:
+  // what the model made of the *least*-similar third of the sites it did
+  // read — the edge of the shortlist, which is exactly where the tail begins.
+  let tail: CatalogTailAnchor | undefined;
+  // No tail without vector hits: there is then no similarity to anchor a
+  // cut-off or an estimate on (the read failed, or a filter left it empty,
+  // and the shortlist is name matches only).
+  if (opts.deep && sortBy === "match" && queryVector && vectorHits.length > 0) {
+    // The best similarity among sites that pass the filters. When the head
+    // read was the unfiltered fallback, that is the best of the hits the
+    // filters let through (if a passing site were closer than those, it
+    // would have been among the hits too) — or unknown, 0, if none did, in
+    // which case searchCatalogTail takes it from its own filtered read.
+    const simTop = headFiltered
+      ? topSimilarity(vectorHits)
+      : topSimilarity(
+          matchedRows
+            .map((r) => ({ similarity: vectorSimById.get(String(r.id)) }))
+            .filter((e): e is { similarity: number } => e.similarity != null)
+            .sort((a, b) => b.similarity - a.similarity),
+        );
+    tail = { simTop, anchorSim: simTop, anchorPct: UNJUDGED_TOP_PCT, pctCap: UNJUDGED_TOP_PCT };
+    if (usedClaudeScoring) {
+      const judged = scored
+        .map((s) => ({ sim: vectorSimById.get(String(s.row.id)), pct: s.matchPct }))
+        .filter((e): e is { sim: number; pct: number } => e.sim != null)
+        .sort((a, b) => a.sim - b.sim);
+      if (judged.length >= 9) {
+        const edge = judged.slice(0, Math.ceil(judged.length / 3));
+        tail.anchorSim = median(edge.map((e) => e.sim));
+        tail.anchorPct = median(edge.map((e) => e.pct));
+      }
+      tail.pctCap = TAIL_PCT_CAP;
+    } else {
+      // The rerank was unavailable, and its fallback above scores the head
+      // on a different scale (a few percent at best) — which would sink the
+      // whole shortlist beneath a tail estimated out of 90. Put the head on
+      // the tail's scale instead: similarity when the vector branch found
+      // the site, word overlap when only its name matched.
+      const anchor = tail;
+      scored = scored
+        .map((s) => {
+          const sim = vectorSimById.get(String(s.row.id));
+          const wordPct = words.length
+            ? Math.round((relevance(s.row.domain as string, (s.row.raw_category as string) ?? "") / words.length) * UNJUDGED_TOP_PCT)
+            : 0;
+          return { row: s.row, matchPct: Math.max(sim != null ? estimateMatchPct(sim, anchor) : 1, wordPct) };
+        })
+        .sort((a, b) => b.matchPct - a.matchPct);
+    }
+
+    // No tail to load when the candidates already reach below the relevance
+    // floor and every one above it was scored: the deep list could only
+    // return sites that are about to be discarded. Worth checking, because
+    // that is the usual shape of a narrowly filtered search (one smaller
+    // country, a high DR floor) and the read it saves is the slow one.
+    const floor = tailFloorSimilarity(tail);
+    const lastSim = vectorHits[vectorHits.length - 1]?.similarity ?? 0;
+    const scoredIds = new Set(scored.map((s) => String(s.row.id)));
+    // "Could be listed" means it survived the filters and has something for
+    // sale — i.e. it is in matchedRows. A hit that is not would be dropped by
+    // the tail too, so it must not keep the deep read alive.
+    const listable = new Set(matchedRows.map((r) => String(r.id)));
+    const unscoredAboveFloor = vectorHits.some((v) => v.similarity >= floor && listable.has(v.id) && !scoredIds.has(v.id));
+    // Only when the hits were the filtered ones: unfiltered fallback hits say
+    // nothing about how far the filtered list goes.
+    if (headFiltered && lastSim < floor && !unscoredAboveFloor) tail = undefined;
+  }
+
+  const results: CatalogSearchResult[] = scored.map(({ row, matchPct }) =>
+    toResult(row, matchPct, offersMap.get(row.domain as string) ?? []));
+
   const __tTotal = Date.now() - __t0;
   if (__tTotal > 3000) {
     console.log(
@@ -995,41 +1431,6 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
     );
   }
 
-  const results: CatalogSearchResult[] = scored.map(({ row: r, matchPct }) => {
-    const domain = r.domain as string;
-    const dr = r.dr != null ? Number(r.dr) : 0;
-    const traffic = r.traffic != null ? Number(r.traffic) : 0;
-    const grade = (r.ai_grade as string) ?? (dr >= 70 ? "A+" : dr >= 55 ? "A" : dr >= 40 ? "B+" : "B");
-    const score = r.ai_score != null ? Math.round(Number(r.ai_score)) : Math.round(Math.min(dr, 100) * 0.7 + Math.min(traffic / 100000, 30));
-    const offers = offersMap.get(domain) ?? [];
-    const lpBestPrice = r.best_price != null ? Number(r.best_price) : null;
-    const offerMin = offers.length > 0 ? Math.min(...offers.map((o) => o.minPrice)) : null;
-    // Prefer marketplace_offers (kept fresh by the scraper fleet) over
-    // lp_domain_price, a legacy table most connectors stopped writing to
-    // (frozen ~March 2026 for 44/46 marketplaces). Math.min let a months-stale
-    // number beat today's real price. lp is fallback-only for domains with no
-    // offers coverage yet.
-    const bestPrice = offerMin ?? lpBestPrice;
-    return {
-      domain,
-      matchPct,
-      country: (r.country as string) ?? "US",
-      lang: languageDisplayLabel(r.lang as string | null),
-      category: (r.raw_category as string) ?? (r.semantic_category as string) ?? "General",
-      dr,
-      drUpdatedAt: (r.dr_updated_at as string | null) ?? null,
-      drTrend: "flat",
-      traffic,
-      keywords: r.keywords != null ? Number(r.keywords) : 0,
-      refDomains: r.ref_domains != null ? Number(r.ref_domains) : 0,
-      grade,
-      score,
-      bestPrice,
-      yourPrice: null,
-      offers,
-    };
-  });
-
   // Low-relevance flag, distinct from zero results — signals "we found
   // rows, but even the best one is a weak match" so the UI can say so
   // instead of presenting a table of 2-5%-match results as if they were
@@ -1039,15 +1440,24 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   // while every actual semantic score comes back in single digits — word
   // overlap is only the fallback signal for when Claude wasn't invoked
   // (a plain column sort) or came back null.
+  //
+  // Deep mode does not use that fallback. `rel` stopped being a word count
+  // when the shortlist moved to rank fusion (it is now a score near 0.02),
+  // so `bestWordRel / words.length < 0.4` is true for every multi-word
+  // query: re-sorting "sports betting" by DR replaced a full table with the
+  // "only weak matches" notice. Without a model score there is no basis for
+  // the claim, so it is not made.
   const bestWordRel = shortlist[0]?.rel ?? 0;
   const bestMatchPct = results.length > 0 ? Math.max(...results.map((r) => r.matchPct)) : 0;
   const lowRelevance = usedClaudeScoring
     ? bestMatchPct < 40
-    : words.length > 1 && bestWordRel / words.length < 0.4;
+    : !opts.deep && words.length > 1 && bestWordRel / words.length < 0.4;
 
-  const output: CatalogSearchOutput = { results, lowRelevance, degradedAhrefs, total };
+  const output: CatalogSearchOutput = { results, lowRelevance, degradedAhrefs, total, ...(tail ? { tail } : {}) };
 
-  if (!vectorDegraded) {
+  // Same for a head that fell back to unfiltered neighbours: the next run of
+  // this search will most likely get the filtered ones, and should.
+  if (!vectorDegraded && headFiltered) {
     if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
       const oldestKey = searchCache.keys().next().value;
       if (oldestKey !== undefined) searchCache.delete(oldestKey);
@@ -1056,4 +1466,227 @@ export async function searchCatalog(opts: CatalogSearchOptions): Promise<Catalog
   }
 
   return output;
+}
+
+// Deep lists are cached like searches are, and for the same reason: the read
+// is the expensive part (seconds, cold) and nothing in it changes minute to
+// minute. What is cached is the raw candidate list — the caller's anchor and
+// already-shown ids are applied afterwards, so they do not split the key.
+const tailCache = new Map<string, { rows: DeepCandidate[]; cachedAt: number }>();
+// Reads in progress, by the same key, so a request for a list that is already
+// being read waits for that read instead of starting a second identical one.
+const tailInflight = new Map<string, Promise<DeepCandidate[] | null>>();
+
+// Everything that changes which rows the deep read returns. Price bounds and
+// the grade wanted are not in here — they are applied to the rows afterwards
+// — only whether the read has to carry prices and grades at all.
+function tailCacheKey(query: string, f: CatalogSearchFilters): string {
+  return JSON.stringify([
+    query.trim().toLowerCase(),
+    normalizeFilterList(f.countries, f.country), f.language ?? null,
+    f.minTraffic ?? null, f.maxTraffic ?? null, f.minDr ?? null, f.maxDr ?? null,
+    normalizeFilterList(f.categories, f.category),
+    (f.tlds && f.tlds.length ? [...f.tlds].map((t) => t.toLowerCase()).sort() : null),
+    f.minPrice != null || f.maxPrice != null,
+    !!f.grade && GRADE_RANK[f.grade] != null,
+  ]);
+}
+
+/**
+ * The raw deep list for a search, `limit` rows deep: cached, in progress, or
+ * freshly read. Resolves to null when the list could not be read; never
+ * rejects.
+ *
+ * This is deliberately NOT started early from searchCatalog, alongside the
+ * first page. That was built and measured on searches nobody had run before.
+ * The read is slow because the database is fetching index pages from
+ * storage, the first page is slow for the same reason at the same moment,
+ * and the two cold reads slowed each other down: a full read given a ~17s
+ * head start still needed another 17-27s under a country filter, against
+ * 17-22s started afterwards on its own. With the quick pass below, a head
+ * start made no measurable difference either (count after 5.5s vs 3-6s
+ * unfiltered, 4.7s vs 6.3s filtered; 8 searches per arm, inside the noise).
+ * So it buys nothing and puts a second heavy query on the first page's path.
+ * What did shorten the wait is asking for fewer rows first (TAIL_QUICK_LIMIT).
+ */
+function loadTailRows(query: string, f: CatalogSearchFilters, limit: number, knownVector?: number[]): Promise<DeepCandidate[] | null> {
+  const fresh = (k: string) => {
+    const hit = tailCache.get(k);
+    return hit && Date.now() - hit.cachedAt < SEARCH_CACHE_TTL_MS ? hit.rows : null;
+  };
+  const base = tailCacheKey(query, f);
+  const key = `${limit}:${base}`;
+  // A quick pass that the full list already covers is answered from it —
+  // checked before the quick pass's own cache entry. The full read is the
+  // more exact of the two, and this keeps the quick list a strict prefix of
+  // the full one whenever both are in hand.
+  if (limit < DEEP_CANDIDATE_LIMIT) {
+    const full = fresh(`${DEEP_CANDIDATE_LIMIT}:${base}`);
+    if (full) return Promise.resolve(full.slice(0, limit));
+  }
+  const cached = fresh(key);
+  if (cached) return Promise.resolve(cached);
+  const running = tailInflight.get(key);
+  if (running) return running;
+
+  const needPrice = f.minPrice != null || f.maxPrice != null;
+  const withGrade = !!f.grade && GRADE_RANK[f.grade] != null;
+  const read = (async () => {
+    const [queryVector, rates] = await Promise.all([
+      knownVector ?? resolveQueryVector(query),
+      needPrice ? getUsdRates() : Promise.resolve(null),
+    ]);
+    if (!queryVector) return null;
+    const rows = await deepVectorCandidates(queryVector, limit, {
+      filter: candidateFilterClauses(f).vectorFilter,
+      bestPriceUsd: rates ? bestPriceUsdExpr(rates) : undefined,
+      withGrade,
+      maxScanTuples: limit < DEEP_CANDIDATE_LIMIT ? TAIL_QUICK_SCAN_TUPLES : undefined,
+    });
+    if (rows) {
+      if (tailCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+        const oldestKey = tailCache.keys().next().value;
+        if (oldestKey !== undefined) tailCache.delete(oldestKey);
+      }
+      tailCache.set(key, { rows, cachedAt: Date.now() });
+    }
+    return rows;
+  })()
+    .catch((err) => {
+      console.error("[loadTailRows] failed:", err);
+      return null;
+    })
+    .finally(() => {
+      tailInflight.delete(key);
+    });
+  tailInflight.set(key, read);
+  return read;
+}
+
+export interface CatalogTailOptions {
+  query: string;
+  filters?: CatalogSearchFilters;
+  ownSite?: string;
+  hideLinked?: boolean;
+  // From the first page's `tail` (see CatalogSearchOutput).
+  anchor: CatalogTailAnchor;
+  // Sites the first page already returned — never repeated here.
+  excludeIds?: string[];
+  // The quick first pass: the nearest TAIL_QUICK_LIMIT sites only. Check
+  // `partial` on the answer to know whether the full list is still needed.
+  quick?: boolean;
+}
+
+/**
+ * The rest of a deep search: every related site the first page did not
+ * already return, nearest first, each with an estimated match %.
+ *
+ * No model call, and nothing joined beyond what filtering needs — a row here
+ * is an id and four numbers. That is what keeps "show everything" affordable:
+ * the reranker still reads only the shortlist, and offers are fetched for the
+ * page being viewed (fetchResultRowsByIds), not for a thousand rows nobody
+ * may scroll to.
+ *
+ * Returns null when the list could not be loaded; the caller keeps the first
+ * page as the whole result in that case rather than reporting "no more".
+ */
+export async function searchCatalogTail(opts: CatalogTailOptions): Promise<CatalogTailOutput | null> {
+  const query = opts.query.trim();
+  if (!query) return { entries: [], capped: false, partial: false };
+  const f = opts.filters ?? {};
+  const ownSite = opts.hideLinked ? opts.ownSite?.trim() : undefined;
+  const needPrice = f.minPrice != null || f.maxPrice != null;
+  const wantedGradeRank = f.grade ? GRADE_RANK[f.grade] ?? null : null;
+  const wantedLanguage = f.language ? f.language.toLowerCase() : null;
+
+  const limit = opts.quick ? TAIL_QUICK_LIMIT : DEEP_CANDIDATE_LIMIT;
+  // The exclusion list is read from cache only: the first page's search has
+  // already fetched (and been metered for) it, and this follow-up must not
+  // be a second, unmetered way to reach Ahrefs. If that read fails, so does
+  // this call — answering with the sites un-hidden while the toggle says
+  // they are hidden would be worse than answering late.
+  const [rows, excluded] = await Promise.all([
+    loadTailRows(query, f, limit),
+    ownSite ? getCachedExcludedDomains(ownSite) : Promise.resolve(new Set<string>()),
+  ]);
+  if (!rows) return null;
+
+  // The anchor comes back from the client, so it is clamped rather than
+  // trusted. It only ever shapes a displayed percentage.
+  const fin = (v: unknown, lo: number, hi: number, dflt: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt;
+  const simTop = Math.max(topSimilarity(rows), fin(opts.anchor?.simTop, 0, 1, 0));
+  // No usable similarity in the anchor (missing, or 0 because the first page
+  // had no vector hit to take one from) means nothing was judged: fall back
+  // to the unjudged scale, anchored on this list's own best match.
+  const givenSim = fin(opts.anchor?.anchorSim, 0, 1, 0);
+  const anchor: CatalogTailAnchor = givenSim > 0
+    ? {
+        simTop,
+        anchorSim: givenSim,
+        anchorPct: fin(opts.anchor?.anchorPct, 1, 100, UNJUDGED_TOP_PCT),
+        pctCap: fin(opts.anchor?.pctCap, 1, 100, TAIL_PCT_CAP),
+      }
+    : { simTop, anchorSim: simTop, anchorPct: UNJUDGED_TOP_PCT, pctCap: TAIL_PCT_CAP };
+
+  const floor = tailFloorSimilarity(anchor);
+  const skip = new Set(opts.excludeIds ?? []);
+  const kept: DeepCandidate[] = [];
+  for (const r of rows) {
+    // Sorted nearest-first, so the first row under the floor ends the list.
+    if (r.similarity < floor) break;
+    if (skip.has(r.id) || !r.sellable) continue;
+    skip.add(r.id); // also de-duplicates: the grade join can return a domain twice
+    if (needPrice) {
+      if (r.bestPrice == null) continue;
+      if (f.minPrice != null && r.bestPrice < f.minPrice) continue;
+      if (f.maxPrice != null && r.bestPrice > f.maxPrice) continue;
+    }
+    if (wantedGradeRank != null) {
+      // Same fallback as the SQL grade filter: the AI grade when there is
+      // one, otherwise a grade derived from DR.
+      const dr = r.dr ?? 0;
+      const grade = r.aiGrade ?? (dr >= 70 ? "A+" : dr >= 55 ? "A" : dr >= 40 ? "B+" : "B");
+      if ((GRADE_RANK[grade] ?? 1) < wantedGradeRank) continue;
+    }
+    if (wantedLanguage && normalizeLanguage(r.lang) !== wantedLanguage) continue;
+    if (excluded.size && excluded.has(normalizeDomain(r.domain))) continue;
+    kept.push(r);
+  }
+
+  // Displayed match %. Where the best tail site's estimate is over the cap,
+  // the whole tail is scaled down so that site lands exactly on it, instead
+  // of each estimate being clipped separately. Clipping was the first
+  // version, and on an ordinary search — where the model scores the
+  // shortlist's edge in the 60s — it left the first several hundred tail
+  // sites all reading "59%", in an order nothing on screen explained. Scaled,
+  // the percentage keeps falling as similarity does. It reads lower than the
+  // estimate, which is the right direction to be wrong in for a site nobody
+  // has checked.
+  const top = kept.length ? rawEstimate(kept[0].similarity, anchor) : 0;
+  const scale = top > anchor.pctCap ? anchor.pctCap / top : 1;
+  const entries: CatalogTailEntry[] = kept.map((r) => ({
+    id: r.id,
+    matchPct: Math.max(1, Math.min(anchor.pctCap, Math.round(rawEstimate(r.similarity, anchor) * scale))),
+    dr: r.dr ?? 0,
+    traffic: r.traffic ?? 0,
+    keywords: r.keywords ?? 0,
+  }));
+
+  // Did the read get as far as the floor? Rows come nearest-first, so it did
+  // exactly when its last row is under it. If not, the list was cut short —
+  // by its row limit, or (under a filter) by the scan budget that goes with
+  // that limit — and related sites may remain beyond it.
+  const reachedFloor = rows.length > 0 && rows[rows.length - 1].similarity < floor;
+  if (opts.quick) {
+    // Short of the floor, the quick pass cannot say the list is complete,
+    // whatever stopped it; the full read can.
+    return { entries, capped: !reachedFloor, partial: !reachedFloor };
+  }
+  // The full list is the last word. Short of the floor it is "capped" — more
+  // may exist — when it filled its row limit, and also under a filter, where
+  // stopping early can mean the scan budget ran out rather than the sites.
+  // (Unfiltered, the read always fills its limit, so that case cannot arise.)
+  const { hasFilters } = candidateFilterClauses(f);
+  return { entries, capped: !reachedFloor && (rows.length >= DEEP_CANDIDATE_LIMIT || hasFilters), partial: false };
 }
