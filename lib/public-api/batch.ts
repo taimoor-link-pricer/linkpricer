@@ -222,15 +222,18 @@ function invalidNiche(): BatchRequestError {
 }
 
 /**
- * The response body. `found` maps each looked-up domain that exists in the
- * catalogue to its pricing body; a looked-up domain missing from it is not_found.
+ * The response body. `found` maps each looked-up domain we can price to its
+ * pricing body; a looked-up domain missing from it is not_found — with code
+ * no_prices when it is in `unpriced` (listed, but nothing usable to price).
  * Duplicate entries each get their own result (so results[i] always answers
  * domains[i]) but were looked up — and charged — once.
  */
 export function buildBatchBody(
   parsed: ParsedBatch,
   found: Map<string, PricingBody>,
-  usage: BatchUsage
+  usage: BatchUsage,
+  /** Looked-up domains we list but cannot price at all; reported as not_found with their own code. */
+  unpriced: ReadonlySet<string> = new Set()
 ): BatchBody {
   const results: BatchResult[] = parsed.entries.map((e) => {
     if (e.error || !e.domain) {
@@ -242,7 +245,9 @@ export function buildBatchBody(
         input: e.input,
         domain: e.domain,
         status: "not_found",
-        error: { code: "domain_not_found", message: "No data found for this domain." },
+        error: unpriced.has(e.domain)
+          ? { code: "no_prices", message: "We list this domain, but none of its listings has a usable price right now." }
+          : { code: "domain_not_found", message: "No data found for this domain." },
         data: null,
       };
     }
