@@ -251,15 +251,23 @@ export async function runSearch(
   };
 }
 
-export async function handleSearchRequest(req: NextRequest): Promise<NextResponse> {
+/**
+ * `resolvedKeyHash` is for callers that have already worked out which key to
+ * charge without holding its plaintext — the MCP server, for an app signed in
+ * through OAuth (lib/mcp/auth.ts). Everything after the key is identical.
+ */
+export async function handleSearchRequest(req: NextRequest, resolvedKeyHash?: string): Promise<NextResponse> {
   const startMs = Date.now();
 
   // 1. Key present.
-  const rawKey = req.headers.get("x-api-key");
-  if (!rawKey) {
-    return jsonError("missing_api_key", "Provide your API key in the x-api-key header.", 401);
+  let keyHash = resolvedKeyHash;
+  if (!keyHash) {
+    const rawKey = req.headers.get("x-api-key");
+    if (!rawKey) {
+      return jsonError("missing_api_key", "Provide your API key in the x-api-key header.", 401);
+    }
+    keyHash = hashKey(rawKey);
   }
-  const keyHash = hashKey(rawKey);
 
   // 2. Read and validate the body BEFORE claiming quota — a request we reject
   //    without searching must cost nothing. A rejected request still checks
