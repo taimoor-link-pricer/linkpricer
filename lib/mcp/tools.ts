@@ -83,8 +83,9 @@ export const TOOLS: readonly ToolDefinition[] = [
     description:
       "Find websites to buy a guest post or link on, by Domain Rating, organic traffic, referring domains, " +
       "price, country, language, TLD or topic. Returns matching sites with the same prices and metrics as " +
-      "get_link_prices. Never returns blog-hosting subdomains (blogspot, wordpress.com) or social platforms " +
-      "(reddit, linkedin, quora), which are not real editorial placements. Set at least one filter. " +
+      "get_link_prices. Never returns blog-hosting subdomains, hosting and storage domains, social, profile and " +
+      "user-document platforms, or university and government sites, which are not real editorial placements. " +
+      "Set a niche, at least one filter, or both. " +
       "Each site returned uses one lookup from the user's monthly " +
       `quota, so ask for only as many as needed (default ${MCP_DEFAULT_SEARCH_RESULTS}, max ${MCP_MAX_SEARCH_RESULTS}). ` +
       "For prices on sites the user already named, use get_link_prices instead.",
@@ -93,7 +94,7 @@ export const TOOLS: readonly ToolDefinition[] = [
       properties: {
         filters: {
           type: "object",
-          description: "At least one filter. Every filter set must match.",
+          description: "Every filter set must match. Optional when a niche is set.",
           properties: {
             min_dr: range("Lowest Ahrefs Domain Rating, 0-100.", 100),
             max_dr: range("Highest Ahrefs Domain Rating, 0-100.", 100),
@@ -128,7 +129,6 @@ export const TOOLS: readonly ToolDefinition[] = [
           description: `How many sites to return, default ${MCP_DEFAULT_SEARCH_RESULTS}.`,
         },
       },
-      required: ["filters"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },

@@ -187,9 +187,10 @@ export function parseSearchRequest(body: unknown): ParsedSearch | SearchRequestE
     );
   }
 
-  const rawFilters = b.filters;
-  if (rawFilters == null || typeof rawFilters !== "object" || Array.isArray(rawFilters)) {
-    return fail(400, "invalid_request", `"filters" is required and must be an object: ${EXAMPLE}.`);
+  // Omitted filters are no filters; a niche alone is a complete search.
+  const rawFilters = b.filters ?? {};
+  if (typeof rawFilters !== "object" || Array.isArray(rawFilters)) {
+    return fail(400, "invalid_request", `"filters" must be an object: ${EXAMPLE}.`);
   }
   const f = rawFilters as Record<string, unknown>;
 
@@ -291,16 +292,6 @@ export function parseSearchRequest(body: unknown): ParsedSearch | SearchRequestE
     filters.category = categories;
   }
 
-  // Niche chooses which price is filtered, sorted and returned; it does not
-  // narrow which sites are considered on its own, so it is not a filter here.
-  if (Object.keys(filters).length === 0) {
-    return fail(
-      422,
-      "no_filters",
-      `"filters" must set at least one filter. Accepted filters are: ${FILTER_KEYS.join(", ")}.`
-    );
-  }
-
   // Blank means "no niche": an empty niche and an omitted one are the same request.
   let niche: NicheId | null = null;
   if (b.niche != null) {
@@ -310,6 +301,17 @@ export function parseSearchRequest(body: unknown): ParsedSearch | SearchRequestE
       niche = resolveNiche(trimmed);
       if (!niche) return invalidNiche();
     }
+  }
+
+  // A niche narrows the search on its own: only sites priced for it are
+  // candidates. With neither a niche nor a filter the request is almost
+  // certainly a mistake, and every result would be charged.
+  if (Object.keys(filters).length === 0 && !niche) {
+    return fail(
+      422,
+      "no_filters",
+      `Set a niche or at least one filter. Accepted filters are: ${FILTER_KEYS.join(", ")}.`
+    );
   }
 
   let by: SearchSort = "dr";

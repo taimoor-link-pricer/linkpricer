@@ -23,8 +23,8 @@ export const PRICING_ERROR_CODES = [
 ];
 
 export const SEARCH_ERROR_CODES = [
-  { code: "400", name: "invalid_request", desc: "The body is not an object with a filters object." },
-  { code: "422", name: "no_filters", desc: "filters is empty. Set at least one filter; niche on its own is not one." },
+  { code: "400", name: "invalid_request", desc: "The body is not a JSON object, or filters is not an object." },
+  { code: "422", name: "no_filters", desc: "Nothing narrows the search: set a niche, at least one filter, or both." },
   { code: "422", name: "unknown_filter", desc: "A key inside filters is not a filter we support. The message lists the ones we do." },
   { code: "422", name: "unknown_field", desc: "A top-level field we do not recognise — usually a filter sent outside filters." },
   { code: "422", name: "invalid_filter", desc: "A filter has the wrong type or range, or a min is above its max. The message names it." },
@@ -275,7 +275,7 @@ export const SEARCH_RESPONSE_FIELDS: [field: string, type: string, desc: string]
   ["summary.limit", "number", "The limit that applied."],
   ["summary.has_more", "boolean", "true when more sites matched than were returned. There is no next page: narrow the filters or change the sort to see different sites."],
   ["usage", "object", "Same fields as the Pricing API (charged, monthly_limit, monthly_remaining, resets_at). usage.charged equals summary.returned."],
-  ["results[].domain", "string", "The matching domain. Search never returns blog-hosting subdomains (e.g. *.blogspot.com, *.wordpress.com), sites on shared registry names (*.uk.com, *.it.com …) or social and user-content platforms (reddit.com, linkedin.com, quora.com …): the first two carry the parent domain's Domain Rating rather than their own, and a listing on a social platform is a profile or post link, not an editorial placement. The pricing endpoint still prices them when you ask by name."],
+  ["results[].domain", "string", "The matching domain. Search only returns sites where a placement is an editorial one, so it leaves out blog and site-builder subdomains (*.blogspot.com, *.wordpress.com), hosting and file-storage domains (s3.amazonaws.com), shared registry names (*.uk.com, *.it.com …), social, profile and user-document platforms (reddit.com, jotform.com, archive.org …), domain-sale pages, and university and government sites (.edu, .gov, .ac.uk …). These carry a parent domain's Domain Rating rather than their own, or sell a profile, page or comment link rather than an article. The pricing endpoint still prices them when you ask by name."],
   ["results[].data", "object", "The domain's pricing body — identical to what the pricing endpoint returns for it. See Domain Result."],
   
 ];
