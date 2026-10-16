@@ -10,6 +10,8 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSearchBody,
+  freshSince,
+  MAX_PRICE_AGE_DAYS,
   FILTER_KEYS,
   matchesSearch,
   MAX_FILTER_VALUES,
@@ -47,18 +49,30 @@ function site(
   return { domain, data: buildPricingBody(domain, offers, RATES, null, m) };
 }
 
+describe("parseSearchRequest — a niche is a search on its own", () => {
+  it.each([{ niche: "gambling" }, { niche: "igaming" }, { filters: {}, niche: "crypto" }, { filters: null, niche: "cbd" }])(
+    "%j",
+    (body) => {
+      const parsed = parseSearchRequest(body);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.filters).toEqual({});
+    }
+  );
+});
+
 describe("parseSearchRequest — request-level rejections (nothing charged)", () => {
   it.each([
     [null, 400, "invalid_request"],
     ["min_dr=40", 400, "invalid_request"],
     [[{ min_dr: 40 }], 400, "invalid_request"],
-    [{}, 400, "invalid_request"],
     [{ filters: "min_dr" }, 400, "invalid_request"],
     [{ filters: [] }, 400, "invalid_request"],
+    // Nothing narrows the search: neither a filter nor a niche.
+    [{}, 422, "no_filters"],
     [{ filters: {} }, 422, "no_filters"],
     [{ filters: { min_dr: null } }, 422, "no_filters"],
-    // Niche chooses the price; on its own it is not a filter.
-    [{ filters: {}, niche: "gambling" }, 422, "no_filters"],
+    [{ niche: "" }, 422, "no_filters"],
+    [{ niche: "pizza" }, 422, "invalid_niche"],
     [{ filters: { min_dr: 40 }, min_traffic: 1000 }, 422, "unknown_field"],
     [{ filters: { min_dr: 40 }, page: 2 }, 422, "unknown_field"],
     [{ filters: { min_DR: 40 } }, 422, "unknown_filter"],
@@ -279,5 +293,12 @@ describe("buildSearchBody — the published shape", () => {
     expect(Object.keys(body.results[0].data)).toEqual([
       "domain", "found", "currency", "fee", "pricing", "available_niches", "metrics", "last_updated",
     ]);
+  });
+});
+
+describe("freshSince — search only picks prices confirmed recently", () => {
+  it("is MAX_PRICE_AGE_DAYS before now, as a date", () => {
+    expect(MAX_PRICE_AGE_DAYS).toBe(90);
+    expect(freshSince(new Date("2026-10-16T12:00:00Z"))).toBe("2026-07-18");
   });
 });

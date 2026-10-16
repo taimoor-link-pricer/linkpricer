@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { countryCode } from "./country-normalize";
 import { languageMatchValues, normalizeLanguage } from "./language-normalize";
 
 for (const file of [".env.local", ".env"]) {
@@ -71,13 +72,13 @@ describe("deep search", { timeout: 240_000 }, () => {
     expect(us.results.length).toBeGreaterThan(30);
     for (const r of us.results) {
       expect(r.id, r.domain).toBeTruthy();
-      expect(r.country, `${r.domain} -> ${r.country}`).toMatch(/united states|usa|america|^us$/i);
+      expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("US");
     }
     expect(new Set(us.results.map((r) => r.id)).size).toBe(us.results.length);
 
     const de = await searchCatalog({ ...deep, query: "fashion", filters: { countries: ["DE"] } });
     expect(de.results.length).toBeGreaterThan(0);
-    for (const r of de.results) expect(r.country, `${r.domain} -> ${r.country}`).toMatch(/germany|deutschland|^de$/i);
+    for (const r of de.results) expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("DE");
   });
 
   // The filtered read itself, given all the time it needs: the nearest sites
@@ -97,7 +98,7 @@ describe("deep search", { timeout: 240_000 }, () => {
     expect(rows!.length).toBe(100);
     for (let i = 1; i < rows!.length; i++) expect(rows![i].similarity).toBeLessThanOrEqual(rows![i - 1].similarity);
     const page = await fetchResultRowsByIds(rows!.slice(0, 20).map((r) => r.id));
-    for (const r of page) expect(r.country, `${r.domain} -> ${r.country}`).toMatch(/germany/i);
+    for (const r of page) expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("DE");
   });
 
   // The country clause strips a standalone "the" from stored names with a
@@ -110,7 +111,7 @@ describe("deep search", { timeout: 240_000 }, () => {
       query: "news", sortBy: "dr", sortDir: "desc", finalResultSize: 40, filters: { countries: ["NL"] },
     });
     expect(out.results.length).toBeGreaterThan(0);
-    for (const r of out.results) expect(r.country, `${r.domain} -> ${r.country}`).toMatch(/netherlands|holland/i);
+    for (const r of out.results) expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("NL");
   });
 
   // The name-match arm reads fewer rows than it used to (only as many as the
@@ -159,7 +160,7 @@ describe("deep search", { timeout: 240_000 }, () => {
     const rows = await fetchResultRowsByIds(page);
     expect(rows.map((r) => r.id)).toEqual(page);
     for (const r of rows) {
-      expect(r.country, `${r.domain} -> ${r.country}`).toMatch(/united states|usa|america|^us$/i);
+      expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("US");
       expect(r.offers.length, r.domain).toBeGreaterThan(0);
     }
   });
@@ -214,7 +215,7 @@ describe("deep search", { timeout: 240_000 }, () => {
     expect(pcts[0]).toBe(59);
     for (let i = 1; i < pcts.length; i++) expect(pcts[i]).toBeLessThanOrEqual(pcts[i - 1]);
     const rows = await fetchResultRowsByIds(tail!.entries.slice(0, 10).map((e) => e.id));
-    for (const r of rows) expect(r.country, `${r.domain} -> ${r.country}`).toMatch(/germany|deutschland/i);
+    for (const r of rows) expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("DE");
   });
 
   liveIt("a quick pass that reaches the cut-off is the whole answer", async () => {

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { countryMatchRules, countryValueMatches } from "@/lib/search/country-normalize";
+import {
+  countryCode,
+  countryMatchRules,
+  countryName,
+  countryValueMatches,
+  nationalTldsOf,
+  publishedCountry,
+  tldCountry,
+} from "@/lib/search/country-normalize";
 
 describe("countryValueMatches", () => {
   it("matches every stored spelling of a country", () => {
@@ -47,5 +55,60 @@ describe("countryValueMatches", () => {
         }
       }
     }
+  });
+});
+
+describe("countryCode", () => {
+  // Every one of these is a stored spelling that matched no country filter.
+  it.each([
+    ["US", "US"], ["DK", "DK"], ["nl", "NL"], ["États-Unis", "US"], ["Danemark", "DK"],
+    ["Royaume-Uni", "GB"], ["Allemagne", "DE"], ["Russian Federation", "RU"],
+    ["Russian Federation (the)", "RU"], ["Türkiye", "TR"], ["Viet Nam", "VN"],
+    ["Republic of Korea", "KR"], ["Bosnia & Herzegovina", "BA"], ["Cote D'Ivoire", "CI"],
+    ["Émirats arabes unis", "AE"], ["Corée du Sud", "KR"],
+  ])("reads %s as %s, and the filter finds it there", (stored, code) => {
+    expect(countryCode(stored)).toBe(code);
+    expect(countryValueMatches(stored, code)).toBe(true);
+  });
+
+  it("reads the spellings of one country as one code", () => {
+    for (const v of ["United States", "United states", "USA", "US", "United States of America (the)", "États-Unis"]) {
+      expect(countryCode(v), v).toBe("US");
+    }
+    expect(countryName("US")).toBe("United States");
+  });
+
+  it("names no country for a placeholder or a spelling it does not know", () => {
+    for (const v of ["-", "", "- - Select --", "23817892-0d32-4771-9059-304337e96ac4", "European Union", null]) {
+      expect(countryCode(v), String(v)).toBeNull();
+    }
+  });
+
+  it("keeps the longer name's country", () => {
+    expect(countryCode("Ukraine")).toBe("UA");
+    expect(countryCode("Guinea-Bissau")).toBe("GW");
+    expect(countryCode("Nigeria")).toBe("NG");
+  });
+});
+
+describe("publishedCountry — no country the site's own domain contradicts", () => {
+  it("drops a stored country that a national ending contradicts", () => {
+    expect(publishedCountry("kurier.at", "Germany")).toBeNull();
+    expect(publishedCountry("lentanews.kyiv.ua", "United States")).toBeNull();
+    expect(publishedCountry("libero.it", "United Kingdom")).toBeNull();
+  });
+
+  it("keeps one the ending agrees with, and any on a generic ending", () => {
+    expect(publishedCountry("kurier.at", "Austria")).toBe("AT");
+    expect(publishedCountry("bbc.co.uk", "UK")).toBe("GB");
+    expect(publishedCountry("bitcoin.com", "Germany")).toBe("DE");
+    expect(publishedCountry("example.io", "India")).toBe("IN");
+  });
+
+  it("reads national endings only", () => {
+    expect(tldCountry("x.co.uk")).toBe("GB");
+    expect(tldCountry("x.com")).toBeNull();
+    expect(tldCountry("x.tv")).toBeNull();
+    expect(nationalTldsOf("GB")).toEqual(["uk"]);
   });
 });

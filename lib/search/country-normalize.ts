@@ -219,23 +219,62 @@ const ALIASES: Record<string, string[]> = {
   US: ["usa", "u.s.", "u.s.a.", "america"],
   GB: ["uk", "u.k.", "great britain", "england", "scotland", "wales", "northern ireland"],
   AE: ["uae", "u.a.e."],
-  KR: ["south korea", "korea"],
+  KR: ["south korea", "korea", "republic of korea"],
   KP: ["north korea"],
-  RU: ["russia"],
+  // "russia" does not reach "russian federation" as a whole word: 10,135
+  // sites stored that way never matched RU.
+  RU: ["russia", "russian federation"],
   CZ: ["czechia", "czech republic"],
-  VN: ["vietnam"],
-  LA: ["laos"],
+  VN: ["vietnam", "viet nam"],
+  LA: ["laos", "lao"],
+  BA: ["bosnia"],
+  CI: ["cote d'ivoire", "ivory coast"],
+  CV: ["cape verde"],
+  TT: ["trinidad"],
+  PS: ["palestinian territory"],
   SY: ["syria"],
   IR: ["iran"],
   BO: ["bolivia"],
   TZ: ["tanzania"],
   VE: ["venezuela"],
   MD: ["moldova"],
-  MK: ["macedonia"],
+  MK: ["macedonia", "northern macedonia"],
   CD: ["congo", "drc"],
   NL: ["holland", "the netherlands"],
   TR: ["turkiye"],
 };
+
+/**
+ * Stored spellings in other languages. One source writes French names
+ * ("États-Unis" 3,318 rows, "Danemark" 2,988, "Royaume-Uni" 2,041 in Oct
+ * 2026), which no English prefix reaches, so those sites never matched a
+ * country filter. Written as stored; normalize() reduces them the same way
+ * the SQL twin reduces the column (accented letters become spaces).
+ */
+const FOREIGN_NAMES: Record<string, string[]> = {
+  AE: ["Émirats arabes unis"], AL: ["Albanie"], AR: ["Argentine"], AT: ["Autriche"], AU: ["Australie"],
+  BE: ["Belgique"], BG: ["Bulgarie"], BO: ["Bolivie"], BR: ["Brésil"], CH: ["Suisse"], CN: ["Chine"],
+  CO: ["Colombie"], CY: ["Chypre"], CZ: ["Tchéquie", "République tchèque"], DE: ["Allemagne"],
+  DK: ["Danemark"], DZ: ["Algérie"], EC: ["Équateur"], EE: ["Estonie"], EG: ["Égypte"], ES: ["Espagne"],
+  FI: ["Finlande"], GB: ["Royaume-Uni"], GR: ["Grèce"], HR: ["Croatie"], HU: ["Hongrie"],
+  ID: ["Indonésie"], IE: ["Irlande"], IL: ["Israël"], IN: ["Inde"], IS: ["Islande"], IT: ["Italie"],
+  JP: ["Japon"], KR: ["Corée du Sud"], LT: ["Lituanie"], LV: ["Lettonie"], MA: ["Maroc"], MN: ["Mongolie"],
+  MT: ["Malte"], MX: ["Mexique"], MY: ["Malaisie"], NL: ["Pays-Bas"], NO: ["Norvège"],
+  NZ: ["Nouvelle-Zélande"], PE: ["Pérou"], PL: ["Pologne"], RO: ["Roumanie"], RS: ["Serbie"],
+  RU: ["Russie"], SA: ["Arabie saoudite"], SE: ["Suède"], SG: ["Singapour"], SI: ["Slovénie"],
+  SK: ["Slovaquie"], TH: ["Thaïlande"], TN: ["Tunisie"], TR: ["Turquie", "Türkiye"], TW: ["Taïwan"],
+  UG: ["Ouganda"], US: ["États-Unis"], VN: ["Viêt Nam"], ZA: ["Afrique du Sud"],
+};
+
+/**
+ * Every spelling a stored value may start with, besides the canonical name:
+ * the aliases, the foreign names, and the bare ISO code — several sources
+ * store "DK", "US" or "NL" (5,646, 4,001 and 3,908 rows), and those never
+ * matched either.
+ */
+function aliasesOf(code: string): string[] {
+  return [code.toLowerCase(), ...(ALIASES[code] ?? []), ...(FOREIGN_NAMES[code] ?? [])];
+}
 
 function normalize(value: string): string {
   return value
@@ -256,7 +295,7 @@ export function countryMatchPrefixes(isoCode: string): string[] | null {
   const code = isoCode.trim().toUpperCase();
   const canonical = CODE_TO_NAME[code];
   if (!canonical) return null;
-  return [normalize(canonical), ...(ALIASES[code] ?? []).map(normalize)].filter(Boolean);
+  return [...new Set([normalize(canonical), ...aliasesOf(code).map(normalize)].filter(Boolean))];
 }
 
 /**
@@ -289,8 +328,19 @@ const EXTRA_EXCLUDES: Record<string, string[]> = {
  * listed by hand, so a new alias cannot reintroduce a collision unnoticed.
  * Returns null for an unknown code, as countryMatchPrefixes does.
  */
+const rulesCache = new Map<string, { prefixes: string[]; excludes: string[] } | null>();
+
 export function countryMatchRules(isoCode: string): { prefixes: string[]; excludes: string[] } | null {
   const code = isoCode.trim().toUpperCase();
+  // Pure in the tables above, and costly: every other country's names are
+  // compared against this one's.
+  if (rulesCache.has(code)) return rulesCache.get(code)!;
+  const rules = buildMatchRules(code);
+  rulesCache.set(code, rules);
+  return rules;
+}
+
+function buildMatchRules(code: string): { prefixes: string[]; excludes: string[] } | null {
   const prefixes = countryMatchPrefixes(code);
   if (!prefixes) return null;
   const excludes = new Set((EXTRA_EXCLUDES[code] ?? []).map(normalize));
@@ -309,4 +359,69 @@ export function countryValueMatches(stored: string | null | undefined, isoCode: 
   if (!rules || !stored) return false;
   const v = normalize(stored);
   return rules.prefixes.some((p) => startsWithWords(v, p)) && !rules.excludes.some((e) => startsWithWords(v, e));
+}
+
+const codeCache = new Map<string, string | null>();
+
+/**
+ * The ISO-2 code a stored country value names, or null when it names none —
+ * the scrapers' "-" placeholder, or a spelling no table here covers. The
+ * exact inverse of countryValueMatches, so the country a result reports is
+ * always the one a country filter would find it under.
+ */
+export function countryCode(stored: string | null | undefined): string | null {
+  if (!stored) return null;
+  const key = normalize(stored);
+  if (codeCache.has(key)) return codeCache.get(key)!;
+  const code = Object.keys(CODE_TO_NAME).find((c) => countryValueMatches(stored, c)) ?? null;
+  codeCache.set(key, code);
+  return code;
+}
+
+/** The English name of an ISO-2 code, as CODE_TO_NAME spells it. */
+export function countryName(isoCode: string): string | null {
+  return CODE_TO_NAME[isoCode.toUpperCase()] ?? null;
+}
+
+/**
+ * Country-code domain endings that sites use for their own country, mapped to
+ * that country. Endings sold worldwide as generic names (.io, .co, .me, .tv,
+ * .ai, .fm …) are not here: they say nothing about where a site is read.
+ */
+const NATIONAL_TLDS: Record<string, string> = Object.fromEntries([
+  ...("at de ch fr be nl lu it es pt pl cz sk hu ro bg gr hr si rs ba mk al ua ru by lt lv ee fi se no dk is ie " +
+    "jp kr cn tw hk in pk bd id my th vn ph sg au nz za ng ke eg ma tn dz tr il ir sa ae br ar mx cl pe uy ve ec ca")
+    .split(" ")
+    .map((tld) => [tld, tld.toUpperCase()]),
+  ["uk", "GB"],
+]);
+
+/** Every ending in NATIONAL_TLDS, for SQL. */
+export const NATIONAL_TLD_LIST: readonly string[] = Object.keys(NATIONAL_TLDS);
+
+/** The national endings of one country (".uk" for GB, ".de" for DE). */
+export function nationalTldsOf(isoCode: string): string[] {
+  const code = isoCode.toUpperCase();
+  return NATIONAL_TLD_LIST.filter((tld) => NATIONAL_TLDS[tld] === code);
+}
+
+/** The country a host's own ending names (kurier.at → AT), or null for a generic one. */
+export function tldCountry(host: string): string | null {
+  const tld = host.toLowerCase().split(".").pop() ?? "";
+  return NATIONAL_TLDS[tld] ?? null;
+}
+
+/**
+ * The country a site is published under, or null. The stored value comes from
+ * marketplaces we do not trust on site facts, and some of it contradicts the
+ * site's own domain — kurier.at listed as Germany, Ukrainian .ua news sites as
+ * the United States. Where it does, no country is published (and a country
+ * search does not match the site): unknown is better than wrong. Sites on a
+ * generic ending (.com, .net) are not checked.
+ */
+export function publishedCountry(host: string, stored: string | null | undefined): string | null {
+  const code = countryCode(stored);
+  if (!code) return null;
+  const fromTld = tldCountry(host);
+  return fromTld && fromTld !== code ? null : code;
 }

@@ -23,6 +23,23 @@ export interface PublicMetrics {
   country: string | null;
 }
 
+/**
+ * The smallest value of each metric that is a real figure. The catalogue
+ * stores a missing metric as 0, and traffic of exactly 1 is a placeholder too:
+ * 10,613 sites hold it (Oct 2026), almost four times as many as hold any value
+ * from 2 to 10, DR 90 publications among them, spread over every source. A
+ * value below its floor is published as null — and a search filter, which
+ * only matches known values, never matches it.
+ */
+export const METRIC_FLOOR = { domain_rating: 1, organic_traffic: 2, ref_domains: 1 } as const;
+
+/** A catalogue metric as published: the number, or null when it is not known. */
+export function knownMetric(raw: unknown, floor: number): number | null {
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= floor ? n : null;
+}
+
 export interface PricingBody {
   domain: string;
   found: boolean;

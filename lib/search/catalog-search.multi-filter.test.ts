@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { countryCode } from "./country-normalize";
 
 // vitest does not load .env.local into process.env (vite only exposes
 // VITE_-prefixed vars, and only on import.meta.env), and lib/db reads
@@ -69,8 +70,7 @@ describe("searchCatalog multi-select country", { timeout: 120_000 }, () => {
 
     // And it must not have quietly become "no country filter": every row
     // still has to be one of the two countries.
-    const allowed = /united states|usa|germany|deutschland/i;
-    for (const r of both.results) expect(r.country, `${r.domain} -> ${r.country}`).toMatch(allowed);
+    for (const r of both.results) expect(["US", "DE"], `${r.domain} -> ${r.country}`).toContain(countryCode(r.country));
   });
 
   // Note this passes by *cache hit*: both spellings normalize to the same
@@ -86,7 +86,7 @@ describe("searchCatalog multi-select country", { timeout: 120_000 }, () => {
   dbIt("still narrows — a single country is a strict subset of unfiltered", async () => {
     const all = await searchCatalog({ ...base });
     const us = await searchCatalog({ ...base, filters: { countries: ["US"] } });
-    for (const r of us.results) expect(r.country).toMatch(/united states|usa/i);
+    for (const r of us.results) expect(countryCode(r.country), `${r.domain} -> ${r.country}`).toBe("US");
     expect(domains(us)).not.toEqual(domains(all));
   });
 });

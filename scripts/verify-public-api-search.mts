@@ -22,6 +22,7 @@ import { getUsdRates } from "@/lib/currency";
 import { fetchCatalog, pricingBodyFor } from "@/lib/public-api/batch-handler";
 import { runSearch } from "@/lib/public-api/search-handler";
 import { parseSearchRequest, searchPrice, sortResults, type ParsedSearch } from "@/lib/public-api/search";
+import { isPlatformHost } from "@/lib/public-api/source-quality";
 import { countryValueMatches } from "@/lib/search/country-normalize";
 import { normalizeLanguage } from "@/lib/search/language-normalize";
 
@@ -42,6 +43,10 @@ const CASES: Record<string, unknown>[] = [
   // "uk" is a GB alias and "ukraine" starts with it: GB must not return Ukraine.
   { filters: { country: ["GB"], min_dr: 80 }, limit: 50 },
   { filters: { country: ["NE"] } },
+  // A niche on its own, and the DR-sorted searches platforms used to fill.
+  { niche: "gambling" },
+  { niche: "link_insertion", sort: "price" },
+  { filters: { min_dr: 50, country: ["US"], language: "en", max_price: 300 } },
 ];
 
 
@@ -63,10 +68,11 @@ for (const request of CASES) {
   const t0 = Date.now();
   const { results, hasMore } = await runSearch(p, rates);
   const ms = Date.now() - t0;
-  console.log(`${label}\n  ${results.length} results, has_more=${hasMore}, ${ms} ms`);
+  console.log(`${label}\n  ${results.length} results, has_more=${hasMore}, ${ms} ms — ${results.slice(0, 6).map((r) => r.domain).join(", ")}`);
 
   if (results.length > p.limit) fail(label, `returned ${results.length} > limit ${p.limit}`);
   if (new Set(results.map((r) => r.domain)).size !== results.length) fail(label, "a domain appears twice");
+  for (const r of results) if (isPlatformHost(r.domain)) fail(label, `${r.domain}: a platform host`);
 
   const resorted = sortResults(results, p.sort, p.niche).map((r) => r.domain);
   if (resorted.join() !== results.map((r) => r.domain).join()) fail(label, "results are not in the requested order");

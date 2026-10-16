@@ -12,6 +12,7 @@ export const COMMON_ERROR_CODES = [
   { code: "429", name: "rate_limit_exceeded", desc: "Per-minute burst limit hit. Retry-After is about 60 seconds." },
   { code: "429", name: "quota_exceeded", desc: "The request needs more lookups than remain this month; the message says how many remain. Retry-After counts down to the 1st, 00:00 UTC." },
   { code: "500", name: "internal_error", desc: "Error on our side. No lookups are charged. Retry with exponential backoff." },
+  { code: "503", name: "timeout", desc: "The request ran out of time on our side (25 seconds) and was stopped. No lookups are charged. Retry-After is 5 seconds." },
 ];
 
 export const PRICING_ERROR_CODES = [
@@ -23,11 +24,11 @@ export const PRICING_ERROR_CODES = [
 ];
 
 export const SEARCH_ERROR_CODES = [
-  { code: "400", name: "invalid_request", desc: "The body is not an object with a filters object." },
-  { code: "422", name: "no_filters", desc: "filters is empty. Set at least one filter; niche on its own is not one." },
+  { code: "400", name: "invalid_request", desc: "The body is not a JSON object, or filters is not an object." },
+  { code: "422", name: "no_filters", desc: "Nothing narrows the search: set a niche, at least one filter, or both." },
   { code: "422", name: "unknown_filter", desc: "A key inside filters is not a filter we support. The message lists the ones we do." },
   { code: "422", name: "unknown_field", desc: "A top-level field we do not recognise — usually a filter sent outside filters." },
-  { code: "422", name: "invalid_filter", desc: "A filter has the wrong type or range, or a min is above its max. The message names it." },
+  { code: "422", name: "invalid_filter", desc: "A filter has the wrong type or range, a min is above its max, or a list filter has more than 20 values. The message names it." },
   { code: "422", name: "invalid_country / invalid_language / invalid_tld / invalid_category", desc: "A value in that filter is not one we can match." },
   { code: "422", name: "invalid_niche", desc: "The niche value is not one we price." },
   { code: "422", name: "invalid_sort", desc: "sort or order is not an accepted value." },
@@ -39,10 +40,10 @@ export const SEARCH_FILTERS: [string, string, string][] = [
   ["min_traffic / max_traffic", "number", "Estimated monthly organic traffic."],
   ["min_ref_domains / max_ref_domains", "number", "Number of referring domains."],
   ["min_price / max_price", "number", "US dollars, compared against pricing.<niche>.linkpricer.lowest — the price you would pay, fee included. For the niche you asked for, or standard when you sent none."],
-  ["country", "string | string[]", "Primary traffic country as ISO 3166-1 alpha-2 codes: \"US\", [\"DE\", \"AT\"]. A site matches if it is in any of them."],
+  ["country", "string | string[]", "Primary traffic country as ISO 3166-1 alpha-2 codes, up to 20: \"US\", [\"DE\", \"AT\"]. A site matches if it is in any of them."],
   ["language", "string", "Site language as one ISO 639-1 code: \"en\", \"de\", \"es\"."],
-  ["tld", "string | string[]", "Domain ending without the dot: \"de\", [\"com\", \"co.uk\"]. A site matches if it ends in any of them."],
-  ["category", "string | string[]", "A word or short phrase matched against the site's category text: \"technology\", [\"health\", \"fitness\"]. Categories come from the sources as free text in several languages, so treat this as a keyword match, not a fixed taxonomy."],
+  ["tld", "string | string[]", "Domain ending without the dot, up to 20: \"de\", [\"com\", \"co.uk\"]. A site matches if it ends in any of them."],
+  ["category", "string | string[]", "Up to 20 words or short phrases matched against what the site is about: \"technology\", [\"health\", \"fitness\"]. We match the topic our own description of the site gives (\"Finance / Financial News & Media\"), which most priced sites have, and the sources' category text for the rest. Treat it as a keyword match, not a fixed taxonomy: \"casino\" and \"gambling\" find different sites, so send both."],
 ];
 
 export const SEARCH_REQUEST_EXAMPLE = `POST /api/v1/public/domains/search
@@ -275,7 +276,7 @@ export const SEARCH_RESPONSE_FIELDS: [field: string, type: string, desc: string]
   ["summary.limit", "number", "The limit that applied."],
   ["summary.has_more", "boolean", "true when more sites matched than were returned. There is no next page: narrow the filters or change the sort to see different sites."],
   ["usage", "object", "Same fields as the Pricing API (charged, monthly_limit, monthly_remaining, resets_at). usage.charged equals summary.returned."],
-  ["results[].domain", "string", "The matching domain. Search never returns blog-hosting subdomains (e.g. *.blogspot.com, *.wordpress.com), sites on shared registry names (*.uk.com, *.it.com …) or social and user-content platforms (reddit.com, linkedin.com, quora.com …): the first two carry the parent domain's Domain Rating rather than their own, and a listing on a social platform is a profile or post link, not an editorial placement. The pricing endpoint still prices them when you ask by name."],
+  ["results[].domain", "string", "The matching domain. Search only returns sites whose price a source has confirmed in the last 90 days, and only sites where a placement is an editorial one, so it leaves out blog and site-builder subdomains (*.blogspot.com, *.wordpress.com), hosting and file-storage domains (s3.amazonaws.com), shared registry names (*.uk.com, *.it.com …), social, profile and user-document platforms (reddit.com, jotform.com, archive.org …), domain-sale pages, and university and government sites (.edu, .gov, .ac.uk …). These carry a parent domain's Domain Rating rather than their own, or sell a profile, page or comment link rather than an article. A section or edition of a publication is kept (sport.lefigaro.fr, uk.finance.yahoo.com): it is the publication, and like every subdomain it shows the publication's Domain Rating, because Ahrefs rates whole domains. The pricing endpoint still prices everything left out here when you ask for it by name."],
   ["results[].data", "object", "The domain's pricing body — identical to what the pricing endpoint returns for it. See Domain Result."],
   
 ];
@@ -302,10 +303,10 @@ export const RESULT_FIELDS: [field: string, type: string, desc: string][] = [
   ["pricing.<niche>.offer_count", "number", "How many independent sources back these figures."],
   ["pricing.<niche>.last_updated", "string | null", "Date the prices for THIS niche were last refreshed, from the sources that actually price it. null when no contributing source carries a timestamp."],
   ["available_niches", "string[]", "Every niche this domain is priced for, regardless of any niche filter. Use it to tell \"no source sells this niche here\" apart from \"you filtered it out\" — without spending a second request."],
-  ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (0–100)."],
-  ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic."],
-  ["metrics.ref_domains", "number | null", "Number of referring domains."],
-  ["metrics.country", "string | null", "Primary traffic country, full name (e.g. \"United States\") — not an ISO code."],
+  ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (1–100). null when we have no rating for the site."],
+  ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic. null when we have no real figure: sources record a missing figure as 0 or 1, and we publish neither."],
+  ["metrics.ref_domains", "number | null", "Number of referring domains. null when we have no real figure (sources record a missing one as 0)."],
+  ["metrics.country", "string | null", "Primary traffic country as one English name per country (e.g. \"United States\", never \"US\" or \"USA\") — the country a Search country filter finds the site under. null when no source names one, or when the one named contradicts the site's own country domain (a .at site listed as Germany)."],
   ["last_updated", "string | null", "The most recent of the per-niche dates in this response. null when nothing is priced."],
   
 ];

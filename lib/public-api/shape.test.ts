@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildPricingBody } from "@/lib/public-api/shape";
+import { buildPricingBody, knownMetric, METRIC_FLOOR } from "@/lib/public-api/shape";
 import { minFeeCents, withFeeUsd } from "@/lib/pricing/fee";
 import { NICHE_IDS, type RawOffer } from "@/lib/public-api/pricing";
 
@@ -230,5 +230,22 @@ describe("freshness is per niche, not per domain", () => {
       METRICS
     );
     expect(b.pricing.standard.last_updated).toBeNull();
+  });
+});
+
+describe("a metric the catalogue does not know is null, not a figure", () => {
+  it("publishes 0, and traffic of 1, as null", () => {
+    expect(knownMetric(0, METRIC_FLOOR.domain_rating)).toBeNull();
+    expect(knownMetric(0, METRIC_FLOOR.ref_domains)).toBeNull();
+    expect(knownMetric(1, METRIC_FLOOR.organic_traffic)).toBeNull();
+    expect(knownMetric("0", METRIC_FLOOR.organic_traffic)).toBeNull();
+    expect(knownMetric(null, METRIC_FLOOR.organic_traffic)).toBeNull();
+  });
+
+  it("publishes everything else as the number", () => {
+    expect(knownMetric(1, METRIC_FLOOR.domain_rating)).toBe(1);
+    expect(knownMetric(1, METRIC_FLOOR.ref_domains)).toBe(1);
+    expect(knownMetric(2, METRIC_FLOOR.organic_traffic)).toBe(2);
+    expect(knownMetric("5635770", METRIC_FLOOR.organic_traffic)).toBe(5635770);
   });
 });
