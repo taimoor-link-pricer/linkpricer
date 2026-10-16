@@ -256,13 +256,13 @@ export default function DocsPage() {
               </tbody>
             </table>
             <p className="docs-p">
-              A request must fit your remaining quota as a whole. Pricing reserves its distinct valid domains when the request arrives; Search reserves its <code className="docs-inline-code">limit</code>. What goes unused is handed back when the request completes. If the reservation does not fit, the request is refused with <code className="docs-inline-code">429 quota_exceeded</code> and nothing is charged. A request rejected outright (400, 413, 422) or failing on our side (500) costs nothing.
+              A request must fit your remaining quota as a whole. Pricing reserves its distinct valid domains when the request arrives; Search reserves its <code className="docs-inline-code">limit</code>. What goes unused is handed back when the request completes. If the reservation does not fit, the request is refused with <code className="docs-inline-code">429 quota_exceeded</code> and nothing is charged. A request rejected outright (400, 413, 422) or failing on our side (500, 503) costs nothing.
             </p>
             <p className="docs-p">
-              The per-minute limit counts requests, not domains. Both limits return <code className="docs-inline-code">429</code> with a <code className="docs-inline-code">Retry-After</code> header: about a minute for a burst (<code className="docs-inline-code">rate_limit_exceeded</code>), or the time until the 1st for a spent quota (<code className="docs-inline-code">quota_exceeded</code>).
+              The per-minute limit counts requests, not domains, and rejected requests (400, 413, 422) count toward it too. Both limits return <code className="docs-inline-code">429</code> with a <code className="docs-inline-code">Retry-After</code> header: about a minute for a burst (<code className="docs-inline-code">rate_limit_exceeded</code>), or the time until the 1st for a spent quota (<code className="docs-inline-code">quota_exceeded</code>).
             </p>
             <p className="docs-p">
-              Every response carries <code className="docs-inline-code">X-RateLimit-Limit</code>, <code className="docs-inline-code">X-RateLimit-Remaining</code> and <code className="docs-inline-code">X-RateLimit-Reset</code> (the monthly quota, after this request), <code className="docs-inline-code">X-RateLimit-Limit-Minute</code> and <code className="docs-inline-code">X-RateLimit-Remaining-Minute</code> for the burst limit, and <code className="docs-inline-code">X-Lookups-Charged</code>.
+              Every response to a request with a usable key, errors included, carries <code className="docs-inline-code">X-RateLimit-Limit</code>, <code className="docs-inline-code">X-RateLimit-Remaining</code> and <code className="docs-inline-code">X-RateLimit-Reset</code> (the monthly quota, after this request), <code className="docs-inline-code">X-RateLimit-Limit-Minute</code> and <code className="docs-inline-code">X-RateLimit-Remaining-Minute</code> for the burst limit, and <code className="docs-inline-code">X-Lookups-Charged</code>. A <code className="docs-inline-code">401</code> has no key to report on, so it carries none of them.
             </p>
           </section>
 
@@ -280,7 +280,7 @@ export default function DocsPage() {
               <tbody>
                 {COMMON_ERROR_CODES.map((e) => (
                   <tr key={e.name}>
-                    <td><span className={`docs-badge docs-badge-${e.code === "401" || e.code === "500" ? "401" : e.code === "429" ? "429" : "404"}`}>{e.code}</span></td>
+                    <td><span className={`docs-badge docs-badge-${e.code === "401" || e.code === "500" || e.code === "503" ? "401" : e.code === "429" ? "429" : "404"}`}>{e.code}</span></td>
                     <td><code className="docs-inline-code">{e.name}</code></td>
                     <td>{e.desc}</td>
                   </tr>
@@ -424,7 +424,7 @@ export default function DocsPage() {
               <tbody>
                 {PRICING_ERROR_CODES.map((e) => (
                   <tr key={e.name}>
-                    <td><span className={`docs-badge docs-badge-${e.code === "401" || e.code === "500" ? "401" : e.code === "429" ? "429" : "404"}`}>{e.code}</span></td>
+                    <td><span className={`docs-badge docs-badge-${e.code === "401" || e.code === "500" || e.code === "503" ? "401" : e.code === "429" ? "429" : "404"}`}>{e.code}</span></td>
                     <td><code className="docs-inline-code">{e.name}</code></td>
                     <td>{e.desc}</td>
                   </tr>
@@ -545,7 +545,7 @@ export default function DocsPage() {
               </tbody>
             </table>
             <div className="docs-callout">
-              <strong>A filter only matches sites where we know the value.</strong> We do not hold organic traffic or referring domains for every site, so setting <code className="docs-inline-code">min_traffic</code>, <code className="docs-inline-code">max_traffic</code> or a referring-domains filter leaves out every site with no figure on record — including with a <code className="docs-inline-code">max_</code> filter. Domain Rating is known for most of the catalog. If a traffic filter returns fewer sites than you expected, try the search without it.
+              <strong>A filter only matches sites where we know the value.</strong> We do not hold organic traffic or referring domains for every site (those are <code className="docs-inline-code">null</code> in the result), so setting <code className="docs-inline-code">min_traffic</code>, <code className="docs-inline-code">max_traffic</code> or a referring-domains filter leaves out every site with no figure on record — including with a <code className="docs-inline-code">max_</code> filter. Domain Rating is known for most of the catalog. If a traffic filter returns fewer sites than you expected, try the search without it.
             </div>
 
             <div className="docs-code-block">

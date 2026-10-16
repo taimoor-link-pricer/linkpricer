@@ -23,6 +23,7 @@ const state = vi.hoisted(() => ({
   hosts: [] as string[],
   catalog: new Map<string, { dr: number; traffic: number | null; offers: Record<string, unknown>[] }>(),
   failSearch: false,
+  hangSearch: false,
   searchSql: [] as { text: string; params: unknown[] }[],
 }));
 
@@ -68,9 +69,22 @@ vi.mock("@/lib/db", async () => {
       state.monthUsed = Math.max(0, state.monthUsed - n);
       return { rows: [{ month_count: state.monthUsed }] };
     }
-    if (text.includes("FROM api_keys WHERE key_hash")) {
+    // A rejected request: counted against the minute, not the month.
+    if (text.includes("WITH rk AS")) {
       const k = keyState();
-      return { rows: k ? [k] : [] };
+      if (!k || !state.key) return { rows: [] };
+      const minuteBlocked = state.minuteUsed >= state.key.perMinute;
+      const counted = k.is_active && !k.blocked && !k.expired && !minuteBlocked;
+      if (counted) state.minuteUsed += 1;
+      return {
+        rows: [{
+          ...k,
+          month_limit: state.key.limit, per_minute_limit: state.key.perMinute,
+          month_used: state.monthUsed,
+          minute_used: counted ? state.minuteUsed : null,
+          minute_blocked: minuteBlocked,
+        }],
+      };
     }
     if (text.includes("INSERT INTO api_request_logs")) {
       for (let i = 0; i < params.length; i += 5) {
@@ -78,10 +92,17 @@ vi.mock("@/lib/db", async () => {
       }
       return { rows: [] };
     }
-    // The search's candidate query.
-    if (text.includes("GROUP BY d.id")) {
+    // The stored country spellings the country filter matches exactly.
+    if (text.includes("WITH RECURSIVE t(c)")) {
+      return { rows: ["United States", "US", "États-Unis", "United Kingdom", "Germany"].map((c) => ({ c })) };
+    }
+    // The search's candidate queries: grouped (price) or ranked (metric).
+    if (text.includes("AS host")) {
       state.searchSql.push({ text, params });
       if (state.failSearch) throw new Error("db down");
+      if (state.hangSearch) return new Promise(() => {});
+      // Every fixture site has its metrics; the ranked query's "unknown" part has none.
+      if (text.includes(" IS NULL OR ")) return { rows: [] };
       return { rows: state.hosts.map((host) => ({ host })) };
     }
     // The catalogue query both endpoints price with.
@@ -133,7 +154,8 @@ function add(domain: string, price: number, dr = 50, extra: Record<string, unkno
   state.catalog.set(domain, {
     dr,
     traffic: 5000,
-    offers: [{ currency: "USD", min_price: price, trusted: false, freshness: "2026-10-01T00:00:00Z", ...extra }],
+    // Fresh as of today: search only returns prices confirmed recently.
+    offers: [{ currency: "USD", min_price: price, trusted: false, freshness: new Date().toISOString(), ...extra }],
   });
   state.hosts.push(domain);
 }
@@ -148,7 +170,9 @@ beforeEach(() => {
   state.hosts = [];
   state.catalog = new Map();
   state.failSearch = false;
+  state.hangSearch = false;
   state.searchSql = [];
+  vi.useRealTimers();
 });
 
 describe("search — who gets in", () => {
@@ -169,6 +193,31 @@ describe("search — who gets in", () => {
     expect((await search("{not json")).status).toBe(400);
     expect(state.claims).toEqual([]);
     expect(state.monthUsed).toBe(0);
+  });
+
+  it("gives a rejected request the rate-limit headers, and counts it against the minute only", async () => {
+    state.monthUsed = 7;
+    const res = await search({ filters: { min_DR: 40 } });
+    expect(res.status).toBe(422);
+    expect(res.headers.get("X-RateLimit-Limit")).toBe("1000");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBe("993");
+    expect(res.headers.get("X-RateLimit-Limit-Minute")).toBe("10");
+    expect(res.headers.get("X-RateLimit-Remaining-Minute")).toBe("9");
+    expect(res.headers.get("X-Lookups-Charged")).toBe("0");
+    expect(state.minuteUsed).toBe(1);
+    expect(state.monthUsed).toBe(7);
+  });
+
+  it("refuses rejected requests past the per-minute limit like any other", async () => {
+    for (let i = 0; i < 10; i++) expect((await search("{not json")).status).toBe(400);
+    const res = await search("{not json");
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe("rate_limit_exceeded");
+    expect(res.headers.get("Retry-After")).toBe("60");
+    expect(res.headers.get("X-RateLimit-Remaining-Minute")).toBe("0");
+    // And a valid request in the same minute is refused too.
+    expect((await search({ filters: { min_dr: 40 } })).status).toBe(429);
+    expect(state.claims).toEqual([]);
   });
 
   it("refuses a blocked key", async () => {
@@ -244,6 +293,19 @@ describe("search — what it costs", () => {
     expect(state.logs).toEqual([{ domain: "(search)", status: 200 }]);
   });
 
+  it("leaves out a site whose price no source has confirmed recently, and does not charge for it", async () => {
+    add("fresh.com", 100, 70);
+    add("stale.com", 100, 80, { freshness: "2026-02-13T00:00:00Z" });
+    const body = await (await search({ filters: { min_dr: 40 } })).json();
+    expect(body.results.map((r: { domain: string }) => r.domain)).toEqual(["fresh.com"]);
+    expect(body.usage.charged).toBe(1);
+    // The candidate query asks for recent offers in the first place.
+    expect(state.searchSql[0].text).toContain("GREATEST(o.updated_at::timestamp, o.last_fetched_at) >=");
+    // The pricing endpoint still prices it when asked by name.
+    const priced = await (await pricing({ domains: ["stale.com"] })).json();
+    expect(priced.results[0]).toMatchObject({ status: "ok", data: { found: true } });
+  });
+
   it("answers a max_price below the minimum fee without searching", async () => {
     add("a.com", 1);
     const body = await (await search({ filters: { max_price: 10 } })).json();
@@ -261,6 +323,24 @@ describe("search — what it costs", () => {
     expect(state.refunds).toEqual([50]);
     expect(state.monthUsed).toBe(0);
     expect(state.logs).toEqual([{ domain: "(search)", status: 500 }]);
+    expect(res.headers.get("X-RateLimit-Remaining")).toBe("1000");
+    expect(res.headers.get("X-Lookups-Charged")).toBe("0");
+  });
+
+  it("answers a search that outruns the deadline with a timeout, and hands everything back", async () => {
+    vi.useFakeTimers();
+    add("a.com", 100);
+    state.hangSearch = true;
+    const pending = search({ filters: { min_dr: 40 } });
+    await vi.advanceTimersByTimeAsync(25_000);
+    const res = await pending;
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: "timeout", status: 503 });
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect(res.headers.get("X-RateLimit-Remaining")).toBe("1000");
+    expect(state.refunds).toEqual([50]);
+    expect(state.monthUsed).toBe(0);
+    expect(state.logs).toEqual([{ domain: "(search)", status: 503 }]);
   });
 
   it("refuses a search the remaining quota cannot cover, and says what would fit", async () => {
@@ -294,18 +374,48 @@ describe("search — the query it sends", () => {
     expect(text).toContain("o.gambling_min_price > 0");
     expect(text).toContain("HAVING");
     expect(text).toMatch(/ORDER BY MIN\(o\.gambling_min_price::float [^\n]*\) ASC NULLS LAST/);
-    expect(text).toContain("d.domain_rating > 0");
+    expect(text).toContain("d.domain_rating >= 1");
     // Over-fetched, so a dropped candidate does not leave the page short.
     expect(params.at(-1)).toBe(120);
   });
 
-  it("uses the standard price and no HAVING when price is not filtered", async () => {
+  it("walks a metric sort in order, with no grouping, when price is not filtered", async () => {
     await search({ filters: { country: ["US"], tld: "com" } });
-    const { text } = state.searchSql[0];
+    const { text, params } = state.searchSql[0];
     expect(text).toContain("o.min_price > 0");
-    expect(text).not.toContain("HAVING");
-    expect(text).toContain("country_main_traffic");
-    expect(text).toMatch(/ORDER BY NULLIF\(d\.domain_rating, 0\) DESC NULLS LAST/);
+    expect(text).toContain("EXISTS (SELECT 1 FROM marketplace_offers o");
+    expect(text).not.toContain("GROUP BY");
+    expect(text).toMatch(/ORDER BY d\.domain_rating DESC, lower\(d\.domain\) ASC/);
+    // The country as its exact stored spellings, which the column's index can serve.
+    expect(text).toMatch(/d\.country_main_traffic IN \(\$\d+, \$\d+, \$\d+\)/);
+    expect(params).toEqual(expect.arrayContaining(["United States", "US", "États-Unis"]));
+    expect(params).not.toContain("United Kingdom");
+  });
+
+  it("reads the sites with an unknown metric only when the known ones do not fill the page", async () => {
+    add("a.com", 100, 70);
+    await search({ filters: { tld: "com" }, limit: 5 });
+    expect(state.searchSql).toHaveLength(2);
+    expect(state.searchSql[1].text).toMatch(/\(d\.domain_rating IS NULL OR d\.domain_rating < 1\)/);
+    expect(state.searchSql[1].text).toMatch(/ORDER BY lower\(d\.domain\) ASC/);
+
+    // A DR range already requires a known DR: nothing more to read.
+    state.searchSql = [];
+    await search({ filters: { min_dr: 40 }, limit: 5 });
+    expect(state.searchSql).toHaveLength(1);
+  });
+
+  it("tests a price range per offer on a metric sort, without grouping", async () => {
+    await search({ filters: { min_price: 100, max_price: 300 } });
+    const { text } = state.searchSql[0];
+    expect(text).not.toContain("GROUP BY");
+    expect(text).toMatch(/AND EXISTS \(SELECT 1 FROM marketplace_offers o [\s\S]* <= \$\d+::float\)/);
+    expect(text).toMatch(/AND NOT EXISTS \(SELECT 1 FROM marketplace_offers o [\s\S]* < \$\d+::float\)/);
+  });
+
+  it("matches nothing for a country no site is stored under", async () => {
+    await search({ filters: { country: ["NE"] } });
+    expect(state.searchSql[0].text).toContain("AND false");
   });
 });
 
@@ -344,7 +454,9 @@ describe("pricing — unchanged by sharing its quota code", () => {
   });
 
   it("still rejects a bad body without charging, and a bad key first", async () => {
-    expect((await pricing({ domains: [] })).status).toBe(422);
+    const empty = await pricing({ domains: [] });
+    expect(empty.status).toBe(422);
+    expect(empty.headers.get("X-RateLimit-Remaining")).toBe("1000");
     expect((await pricing("nope")).status).toBe(400);
     expect(state.claims).toEqual([]);
     state.key = null;

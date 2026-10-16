@@ -41,6 +41,13 @@ describe("isPlatformHost", () => {
       "houzz.co.uk",
       "forsale.godaddy.com",
       "neena0611.blog.fc2.com",
+      "apuestas.webador.es",
+      "mysite.webador.co.uk",
+      "postings.tistory.com",
+      "bloges.bcz.com",
+      "medium.seznam.cz",
+      "notes.ietf.org",
+      "answers.netlify.com",
     ]) {
       expect(isPlatformHost(host), host).toBe(true);
     }
@@ -56,6 +63,10 @@ describe("isPlatformHost", () => {
       "gesund.bund.gov.de",
       "legifrance.gouv.fr",
       "commission.europa.eu",
+      "gesund.bund.de",
+      "oesterreich.gv.at",
+      "admin.ch",
+      "blogsaverroes.juntadeandalucia.es",
     ]) {
       expect(isPlatformHost(host), host).toBe(true);
     }
@@ -93,6 +104,9 @@ describe("isPlatformHost", () => {
       "krakow.naszemiasto.pl",
       "economictimes.indiatimes.com",
       "godaddy.com",
+      "seznam.cz",
+      "netlify.com",
+      "ietf.org",
     ]) {
       expect(isPlatformHost(host), host).toBe(false);
     }

@@ -114,7 +114,7 @@ export const TOOLS: readonly ToolDefinition[] = [
             category: {
               type: "array",
               items: { type: "string" },
-              description: "Topic words matched against the site's category, e.g. [\"technology\", \"finance\"]. Any one matches.",
+              description: "Topic words matched against what the site is about, e.g. [\"technology\", \"finance\"]. Any one matches; send synonyms too (\"casino\", \"gambling\").",
             },
           },
           additionalProperties: false,

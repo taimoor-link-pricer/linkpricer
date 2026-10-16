@@ -47,11 +47,14 @@ export interface RequestRejection {
   results?: unknown;
 }
 
-export function errorWith(err: RequestRejection): NextResponse {
+export function errorWith(err: RequestRejection, extra?: Record<string, string>): NextResponse {
   const body: Record<string, unknown> = { error: err.code, message: err.message, status: err.status };
   if (err.results) body.results = err.results;
-  return NextResponse.json(body, { status: err.status, headers: NO_STORE });
+  return NextResponse.json(body, { status: err.status, headers: { ...NO_STORE, ...extra } });
 }
+
+/** On every answer that charged nothing, so a client can read it off any response. */
+export const NOTHING_CHARGED = { "X-Lookups-Charged": "0" } as const;
 
 /**
  * The 401 for a key that cannot be used, or null if it can. All three causes
@@ -71,37 +74,97 @@ export function refusalFor(k: KeyStateRow | undefined): NextResponse | null {
   return null;
 }
 
-/**
- * Is this key usable? Read-only, and only used on the request-rejection
- * paths, so that a malformed request with a bad key still gets the 401 an
- * integrator expects to see first — without touching any counter.
- */
-export async function keyRefusal(keyHash: string): Promise<NextResponse | null> {
-  const r = await db.execute(sql`
-    SELECT is_active,
-           blocked_at IS NOT NULL                             AS blocked,
-           (expires_at IS NOT NULL AND expires_at <= NOW())   AS expired,
-           expires_at
-    FROM api_keys WHERE key_hash = ${keyHash} LIMIT 1
-  `);
-  return refusalFor(r.rows[0] as KeyStateRow | undefined);
+/** The key and its counters, as read — and counted — for a request we reject. */
+interface RejectionRow extends KeyStateRow {
+  month_limit: number;
+  per_minute_limit: number;
+  month_used: number;
+  minute_used: number | null;
+  minute_blocked: boolean | null;
 }
 
 /**
- * Rejects a request we will not look anything up for. The key is still
- * checked (read-only), so a bad key is reported as 401, not as the body's
- * own 4xx.
+ * Counts a request we are rejecting against the key's per-minute limit, and
+ * reads the counters its headers report. The monthly quota is not touched:
+ * nothing was looked up.
+ *
+ * Read-only before, which let a client stuck in a loop on a malformed body
+ * through without limit (65 in a row, none refused) — the burst the
+ * per-minute limit exists to stop — and gave it no rate-limit headers to
+ * pace itself by.
+ */
+async function countRejected(keyHash: string, w: ClaimWindow): Promise<RejectionRow | undefined> {
+  const { minuteBucket, month } = w;
+  const r = await db.execute(sql`
+    WITH rk AS (
+      SELECT id, is_active, per_minute_limit,
+             blocked_at IS NOT NULL                           AS blocked,
+             (expires_at IS NOT NULL AND expires_at <= NOW()) AS expired,
+             expires_at,
+             COALESCE(monthly_limit, daily_limit * 30) AS month_limit,
+             minute_window, minute_count, month_window, month_count
+      FROM api_keys
+      WHERE key_hash = ${keyHash}
+      LIMIT 1
+    ),
+    bumped AS (
+      UPDATE api_keys a
+      SET minute_count  = CASE WHEN a.minute_window = ${minuteBucket} THEN a.minute_count + 1 ELSE 1 END,
+          minute_window = ${minuteBucket}
+      FROM rk
+      WHERE a.id = rk.id
+        AND rk.is_active
+        AND NOT rk.blocked
+        AND NOT rk.expired
+        AND (a.minute_window IS DISTINCT FROM ${minuteBucket} OR a.minute_count < a.per_minute_limit)
+      RETURNING a.minute_count
+    )
+    SELECT
+      rk.is_active,
+      rk.blocked,
+      rk.expired,
+      rk.expires_at,
+      rk.month_limit,
+      rk.per_minute_limit,
+      (CASE WHEN rk.month_window = ${month} THEN rk.month_count ELSE 0 END)           AS month_used,
+      (SELECT minute_count FROM bumped)                                                AS minute_used,
+      (rk.minute_window = ${minuteBucket} AND rk.minute_count >= rk.per_minute_limit)  AS minute_blocked
+    FROM rk
+  `);
+  return r.rows[0] as unknown as RejectionRow | undefined;
+}
+
+/**
+ * Rejects a request we will not look anything up for. The key is checked
+ * first, so a bad key is reported as 401, not as the body's own 4xx; a good
+ * one has the request counted against its per-minute limit, and gets the
+ * rate-limit headers every keyed response carries.
  */
 export async function rejectRequest(keyHash: string, err: RequestRejection, tag: string): Promise<NextResponse> {
+  const w = claimWindow();
+  let k: RejectionRow | undefined;
   try {
-    const refusal = await keyRefusal(keyHash);
-    if (refusal) return refusal;
+    k = await countRejected(keyHash, w);
   } catch (e) {
     // The request is being rejected either way; if the key check itself
     // fails, report the request's own error rather than turning it into a 500.
     console.error(`${tag} key check failed`, e);
+    return errorWith(err, NOTHING_CHARGED);
   }
-  return errorWith(err);
+
+  const refusal = refusalFor(k);
+  if (refusal || !k) return refusal ?? jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
+
+  const monthLimit = Number(k.month_limit);
+  const monthUsed = Number(k.month_used);
+  const minuteLimit = Number(k.per_minute_limit);
+  if (k.minute_blocked) return minuteLimitExceeded(monthLimit, monthUsed, minuteLimit, w);
+
+  const minuteUsed = k.minute_used == null ? null : Number(k.minute_used);
+  return errorWith(err, {
+    ...rateLimitHeaders(monthLimit, monthUsed, minuteLimit, minuteUsed, w.monthResetEpoch),
+    ...NOTHING_CHARGED,
+  });
 }
 
 /**
@@ -239,14 +302,7 @@ export function claimDenial(
   const minuteLimit = Number(k.per_minute_limit);
   const usedBefore = Number(k.month_used_before);
 
-  if (k.minute_blocked) {
-    return jsonError(
-      "rate_limit_exceeded",
-      "Per-minute rate limit exceeded. See Retry-After header.",
-      429,
-      { "Retry-After": "60", ...rateLimitHeaders(monthLimit, usedBefore, minuteLimit, minuteLimit, w.monthResetEpoch) }
-    );
-  }
+  if (k.minute_blocked) return minuteLimitExceeded(monthLimit, usedBefore, minuteLimit, w);
   if (k.month_blocked) {
     const remaining = Math.max(0, monthLimit - usedBefore);
     const message =
@@ -257,10 +313,23 @@ export function claimDenial(
       "quota_exceeded",
       message,
       429,
-      { "Retry-After": String(secondsUntilNextMonthUtc(w.now)), ...rateLimitHeaders(monthLimit, usedBefore, minuteLimit, null, w.monthResetEpoch) }
+      {
+        "Retry-After": String(secondsUntilNextMonthUtc(w.now)),
+        ...rateLimitHeaders(monthLimit, usedBefore, minuteLimit, null, w.monthResetEpoch),
+        ...NOTHING_CHARGED,
+      }
     );
   }
   return jsonError("invalid_api_key", "API key is invalid or inactive.", 401);
+}
+
+/** The 429 for a key that has spent its per-minute limit. */
+function minuteLimitExceeded(monthLimit: number, monthUsed: number, minuteLimit: number, w: ClaimWindow): NextResponse {
+  return jsonError("rate_limit_exceeded", "Per-minute rate limit exceeded. See Retry-After header.", 429, {
+    "Retry-After": "60",
+    ...rateLimitHeaders(monthLimit, monthUsed, minuteLimit, minuteLimit, w.monthResetEpoch),
+    ...NOTHING_CHARGED,
+  });
 }
 
 /**
@@ -311,4 +380,53 @@ export function logLookups(
       console.error(`${tag} log write failed`, err);
     }
   });
+}
+
+/** What withinDeadline rejects with when the work outlasts it. */
+export class DeadlineExceeded extends Error {}
+
+/**
+ * How long a request may spend on its lookups before it is answered with a
+ * timeout instead. Well inside the routes' 60-second maxDuration on purpose:
+ * a function the platform stops never reaches its refund, so every lookup it
+ * had reserved — 50 on a search, up to 200 on a pricing request — would stay
+ * charged for an answer the caller never got. And under the 30 seconds many
+ * HTTP clients wait before giving up on their own.
+ */
+export const LOOKUP_DEADLINE_MS = 25_000;
+
+export function withinDeadline<T>(work: Promise<T>, ms = LOOKUP_DEADLINE_MS): Promise<T> {
+  // A query already sent is not cancelled; it runs to its end with nothing
+  // waiting on it. Its failure is swallowed here, because an unhandled
+  // rejection would take the process down.
+  work.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DeadlineExceeded()), ms);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The answer for a request whose lookups failed after its claim, which the
+ * caller has already handed back: a 503 when it ran out of time, a 500
+ * otherwise. `headers` are the rate-limit headers after that refund.
+ */
+export function lookupFailure(err: unknown, headers: Record<string, string>, tag: string): NextResponse {
+  if (err instanceof DeadlineExceeded) {
+    console.warn(`${tag} stopped at the ${LOOKUP_DEADLINE_MS} ms deadline`);
+    return jsonError(
+      "timeout",
+      "The request took too long and was stopped. No lookups were charged. Please retry.",
+      503,
+      { "Retry-After": "5", ...headers, ...NOTHING_CHARGED }
+    );
+  }
+  console.error(tag, err);
+  return jsonError(
+    "internal_error",
+    "An internal error occurred. No lookups were charged. Please retry.",
+    500,
+    { ...headers, ...NOTHING_CHARGED }
+  );
 }

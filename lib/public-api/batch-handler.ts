@@ -33,10 +33,12 @@ import {
   claimLookups,
   claimWindow,
   logLookups,
+  lookupFailure,
   readJsonBody,
   refundLookups,
   refusalFor,
   rejectRequest,
+  withinDeadline,
 } from "@/lib/public-api/access";
 import {
   buildBatchBody,
@@ -45,7 +47,8 @@ import {
   type ParsedBatch,
 } from "@/lib/public-api/batch";
 import type { NicheId } from "@/lib/public-api/pricing";
-import { buildPricingBody, type PricingBody } from "@/lib/public-api/shape";
+import { buildPricingBody, knownMetric, METRIC_FLOOR, type PricingBody } from "@/lib/public-api/shape";
+import { countryCode, countryName } from "@/lib/search/country-normalize";
 import { sourceAllowed } from "@/lib/public-api/source-quality";
 
 const TAG = "[/api/v1/public/domains/pricing]";
@@ -175,11 +178,15 @@ export function pricingBodyFor(
   const domainRow = row?.domain_row ?? null;
   if (!domainRow) return null;
   const offers = (row?.offers ?? []).map(toOffer);
+  const code = countryCode(normalizeCountry(domainRow.country_main_traffic as string | null));
   const metrics = {
-    domain_rating: domainRow.domain_rating != null ? Number(domainRow.domain_rating) : null,
-    organic_traffic: domainRow.org_traffic != null ? Number(domainRow.org_traffic) : null,
-    ref_domains: domainRow.ref_domains != null ? Number(domainRow.ref_domains) : null,
-    country: normalizeCountry(domainRow.country_main_traffic as string | null),
+    domain_rating: knownMetric(domainRow.domain_rating, METRIC_FLOOR.domain_rating),
+    organic_traffic: knownMetric(domainRow.org_traffic, METRIC_FLOOR.organic_traffic),
+    ref_domains: knownMetric(domainRow.ref_domains, METRIC_FLOOR.ref_domains),
+    // One English name per country, whichever spelling the source stored
+    // ("US", "USA", "États-Unis" …), and the same country a country filter
+    // finds the site under. A value that names no country is null.
+    country: code ? countryName(code) : null,
   };
   return buildPricingBody(domain, offers, rates, niche, metrics);
 }
@@ -248,19 +255,28 @@ export async function handleBatchPricingRequest(req: NextRequest, resolvedKeyHas
   const log = (statuses: { domain: string; status: number }[]) =>
     logLookups(key, statuses, Date.now() - startMs, TAG);
 
-  // 4. Look everything up in one round trip, alongside the currency rates.
+  // Our failure, not the caller's: every claimed lookup goes back. The old
+  // single-domain GET charged its unit on a 500; at up to 200 units that would
+  // let one bad deploy drain a customer's month.
+  const fail = async (err: unknown) => {
+    const afterFailure = await refund(units);
+    const failure = lookupFailure(
+      err,
+      rateLimitHeaders(monthLimit, afterFailure ?? monthUsed, minuteLimit, minuteUsed, w.monthResetEpoch),
+      TAG
+    );
+    log(parsed.unique.map((domain) => ({ domain, status: failure.status })));
+    return failure;
+  };
+
+  // 4. Look everything up in one round trip, alongside the currency rates,
+  //    within the deadline.
   let catalog: Map<string, CatalogRow>;
   let rates: Record<string, number>;
   try {
-    [rates, catalog] = await Promise.all([getUsdRates(), fetchCatalog(parsed.unique)]);
+    [rates, catalog] = await withinDeadline(Promise.all([getUsdRates(), fetchCatalog(parsed.unique)]));
   } catch (err) {
-    console.error(TAG, err);
-    // Our failure, not the caller's: every claimed lookup goes back. The old
-    // single-domain GET charged its unit on a 500; at up to 200 units that would
-    // let one bad deploy drain a customer's month.
-    await refund(units);
-    log(parsed.unique.map((domain) => ({ domain, status: 500 })));
-    return jsonError("internal_error", "An internal error occurred. No lookups were charged. Please retry.", 500);
+    return fail(err);
   }
 
   // 5. Build each domain's pricing body. A domain we list whose listings all
@@ -276,10 +292,7 @@ export async function handleBatchPricingRequest(req: NextRequest, resolvedKeyHas
       else found.set(domain, body);
     }
   } catch (err) {
-    console.error(TAG, err);
-    await refund(units);
-    log(parsed.unique.map((domain) => ({ domain, status: 500 })));
-    return jsonError("internal_error", "An internal error occurred. No lookups were charged. Please retry.", 500);
+    return fail(err);
   }
 
   // 6. Only an answer that carries a price is charged. A domain that is priced,

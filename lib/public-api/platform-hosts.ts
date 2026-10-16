@@ -31,7 +31,7 @@ const SITE_BUILDERS = [
   "mystrikingly.com", "strikingly.com", "site123.me", "tilda.ws", "carrd.co", "webnode.page",
   "simplesite.com", "yola.com", "yolasite.com", "super.site", "mn.co", "pbworks.com", "wikidot.com",
   "fandom.com", "notion.site", "es.tl", "rf.gd", "hol.es", "yo.fr", "writeas.com",
-  "blogs.sapo.pt", "infonu.nl", "mirtesen.ru", "everybodywiki.com",
+  "blogs.sapo.pt", "infonu.nl", "mirtesen.ru", "everybodywiki.com", "bcz.com", "medium.seznam.cz",
   // WordPress.com's free blogs under its .blog topic names (someone.news.blog)
   "home.blog", "news.blog", "business.blog", "health.blog", "travel.blog", "food.blog", "tech.blog",
   "fashion.blog", "finance.blog", "law.blog", "car.blog", "art.blog", "sport.blog", "video.blog",
@@ -39,7 +39,7 @@ const SITE_BUILDERS = [
   // Japanese and Chinese blog hosts
   "ameblo.jp", "amebaownd.com", "exblog.jp", "fc2.com", "blog.jp", "hatenablog.com", "hatena.blog",
   "hatena.ne.jp", "blog.goo.ne.jp", "note.com", "peraichi.com", "select-type.com", "plaza.rakuten.co.jp",
-  "pixnet.net", "blog.udn.com", "blog.csdn.net", "baijiahao.baidu.com", "blog.naver.com",
+  "pixnet.net", "blog.udn.com", "blog.csdn.net", "baijiahao.baidu.com", "blog.naver.com", "tistory.com",
 ] as const;
 
 /** Hosting, storage and app-deploy domains: each subdomain is someone's upload or app. */
@@ -74,7 +74,7 @@ const USER_DOCUMENTS = [
   "archive.org", "openlibrary.org", "openstreetmap.org", "kahoot.it", "instructure.com", "pressbooks.pub",
   "list-manage.com", "getresponse.com", "imgur.com", "adobe.com", "elements.envato.com",
   "wordpress.org", "smore.com", "diigo.com", "are.na", "linktr.ee", "bit.ly",
-  "tinyurl.com", "cutt.ly",
+  "tinyurl.com", "cutt.ly", "notes.ietf.org",
 ] as const;
 
 /** Storefronts, creator pages, courses, events and fundraisers. */
@@ -102,7 +102,11 @@ const SOCIAL_AND_PROFILES = [
   "researchgate.net", "yelp.com", "merchantcircle.com", "hotfrog.com", "provenexpert.com",
   "podcasts.apple.com", "podbean.com", "spreaker.com", "podchaser.com", "castbox.fm", "pocketcasts.com",
   "podcastaddict.com", "goodpods.com", "castro.fm", "ivoox.com", "rss.com", "iheart.com", "bebee.com", "kompass.com",
+  "answers.netlify.com",
 ] as const;
+
+/** Governments whose domains the families below do not reach. */
+const GOVERNMENT = ["bund.de", "gv.at", "admin.ch", "juntadeandalucia.es"] as const;
 
 /** Domain marketplaces and parking pages: the "site" is a for-sale listing. */
 const DOMAIN_SALES = [
@@ -118,13 +122,15 @@ export const PLATFORM_DOMAINS: readonly string[] = [
   ...CREATOR_PAGES,
   ...SOCIAL_AND_PROFILES,
   ...DOMAIN_SALES,
+  ...GOVERNMENT,
 ];
 
 /**
  * Whole families matched by pattern (POSIX and JS regex alike), each with any
  * subdomain:
  *
- * - blogspot and houzz on every country domain (x.blogspot.co.uk, houzz.fr);
+ * - blogspot, houzz and the webador site builder on every country domain
+ *   (x.blogspot.co.uk, houzz.fr, x.webador.es);
  * - universities and governments (.edu, .gov, .mil, .ac.uk, .edu.au,
  *   .gouv.fr, .gob.mx, .gc.ca, europa.eu). What marketplaces list on them is
  *   a student page, a course site or a profile — harvard.edu at $18 — never
@@ -133,6 +139,7 @@ export const PLATFORM_DOMAINS: readonly string[] = [
 export const PLATFORM_FAMILIES: readonly string[] = [
   "blogspot\\.[a-z]{2,3}(\\.[a-z]{2})?",
   "houzz\\.[a-z]{2,3}(\\.[a-z]{2})?",
+  "webador\\.[a-z]{2,3}(\\.[a-z]{2})?",
   "(edu|gov|gob|mil)(\\.[a-z]{2})?",
   "ac\\.[a-z]{2}",
   "gouv\\.fr",

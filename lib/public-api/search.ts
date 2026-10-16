@@ -16,7 +16,7 @@
 import { withFeeUsd } from "@/lib/pricing/fee";
 import type { BatchUsage } from "@/lib/public-api/batch";
 import { ACCEPTED_NICHE_VALUES, resolveNiche, type NicheId } from "@/lib/public-api/pricing";
-import type { PricingBody } from "@/lib/public-api/shape";
+import { knownMetric, METRIC_FLOOR, type PricingBody } from "@/lib/public-api/shape";
 import { countryMatchPrefixes } from "@/lib/search/country-normalize";
 import { languageMatchValues } from "@/lib/search/language-normalize";
 
@@ -30,6 +30,22 @@ export const MAX_SEARCH_RESULTS = 50;
 
 /** Upper bound on the values in one list filter (country, tld, category). */
 export const MAX_FILTER_VALUES = 20;
+
+/**
+ * How recently a source must have confirmed a site's price for search to pick
+ * the site. Some marketplaces stopped being refreshed months ago while their
+ * listings still read as available — 76,268 offers last fetched in June, tens
+ * of thousands not since March (Oct 2026) — and a site priced only by one of
+ * them is a price nobody can buy at. About 6% of priced sites have nothing
+ * fresher. The pricing endpoint still answers for them when asked by name,
+ * with the date in `last_updated`.
+ */
+export const MAX_PRICE_AGE_DAYS = 90;
+
+/** The oldest `last_updated` (YYYY-MM-DD) a search result may carry. */
+export function freshSince(now = new Date()): string {
+  return new Date(now.getTime() - MAX_PRICE_AGE_DAYS * 86_400_000).toISOString().slice(0, 10);
+}
 
 /** Far above any real search request; a body this size is not one we would accept. */
 export const MAX_SEARCH_BODY_BYTES = 16 * 1024;
@@ -410,10 +426,6 @@ export function sourcePriceBounds(
 
 // ─── results ────────────────────────────────────────────────────────────────
 
-/** A metric the catalogue actually holds: 0 is how a missing one is stored. */
-function known(v: number | null): number | null {
-  return v != null && v > 0 ? v : null;
-}
 
 function inRange(v: number | null, min: number | undefined, max: number | undefined): boolean {
   if (min == null && max == null) return true;
@@ -440,29 +452,41 @@ export function searchPrice(data: PricingBody, niche: NicheId | null): number | 
  *
  * Country, language, TLD and category are matched in the database only: they
  * are either not published or published as free text.
+ *
+ * `since` (freshSince) drops a site whose price for the niche was last
+ * confirmed before that date.
  */
-export function matchesSearch(data: PricingBody, filters: SearchFilters, niche: NicheId | null): boolean {
+export function matchesSearch(
+  data: PricingBody,
+  filters: SearchFilters,
+  niche: NicheId | null,
+  since?: string
+): boolean {
   if (!data.found) return false;
   const price = searchPrice(data, niche);
   if (price == null) return false;
+  if (since != null) {
+    const updated = data.pricing[priceNiche(niche)]?.last_updated;
+    if (updated == null || updated < since) return false;
+  }
   if (filters.min_price != null && price < filters.min_price) return false;
   if (filters.max_price != null && price > filters.max_price) return false;
   const m = data.metrics;
   return (
-    inRange(known(m.domain_rating), filters.min_dr, filters.max_dr) &&
-    inRange(known(m.organic_traffic), filters.min_traffic, filters.max_traffic) &&
-    inRange(known(m.ref_domains), filters.min_ref_domains, filters.max_ref_domains)
+    inRange(knownMetric(m.domain_rating, METRIC_FLOOR.domain_rating), filters.min_dr, filters.max_dr) &&
+    inRange(knownMetric(m.organic_traffic, METRIC_FLOOR.organic_traffic), filters.min_traffic, filters.max_traffic) &&
+    inRange(knownMetric(m.ref_domains, METRIC_FLOOR.ref_domains), filters.min_ref_domains, filters.max_ref_domains)
   );
 }
 
 function sortValue(data: PricingBody, by: SearchSort, niche: NicheId | null): number | null {
   switch (by) {
     case "dr":
-      return known(data.metrics.domain_rating);
+      return knownMetric(data.metrics.domain_rating, METRIC_FLOOR.domain_rating);
     case "traffic":
-      return known(data.metrics.organic_traffic);
+      return knownMetric(data.metrics.organic_traffic, METRIC_FLOOR.organic_traffic);
     case "ref_domains":
-      return known(data.metrics.ref_domains);
+      return knownMetric(data.metrics.ref_domains, METRIC_FLOOR.ref_domains);
     case "price":
       return searchPrice(data, niche);
   }

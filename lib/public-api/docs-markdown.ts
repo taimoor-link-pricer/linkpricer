@@ -77,11 +77,11 @@ ${table(["API", "One lookup is", "Not charged"], [
   ["Search", "One domain returned.", "A search that matches nothing."],
 ])}
 
-A request must fit your remaining quota as a whole. Pricing reserves its distinct valid domains when the request arrives; Search reserves its \`limit\`. What goes unused is handed back when the request completes. If the reservation does not fit, the request is refused with \`429 quota_exceeded\` and nothing is charged. A request rejected outright (400, 413, 422) or failing on our side (500) costs nothing.
+A request must fit your remaining quota as a whole. Pricing reserves its distinct valid domains when the request arrives; Search reserves its \`limit\`. What goes unused is handed back when the request completes. If the reservation does not fit, the request is refused with \`429 quota_exceeded\` and nothing is charged. A request rejected outright (400, 413, 422) or failing on our side (500, 503) costs nothing.
 
-The per-minute limit counts requests, not domains. Both limits return \`429\` with a \`Retry-After\` header: about a minute for a burst (\`rate_limit_exceeded\`), or the time until the 1st for a spent quota (\`quota_exceeded\`).
+The per-minute limit counts requests, not domains, and rejected requests (400, 413, 422) count toward it too. Both limits return \`429\` with a \`Retry-After\` header: about a minute for a burst (\`rate_limit_exceeded\`), or the time until the 1st for a spent quota (\`quota_exceeded\`).
 
-Every response carries \`X-RateLimit-Limit\`, \`X-RateLimit-Remaining\` and \`X-RateLimit-Reset\` (the monthly quota, after this request), \`X-RateLimit-Limit-Minute\` and \`X-RateLimit-Remaining-Minute\` for the burst limit, and \`X-Lookups-Charged\`.
+Every response to a request with a usable key, errors included, carries \`X-RateLimit-Limit\`, \`X-RateLimit-Remaining\` and \`X-RateLimit-Reset\` (the monthly quota, after this request), \`X-RateLimit-Limit-Minute\` and \`X-RateLimit-Remaining-Minute\` for the burst limit, and \`X-Lookups-Charged\`. A \`401\` has no key to report on, so it carries none of them.
 
 ## Common errors
 
@@ -172,7 +172,7 @@ ${table(["Field", "Type", "Required", "Description"], [
 
 ${table(["Filter", "Type", "Description"], SEARCH_FILTERS.map(([f, t, d]) => ["`" + f + "`", t, d]))}
 
-**A filter only matches sites where we know the value.** We do not hold organic traffic or referring domains for every site, so setting \`min_traffic\`, \`max_traffic\` or a referring-domains filter leaves out every site with no figure on record — including with a \`max_\` filter. Domain Rating is known for most of the catalog. If a traffic filter returns fewer sites than you expected, try the search without it.
+**A filter only matches sites where we know the value.** We do not hold organic traffic or referring domains for every site (those are \`null\` in the result), so setting \`min_traffic\`, \`max_traffic\` or a referring-domains filter leaves out every site with no figure on record — including with a \`max_\` filter. Domain Rating is known for most of the catalog. If a traffic filter returns fewer sites than you expected, try the search without it.
 
 ${fence("http", SEARCH_REQUEST_EXAMPLE)}
 

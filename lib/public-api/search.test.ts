@@ -10,6 +10,8 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSearchBody,
+  freshSince,
+  MAX_PRICE_AGE_DAYS,
   FILTER_KEYS,
   matchesSearch,
   MAX_FILTER_VALUES,
@@ -291,5 +293,12 @@ describe("buildSearchBody — the published shape", () => {
     expect(Object.keys(body.results[0].data)).toEqual([
       "domain", "found", "currency", "fee", "pricing", "available_niches", "metrics", "last_updated",
     ]);
+  });
+});
+
+describe("freshSince — search only picks prices confirmed recently", () => {
+  it("is MAX_PRICE_AGE_DAYS before now, as a date", () => {
+    expect(MAX_PRICE_AGE_DAYS).toBe(90);
+    expect(freshSince(new Date("2026-10-16T12:00:00Z"))).toBe("2026-07-18");
   });
 });
