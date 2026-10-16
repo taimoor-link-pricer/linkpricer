@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { countryCode, countryMatchRules, countryName, countryValueMatches } from "@/lib/search/country-normalize";
+import {
+  countryCode,
+  countryMatchRules,
+  countryName,
+  countryValueMatches,
+  nationalTldsOf,
+  publishedCountry,
+  tldCountry,
+} from "@/lib/search/country-normalize";
 
 describe("countryValueMatches", () => {
   it("matches every stored spelling of a country", () => {
@@ -80,5 +88,27 @@ describe("countryCode", () => {
     expect(countryCode("Ukraine")).toBe("UA");
     expect(countryCode("Guinea-Bissau")).toBe("GW");
     expect(countryCode("Nigeria")).toBe("NG");
+  });
+});
+
+describe("publishedCountry — no country the site's own domain contradicts", () => {
+  it("drops a stored country that a national ending contradicts", () => {
+    expect(publishedCountry("kurier.at", "Germany")).toBeNull();
+    expect(publishedCountry("lentanews.kyiv.ua", "United States")).toBeNull();
+    expect(publishedCountry("libero.it", "United Kingdom")).toBeNull();
+  });
+
+  it("keeps one the ending agrees with, and any on a generic ending", () => {
+    expect(publishedCountry("kurier.at", "Austria")).toBe("AT");
+    expect(publishedCountry("bbc.co.uk", "UK")).toBe("GB");
+    expect(publishedCountry("bitcoin.com", "Germany")).toBe("DE");
+    expect(publishedCountry("example.io", "India")).toBe("IN");
+  });
+
+  it("reads national endings only", () => {
+    expect(tldCountry("x.co.uk")).toBe("GB");
+    expect(tldCountry("x.com")).toBeNull();
+    expect(tldCountry("x.tv")).toBeNull();
+    expect(nationalTldsOf("GB")).toEqual(["uk"]);
   });
 });

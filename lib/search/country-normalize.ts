@@ -382,3 +382,46 @@ export function countryCode(stored: string | null | undefined): string | null {
 export function countryName(isoCode: string): string | null {
   return CODE_TO_NAME[isoCode.toUpperCase()] ?? null;
 }
+
+/**
+ * Country-code domain endings that sites use for their own country, mapped to
+ * that country. Endings sold worldwide as generic names (.io, .co, .me, .tv,
+ * .ai, .fm …) are not here: they say nothing about where a site is read.
+ */
+const NATIONAL_TLDS: Record<string, string> = Object.fromEntries([
+  ...("at de ch fr be nl lu it es pt pl cz sk hu ro bg gr hr si rs ba mk al ua ru by lt lv ee fi se no dk is ie " +
+    "jp kr cn tw hk in pk bd id my th vn ph sg au nz za ng ke eg ma tn dz tr il ir sa ae br ar mx cl pe uy ve ec ca")
+    .split(" ")
+    .map((tld) => [tld, tld.toUpperCase()]),
+  ["uk", "GB"],
+]);
+
+/** Every ending in NATIONAL_TLDS, for SQL. */
+export const NATIONAL_TLD_LIST: readonly string[] = Object.keys(NATIONAL_TLDS);
+
+/** The national endings of one country (".uk" for GB, ".de" for DE). */
+export function nationalTldsOf(isoCode: string): string[] {
+  const code = isoCode.toUpperCase();
+  return NATIONAL_TLD_LIST.filter((tld) => NATIONAL_TLDS[tld] === code);
+}
+
+/** The country a host's own ending names (kurier.at → AT), or null for a generic one. */
+export function tldCountry(host: string): string | null {
+  const tld = host.toLowerCase().split(".").pop() ?? "";
+  return NATIONAL_TLDS[tld] ?? null;
+}
+
+/**
+ * The country a site is published under, or null. The stored value comes from
+ * marketplaces we do not trust on site facts, and some of it contradicts the
+ * site's own domain — kurier.at listed as Germany, Ukrainian .ua news sites as
+ * the United States. Where it does, no country is published (and a country
+ * search does not match the site): unknown is better than wrong. Sites on a
+ * generic ending (.com, .net) are not checked.
+ */
+export function publishedCountry(host: string, stored: string | null | undefined): string | null {
+  const code = countryCode(stored);
+  if (!code) return null;
+  const fromTld = tldCountry(host);
+  return fromTld && fromTld !== code ? null : code;
+}

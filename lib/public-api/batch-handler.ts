@@ -48,7 +48,7 @@ import {
 } from "@/lib/public-api/batch";
 import type { NicheId } from "@/lib/public-api/pricing";
 import { buildPricingBody, knownMetric, METRIC_FLOOR, type PricingBody } from "@/lib/public-api/shape";
-import { countryCode, countryName } from "@/lib/search/country-normalize";
+import { countryName, publishedCountry } from "@/lib/search/country-normalize";
 import { sourceAllowed } from "@/lib/public-api/source-quality";
 
 const TAG = "[/api/v1/public/domains/pricing]";
@@ -178,14 +178,15 @@ export function pricingBodyFor(
   const domainRow = row?.domain_row ?? null;
   if (!domainRow) return null;
   const offers = (row?.offers ?? []).map(toOffer);
-  const code = countryCode(normalizeCountry(domainRow.country_main_traffic as string | null));
+  const code = publishedCountry(domain, normalizeCountry(domainRow.country_main_traffic as string | null));
   const metrics = {
     domain_rating: knownMetric(domainRow.domain_rating, METRIC_FLOOR.domain_rating),
     organic_traffic: knownMetric(domainRow.org_traffic, METRIC_FLOOR.organic_traffic),
     ref_domains: knownMetric(domainRow.ref_domains, METRIC_FLOOR.ref_domains),
     // One English name per country, whichever spelling the source stored
     // ("US", "USA", "États-Unis" …), and the same country a country filter
-    // finds the site under. A value that names no country is null.
+    // finds the site under. Null when the value names no country, or names
+    // one the site's own domain contradicts (publishedCountry).
     country: code ? countryName(code) : null,
   };
   return buildPricingBody(domain, offers, rates, niche, metrics);

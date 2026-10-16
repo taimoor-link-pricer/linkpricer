@@ -306,7 +306,7 @@ export const RESULT_FIELDS: [field: string, type: string, desc: string][] = [
   ["metrics.domain_rating", "number | null", "Ahrefs Domain Rating (1–100). null when we have no rating for the site."],
   ["metrics.organic_traffic", "number | null", "Estimated monthly organic traffic. null when we have no real figure: sources record a missing figure as 0 or 1, and we publish neither."],
   ["metrics.ref_domains", "number | null", "Number of referring domains. null when we have no real figure (sources record a missing one as 0)."],
-  ["metrics.country", "string | null", "Primary traffic country as one English name per country (e.g. \"United States\", never \"US\" or \"USA\") — the country a Search country filter finds the site under. null when no source names one."],
+  ["metrics.country", "string | null", "Primary traffic country as one English name per country (e.g. \"United States\", never \"US\" or \"USA\") — the country a Search country filter finds the site under. null when no source names one, or when the one named contradicts the site's own country domain (a .at site listed as Germany)."],
   ["last_updated", "string | null", "The most recent of the per-niche dates in this response. null when nothing is priced."],
   
 ];

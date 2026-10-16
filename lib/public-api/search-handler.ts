@@ -62,7 +62,7 @@ import {
 import { METRIC_FLOOR } from "@/lib/public-api/shape";
 import { notPlatformHost, sourceAllowed } from "@/lib/public-api/source-quality";
 import { candidateFilterClauses } from "@/lib/search/catalog-search";
-import { countryValueMatches } from "@/lib/search/country-normalize";
+import { countryValueMatches, NATIONAL_TLD_LIST, nationalTldsOf } from "@/lib/search/country-normalize";
 
 const TAG = "[/api/v1/public/domains/search]";
 
@@ -165,7 +165,15 @@ export async function countryClause(codes: string[] | undefined): Promise<SQL> {
   if (!codes?.length) return sql``;
   const values = (await storedCountrySpellings()).filter((v) => codes.some((c) => countryValueMatches(v, c)));
   if (!values.length) return sql`AND false`;
-  return sql`AND d.country_main_traffic IN (${sql.join(values.map((v) => sql`${v}`), sql`, `)})`;
+  // Nor a site whose own national ending names another country (publishedCountry):
+  // kurier.at, stored as Germany, is not a German site. The last label is read
+  // without a regex — drizzle's sql template eats backslashes.
+  const tld = sql`reverse(split_part(reverse(lower(d.domain)), '.', 1))`;
+  const own = codes.flatMap((c) => nationalTldsOf(c));
+  return sql`AND d.country_main_traffic IN (${sql.join(values.map((v) => sql`${v}`), sql`, `)})
+      AND (${tld} <> ALL(string_to_array(${NATIONAL_TLD_LIST.join(",")}::text, ','))${
+        own.length ? sql` OR ${tld} IN (${sql.join(own.map((t) => sql`${t}`), sql`, `)})` : sql``
+      })`;
 }
 
 /** What every candidate query shares: the conditions on a site, and on an offer that prices it. */
