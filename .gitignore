@@ -45,3 +45,4 @@ next-env.d.ts
 
 # Backfill working files (fetched page text, agent outputs) — large, regenerable
 scripts/backfill/work/
+scripts/assistant-eval-out/
